@@ -17,7 +17,7 @@ def get_config():
         "num_heads": 8,
         "dropout": 0.1,
         "d_ff": 256,
-        "eval_freq": 3,
+        "eval_freq": 50,
         "source_rate": 10,
         "lto_rate": 12,
         "datasource": 'opus_books',
