@@ -9,7 +9,7 @@ def get_config():
         "seq_len_src": 1280,
         "seq_len_tgt": 128,
         "seq_len_lto": 128,
-        "batch_size": 16,
+        "batch_size": 8,
         "num_epochs": 60,
         "lr": 10**-4,
         "d_model": 64,
