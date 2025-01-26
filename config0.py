@@ -2,7 +2,7 @@ from pathlib import Path
 
 def get_config():
     return {
-        "filepath": "/home/ProductGPT/clean_list_int.json",
+        "filepath": "/home/ubuntu/clean_list_int.json",
         "vocab_size_src": 122,
         "vocab_size_tgt": 10,
         # "vocab_size_lto": 122,
