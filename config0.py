@@ -13,7 +13,7 @@ def get_config():
         "num_epochs": 20,
         "lr": 10**-4,
         "d_model": 64,
-        "N": 6, 
+        "N": 3, 
         "num_heads": 8,
         "dropout": 0.1,
         "d_ff": 256,
