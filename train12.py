@@ -11,7 +11,7 @@ from tokenizers import Tokenizer, models, pre_tokenizers, trainers
 from dataset12 import TransformerDataset, causal_mask_square, load_json_dataset, causal_mask_rectangular
 
 from model12 import build_transformer
-from config12 import get_config, get_weights_file_path, latest_weights_file_path
+from config12git import get_config, get_weights_file_path, latest_weights_file_path
 
 import torch
 import torch.nn as nn
