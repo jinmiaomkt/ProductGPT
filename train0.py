@@ -29,7 +29,7 @@ from tokenizers.models import WordLevel
 from tokenizers.trainers import WordLevelTrainer
 from tokenizers.pre_tokenizers import Whitespace
 
-from torch.utils.tensorboard import SummaryWriter
+# from torch.utils.tensorboard import SummaryWriter
 
 def greedy_decode(model, source, lto, long_long_self_mask, short_long_cross_mask, short_short_cross_mask, tokenizer_tgt, max_len, device):
     sos_idx = tokenizer_tgt.token_to_id('[SOS]')
@@ -203,7 +203,7 @@ def train_model(config):
     train_dataloader, val_dataloader, test_dataloader, tokenizer_src, tokenizer_tgt = get_dataloaders(config)
     model = get_model(config, tokenizer_src.get_vocab_size(), tokenizer_tgt.get_vocab_size()).to(device)
     # Tensorboard
-    writer = SummaryWriter(config['experiment_name'])
+#     writer = SummaryWriter(config['experiment_name'])
 
     optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'], eps=1e-9)
 
