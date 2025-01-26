@@ -22,8 +22,8 @@ if lspci | grep -i nvidia > /dev/null; then
 fi
 
 # Uninstall any existing PyTorch and related libraries
-echo "Removing existing PyTorch libraries..."
-pip3 uninstall -y torch torchvision torchaudio
+# echo "Removing existing PyTorch libraries..."
+# pip3 uninstall -y torch torchvision torchaudio
 
 # Install PyTorch and TorchMetrics
 echo "Installing PyTorch and TorchMetrics..."
@@ -38,4 +38,4 @@ pip3 install numpy torchtext gensim langchain matplotlib numba tensorflow thinc
 echo "Verifying PyTorch installation..."
 python3 -c "import torch; print('CUDA Available:', torch.cuda.is_available())"
 
-echo "All dependencies have been installed successfully!"
+# echo "All dependencies have been installed successfully!"
