@@ -174,7 +174,8 @@ class MultiHeadAttentionBlock(nn.Module):
         query_key = torch.einsum("bhnd,bhde->bhne", query, key_value)  # Query-Key aggregation
 
         # Normalize output
-        normalizer = 1 / (torch.einsum("bhnd,bhne->bhn", query, key.sum(dim=2)) + 1e-6)
+        # Add an extra dimension to key.sum(dim=2)
+        normalizer = 1 / (torch.einsum("bhnd,bhne->bhn", query, key.sum(dim=2, keepdim=True)) + 1e-6)
         output = query_key * normalizer.unsqueeze(-1)  # Element-wise scaling
 
         return output
