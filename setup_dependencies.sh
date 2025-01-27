@@ -1,41 +1,87 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# ----------------------------------------------------------------------
 # AWS EC2 Dependency Setup Script
+# ----------------------------------------------------------------------
+# This script updates the system, installs Python and essential tools,
+# checks for an NVIDIA GPU and installs drivers/CUDA if present, then
+# installs PyTorch (with CUDA support if available) and other libraries.
+# ----------------------------------------------------------------------
 
-# Update and upgrade the system
-echo "Updating and upgrading the system..."
-sudo apt-get update -y && sudo apt-get upgrade -y
+# Exit immediately if any command exits with a non-zero status,
+# treat unset variables as an error, and prevent errors in a pipeline
+# from being hidden.
+set -euo pipefail
 
-# Install Python3, pip, and essential tools
-echo "Installing Python3, pip, and essential tools..."
+# A function to display messages in a clearer format
+info() {
+  echo -e "\n[INFO] $1\n"
+}
+
+# ----------------------------------------------------------------------
+# 1. Update and upgrade the system
+# ----------------------------------------------------------------------
+info "Updating and upgrading the system..."
+sudo apt-get update -y
+sudo apt-get upgrade -y
+
+# ----------------------------------------------------------------------
+# 2. Install Python3, pip, and essential tools
+# ----------------------------------------------------------------------
+info "Installing Python3, pip, and essential tools..."
 sudo apt-get install -y python3 python3-pip build-essential
 
-# Install NVIDIA Drivers and CUDA if GPU is available
+# ----------------------------------------------------------------------
+# 3. Install NVIDIA Drivers and CUDA (if GPU is detected)
+# ----------------------------------------------------------------------
 if lspci | grep -i nvidia > /dev/null; then
-  echo "Installing NVIDIA drivers and CUDA..."
+  info "NVIDIA GPU detected. Installing NVIDIA drivers and CUDA..."
+
+  # Download and configure the CUDA repository pin
   curl -O https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
   sudo mv cuda-ubuntu2204.pin /etc/apt/preferences.d/cuda-repository-pin-600
+
+  # Download and install the CUDA repository package
   wget https://developer.download.nvidia.com/compute/cuda/12.0.0/local_installers/cuda-repo-ubuntu2204_12.0.0-1_amd64.deb
   sudo dpkg -i cuda-repo-ubuntu2204_12.0.0-1_amd64.deb
+
+  # Fetch the NVIDIA GPG key and update
   sudo apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/7fa2af80.pub
   sudo apt-get update -y
+
+  # Install CUDA
   sudo apt-get install -y cuda
 fi
 
-# Uninstall any existing PyTorch and related libraries
-# echo "Removing existing PyTorch libraries..."
-# pip3 uninstall -y torch torchvision torchaudio
-
-# Install PyTorch and TorchMetrics
-echo "Installing PyTorch and TorchMetrics..."
-pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+# ----------------------------------------------------------------------
+# 4. Install PyTorch, TorchMetrics, and related libraries
+# ----------------------------------------------------------------------
+info "Installing PyTorch (with CUDA 11.8 wheels) and TorchMetrics..."
+pip3 install --upgrade pip
+pip3 install \
+  torch \
+  torchvision \
+  torchaudio \
+  --index-url https://download.pytorch.org/whl/cu118
 pip3 install torchmetrics
 
-# Install additional Python libraries
-echo "Installing additional Python libraries..."
-pip3 install numpy torchtext gensim langchain matplotlib numba tensorflow thinc
+# ----------------------------------------------------------------------
+# 5. Install additional Python libraries
+# ----------------------------------------------------------------------
+info "Installing additional Python libraries..."
+pip3 install \
+  numpy \
+  torchtext \
+  gensim \
+  langchain \
+  matplotlib \
+  numba \
+  tensorflow \
+  thinc
 
-# Verify installations
-echo "Verifying PyTorch installation..."
+# ----------------------------------------------------------------------
+# 6. Verify the PyTorch installation and CUDA availability
+# ----------------------------------------------------------------------
+info "Verifying PyTorch installation..."
 python3 -c "import torch; print('CUDA Available:', torch.cuda.is_available())"
 
-# echo "All dependencies have been installed successfully!"
+info "All dependencies have been installed successfully!"
