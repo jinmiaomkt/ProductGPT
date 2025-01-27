@@ -52,6 +52,19 @@ if lspci | grep -i nvidia > /dev/null; then
   sudo apt-get install -y cuda
 fi
 
+if lspci | grep -i nvidia > /dev/null; then
+  info "NVIDIA GPU detected. Installing NVIDIA drivers and CUDA..."
+
+  # 1. Download and install the CUDA keyring
+  wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.0-1_all.deb
+  sudo dpkg -i cuda-keyring_1.0-1_all.deb
+
+  # 2. Update and install CUDA (replace 'cuda' with 'cuda-12-0' if you need a specific version)
+  sudo apt-get update -y
+  sudo apt-get install -y cuda
+fi
+
+
 # ----------------------------------------------------------------------
 # 4. Install PyTorch, TorchMetrics, and related libraries
 # ----------------------------------------------------------------------
@@ -85,3 +98,18 @@ info "Verifying PyTorch installation..."
 python3 -c "import torch; print('CUDA Available:', torch.cuda.is_available())"
 
 info "All dependencies have been installed successfully!"
+
+
+# Download the CUDA keyring .deb package
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.0-1_all.deb
+
+# Install the keyring
+sudo dpkg -i cuda-keyring_1.0-1_all.deb
+
+# Update your apt repository listings
+sudo apt-get update
+
+# Finally, install CUDA
+sudo apt-get -y install cuda
+
+lsb_release -a
