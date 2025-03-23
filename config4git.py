@@ -46,7 +46,7 @@ def get_config():
         "datasource": "ProductGPT",
         "model_folder": "weights",
         "model_basename": "MyProductGPT_",  # prefix for model checkpoint files
-        "preload": "latest",               # can be 'latest', a specific file suffix, or None
+        "preload": None,               # can be 'latest', a specific file suffix, or None
         "tokenizer_file": "tokenizer_{0}.json",
         "experiment_name": "runs/tmodel"
     }
