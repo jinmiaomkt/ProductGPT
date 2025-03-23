@@ -21,14 +21,14 @@ info() {
 # 1. Update and upgrade the system
 # ----------------------------------------------------------------------
 info "Updating and upgrading the system..."
-sudo apt-get update -y
-sudo apt-get upgrade -y
+sudo yum update -y
+sudo yum upgrade -y
 
 # ----------------------------------------------------------------------
 # 2. Install Python3, pip, and essential tools
 # ----------------------------------------------------------------------
 # info "Installing Python3, pip, and essential tools..."
-# sudo apt-get install -y python3 python3-pip build-essential
+# sudo yum install -y python3 python3-pip build-essential
 
 # ----------------------------------------------------------------------
 # 3. Install NVIDIA Drivers and CUDA (if GPU is detected)
@@ -46,10 +46,10 @@ if lspci | grep -i nvidia > /dev/null; then
 
   # Fetch the NVIDIA GPG key and update
   sudo apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/7fa2af80.pub
-  sudo apt-get update -y
+  sudo yum update -y
 
   # Install CUDA
-  sudo apt-get install -y cuda
+  sudo yum install -y cuda
 fi
 
 if lspci | grep -i nvidia > /dev/null; then
@@ -60,8 +60,8 @@ if lspci | grep -i nvidia > /dev/null; then
   sudo dpkg -i cuda-keyring_1.0-1_all.deb
 
   # 2. Update and install CUDA (replace 'cuda' with 'cuda-12-0' if you need a specific version)
-  sudo apt-get update -y
-  sudo apt-get install -y cuda
+  sudo yum update -y
+  sudo yum install -y cuda
 fi
 
 
@@ -112,10 +112,10 @@ wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/
 sudo dpkg -i cuda-keyring_1.0-1_all.deb
 
 # Update your apt repository listings
-sudo apt-get update
+sudo yum update
 
 # Finally, install CUDA
-sudo apt-get -y install cuda
+sudo yum -y install cuda
 
 lsb_release -a
 
