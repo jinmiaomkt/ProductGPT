@@ -95,21 +95,18 @@ pip3 install \
   pytorch_lamb \
   scikit-learn \
   tokenizers 
-  
+
 # ----------------------------------------------------------------------
 # 6. Verify the PyTorch installation and CUDA availability
 # ----------------------------------------------------------------------
 info "Verifying PyTorch installation..."
 python3 -c "import torch; print('CUDA Available:', torch.cuda.is_available())"
 
-info "All dependencies have been installed successfully!"
+# # Download the CUDA keyring .deb package
+# wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.0-1_all.deb
 
-
-# Download the CUDA keyring .deb package
-wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.0-1_all.deb
-
-# Install the keyring
-sudo dpkg -i cuda-keyring_1.0-1_all.deb
+# # Install the keyring
+# sudo dpkg -i cuda-keyring_1.0-1_all.deb
 
 # Update your apt repository listings
 sudo yum update
@@ -118,4 +115,3 @@ sudo yum update
 sudo yum -y install cuda
 
 lsb_release -a
-
