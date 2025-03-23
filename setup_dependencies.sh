@@ -93,8 +93,9 @@ pip3 install \
   reformer-pytorch \
   deepspeed \
   pytorch_lamb \
-  scikit-learn
-
+  scikit-learn \
+  tokenizers 
+  
 # ----------------------------------------------------------------------
 # 6. Verify the PyTorch installation and CUDA availability
 # ----------------------------------------------------------------------
