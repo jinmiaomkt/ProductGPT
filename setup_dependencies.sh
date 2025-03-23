@@ -27,8 +27,8 @@ sudo apt-get upgrade -y
 # ----------------------------------------------------------------------
 # 2. Install Python3, pip, and essential tools
 # ----------------------------------------------------------------------
-info "Installing Python3, pip, and essential tools..."
-sudo apt-get install -y python3 python3-pip build-essential
+# info "Installing Python3, pip, and essential tools..."
+# sudo apt-get install -y python3 python3-pip build-essential
 
 # ----------------------------------------------------------------------
 # 3. Install NVIDIA Drivers and CUDA (if GPU is detected)
@@ -89,7 +89,12 @@ pip3 install \
   matplotlib \
   numba \
   tensorflow \
-  thinc
+  thinc \
+  linformer \
+  reformer-pytorch \
+  deepspeed \
+  pytorch_lamb \
+  scikit-learn
 
 # ----------------------------------------------------------------------
 # 6. Verify the PyTorch installation and CUDA availability
@@ -113,3 +118,4 @@ sudo apt-get update
 sudo apt-get -y install cuda
 
 lsb_release -a
+
