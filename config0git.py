@@ -1,37 +1,42 @@
 from pathlib import Path
 
 def get_config():
+    """
+    Returns a dictionary of hyperparameters and file paths.
+    Adjust the 'filepath', 'vocab_size_src', etc., as needed.
+    """
     return {
+        # Data
         "filepath": "/home/ec2-user/Data/tmp/clean_list_int_wide4_simple4_IndexBasedTrain.json",
+        
+        # Model / Tokenizer Sizes
         "vocab_size_src": 48,
         "vocab_size_tgt": 10,
-        # "vocab_size_lto": 122,
         "seq_len_src": 10240,
         "seq_len_tgt": 1024,
-        # "seq_len_lto": 128,
-        "batch_size": 16,
-        "num_epochs": 200,
-        "warmup_steps": 10,
-        "lr": 10**-4,
-        "min_lr": 10**-6,
+
+        # Transformer Hyperparameters
         "d_model": 64,
-        "N": 6, 
+        "N": 6,                # number of layers
         "num_heads": 8,
         "dropout": 0.1,
         "kernel_type": "exp",
         "d_ff": 64,
-        # "eval_freq": 40,
         "source_rate": 10,
-        # "lto_rate": 12,
-        "eps": 1e-6,
+
+        # Training Hyperparameters
+        "batch_size": 16,
+        "num_epochs": 200,
+        "warmup_steps": 10,
+        "lr": 1e-4,            # peak LR
+        "min_lr": 1e-6,
+        "eps": 1e-6,           # optimizer epsilon
         "weight_decay": 0.01,
-        "patience": 30, 
-        # "lr_reduce_factor": 0.5,
-        # "max_lr_reductions": 3,
-        "gamma": 2.0,
-        # "mem_len_src": 640,
-        # "mem_len_tgt": 64,
-        "datasource": 'ProductGPT',
+        "patience": 30,
+        "gamma": 2.0,          # Focal Loss gamma
+
+        # Logging / Paths
+        "datasource": "ProductGPT",
         "model_folder": "weights",
         "model_basename": "tmodel_",
         "preload": "latest",
@@ -39,19 +44,37 @@ def get_config():
         "experiment_name": "runs/tmodel"
     }
 
-def get_weights_file_path(config, epoch: str):
+def get_weights_file_path(config, epoch: str) -> str:
+    """
+    Build a full checkpoint path given a config and a suffix (epoch).
+    Example output: "./ProductGPT_weights/tmodel_epoch3.pt"
+    """
+    # Build the model folder name
     model_folder = f"{config['datasource']}_{config['model_folder']}"
+    
+    # Example filename: "tmodel_epoch3.pt"
     model_filename = f"{config['model_basename']}{epoch}.pt"
+    
     full_path = Path('.') / model_folder
-    full_path.mkdir(parents=True, exist_ok=True)  # Create folder if it doesn't exist
-    return str(Path('.') / model_folder / model_filename)
+    full_path.mkdir(parents=True, exist_ok=True)  # Create folder if needed
+    
+    return str(full_path / model_filename)
 
-# Find the latest weights file in the weights folder
-def latest_weights_file_path(config):
+def latest_weights_file_path(config) -> str:
+    """
+    Find the newest file matching 'model_basename*' in the folder '<datasource>_<model_folder>'.
+    Returns the file path if found, otherwise None.
+    """
     model_folder = f"{config['datasource']}_{config['model_folder']}"
-    model_filename = f"{config['model_basename']}*"
-    weights_files = list(Path(model_folder).glob(model_filename))
-    if len(weights_files) == 0:
+    pattern = f"{config['model_basename']}*"
+
+    folder_path = Path('.') / model_folder
+    if not folder_path.exists():
         return None
+
+    weights_files = list(folder_path.glob(pattern))
+    if not weights_files:
+        return None
+
     weights_files.sort()
-    return str(weights_files[-1])
+    return str(weights_files[-1])  # Return the last (alphabetically greatest) match

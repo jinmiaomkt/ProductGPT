@@ -40,40 +40,6 @@ from config0git import get_config, get_weights_file_path, latest_weights_file_pa
 # Logging
 import logging
 logging.getLogger("deepspeed").setLevel(logging.ERROR)
-
-##############################################################################
-# Learning Rate Scheduler -- Warmup and Cosine Decay
-##############################################################################
-
-# class WarmupCosineDecayLR(torch.optim.lr_scheduler._LRScheduler):
-#     def __init__(self, optimizer, warmup_steps, total_steps, peak_lr, min_lr=0.0, last_epoch=-1):
-#         """
-#         Implements learning rate scheduling with warmup followed by cosine decay.
-
-#         :param optimizer: Wrapped optimizer.
-#         :param warmup_steps: Number of steps for warmup phase.
-#         :param total_steps: Total number of training steps.
-#         :param peak_lr: Maximum learning rate after warmup.
-#         :param min_lr: Minimum learning rate at the end of training.
-#         :param last_epoch: Last epoch number (for resuming training).
-#         """
-#         self.warmup_steps = warmup_steps
-#         self.total_steps = total_steps
-#         self.peak_lr = peak_lr
-#         self.min_lr = min_lr
-#         super(WarmupCosineDecayLR, self).__init__(optimizer, last_epoch)
-
-#     def get_lr(self):
-#         """Compute the learning rate for the current step."""
-#         step = self.last_epoch + 1  # Start from step 0
-#         if step < self.warmup_steps:
-#             # **Warmup Phase**: Linear increase from initial to peak LR
-#             return [self.min_lr + (self.peak_lr - self.min_lr) * step / self.warmup_steps for _ in self.base_lrs]
-#         else:
-#             # **Cosine Decay Phase**: Peak LR -> Min LR
-#             decay_steps = self.total_steps - self.warmup_steps
-#             decay_factor = 0.5 * (1 + math.cos(math.pi * (step - self.warmup_steps) / decay_steps))
-#             return [self.min_lr + (self.peak_lr - self.min_lr) * decay_factor for _ in self.base_lrs]
         
 ##############################################################################
 # Compute Perplexity
@@ -105,7 +71,6 @@ def calculate_perplexity(logits, targets, pad_token=9):
     perplexity = torch.exp(nll_loss)
 
     return perplexity.item()
-
 
 ##############################################################################
 # Focal Loss Implementation
@@ -429,29 +394,22 @@ def train_model(config):
     # min_lr = config.get('min_lr', 1e-6)
 
     best_val_loss = None
+    best_val_conf = None
+    best_val_ppl  = None
     best_checkpoint_path = None
     epochs_no_improve = 0
+    patience = config.get('patience', 2)
 
     # If you want early stop after hitting min_lr and no improvement, set:
     # early_stop_after_min_lr_patience = True
+
+    unique_id = config['model_basename'].rstrip("_")
 
     for epoch in range(initial_epoch, config['num_epochs']):
         model_engine.train()
         torch.cuda.empty_cache()
 
         batch_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch:02d}")
-
-        # def count_classes(dataset):
-        #   all_labels = []
-        #   for item in dataset:
-        #       all_labels.extend(item['label'])  # Assuming 'label' is a list of tokens
-        #   all_labels = np.array(all_labels)
-          
-        #   unique, counts = np.unique(all_labels, return_counts=True)
-        #   return dict(zip(unique, counts))
-
-        # print("Training Class distribution (LTO=4):", count_classes(train_dataloader))
-
         for batch in batch_iterator:
             source_input = batch['source_input'].to(device)
             target_input = batch['target_input'].to(device)
@@ -467,14 +425,10 @@ def train_model(config):
                 loss = loss_fn(proj_output.view(-1, proj_output.shape[-1]), label.view(-1))
 
             model_engine.backward(loss)
-            # model_engine.clip_grad_norm(1.0)
             model_engine.step()
-            # scheduler.step()
-            # model_engine.lr_scheduler.step()
             global_step += 1
 
         # Print learning rate for tracking
-        # current_lr = scheduler.get_last_lr()[0]
         current_lr = model_engine.optimizer.param_groups[0]["lr"]
         print(f"Epoch {epoch:02d} - Current LR: {current_lr:.6f}")
 
@@ -497,17 +451,17 @@ def train_model(config):
             best_val_conf_mat = val_conf_mat
             epochs_no_improve = 0
 
-            best_checkpoint_path = get_weights_file_path(config, "best")
+            best_checkpoint_path = get_weights_file_path(config, f"{unique_id}_best")
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model_engine.state_dict(),
                 'optimizer_state_dict': model_engine.optimizer.state_dict(),
                 'global_step': global_step,
-                'focal_loss': val_loss,
-                'confusion_matrix': val_conf_mat.tolist() if val_conf_mat is not None else None
+                'focal_loss': best_val_loss,
+                'confusion_matrix': best_val_conf_mat.tolist() if val_conf_mat is not None else None
             }, best_checkpoint_path)
 
-            print(f"New best focal loss={val_loss:.4f}. Saved checkpoint to {best_checkpoint_path}")
+            print(f"New best focal loss={best_val_loss:.4f}. Saved checkpoint to {best_checkpoint_path}")
         else:
             epochs_no_improve += 1
             print(f"No improvement for {epochs_no_improve} epoch(s).")

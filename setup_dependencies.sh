@@ -108,10 +108,10 @@ python3 -c "import torch; print('CUDA Available:', torch.cuda.is_available())"
 # # Install the keyring
 # sudo dpkg -i cuda-keyring_1.0-1_all.deb
 
-# Update your apt repository listings
-sudo yum update
+# # Update your apt repository listings
+# sudo yum update
 
-# Finally, install CUDA
-sudo yum -y install cuda
+# # Finally, install CUDA
+# sudo yum -y install cuda
 
 lsb_release -a
