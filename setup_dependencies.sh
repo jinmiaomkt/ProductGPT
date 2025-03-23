@@ -94,8 +94,8 @@ pip3 install \
   deepspeed \
   pytorch_lamb \
   scikit-learn \
-  tokenizers 
-
+  tokenizers \
+  mpi4py
 # ----------------------------------------------------------------------
 # 6. Verify the PyTorch installation and CUDA availability
 # ----------------------------------------------------------------------
