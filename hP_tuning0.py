@@ -4,7 +4,7 @@ import torch
 
 # Import your existing config
 from config0 import get_config, get_weights_file_path
-from train0_per import train_model  # Suppose your training entrypoint is train_model()
+from train0_per_git import train_model  # Suppose your training entrypoint is train_model()
 
 # 1) Define the ranges for each hyperparameter
 d_model_values = [32, 64, 128]
