@@ -33,37 +33,36 @@ sudo yum upgrade -y
 # ----------------------------------------------------------------------
 # 3. Install NVIDIA Drivers and CUDA (if GPU is detected)
 # ----------------------------------------------------------------------
-if lspci | grep -i nvidia > /dev/null; then
-  info "NVIDIA GPU detected. Installing NVIDIA drivers and CUDA..."
+# if lspci | grep -i nvidia > /dev/null; then
+#   info "NVIDIA GPU detected. Installing NVIDIA drivers and CUDA..."
 
-  # Download and configure the CUDA repository pin
-  curl -O https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
-  sudo mv cuda-ubuntu2204.pin /etc/apt/preferences.d/cuda-repository-pin-600
+#   # Download and configure the CUDA repository pin
+#   curl -O https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
+#   sudo mv cuda-ubuntu2204.pin /etc/apt/preferences.d/cuda-repository-pin-600
 
-  # Download and install the CUDA repository package
-  wget https://developer.download.nvidia.com/compute/cuda/12.0.0/local_installers/cuda-repo-ubuntu2204_12.0.0-1_amd64.deb
-  sudo dpkg -i cuda-repo-ubuntu2204_12.0.0-1_amd64.deb
+#   # Download and install the CUDA repository package
+#   wget https://developer.download.nvidia.com/compute/cuda/12.0.0/local_installers/cuda-repo-ubuntu2204_12.0.0-1_amd64.deb
+#   sudo dpkg -i cuda-repo-ubuntu2204_12.0.0-1_amd64.deb
 
-  # Fetch the NVIDIA GPG key and update
-  sudo apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/7fa2af80.pub
-  sudo yum update -y
+#   # Fetch the NVIDIA GPG key and update
+#   sudo apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/7fa2af80.pub
+#   sudo yum update -y
 
-  # Install CUDA
-  sudo yum install -y cuda
-fi
+#   # Install CUDA
+#   sudo yum install -y cuda
+# fi
 
-if lspci | grep -i nvidia > /dev/null; then
-  info "NVIDIA GPU detected. Installing NVIDIA drivers and CUDA..."
+# if lspci | grep -i nvidia > /dev/null; then
+#   info "NVIDIA GPU detected. Installing NVIDIA drivers and CUDA..."
 
-  # 1. Download and install the CUDA keyring
-  wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.0-1_all.deb
-  sudo dpkg -i cuda-keyring_1.0-1_all.deb
+#   # 1. Download and install the CUDA keyring
+#   wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.0-1_all.deb
+#   sudo dpkg -i cuda-keyring_1.0-1_all.deb
 
-  # 2. Update and install CUDA (replace 'cuda' with 'cuda-12-0' if you need a specific version)
-  sudo yum update -y
-  sudo yum install -y cuda
-fi
-
+#   # 2. Update and install CUDA (replace 'cuda' with 'cuda-12-0' if you need a specific version)
+#   sudo yum update -y
+#   sudo yum install -y cuda
+# fi
 
 # ----------------------------------------------------------------------
 # 4. Install PyTorch, TorchMetrics, and related libraries
