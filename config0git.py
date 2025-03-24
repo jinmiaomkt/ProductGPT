@@ -26,13 +26,13 @@ def get_config():
 
         # Training Hyperparameters
         "batch_size": 16,
-        "num_epochs": 200,
+        "num_epochs": 600,
         "warmup_steps": 10,
         "lr": 1e-4,            # peak LR
         "min_lr": 1e-6,
         "eps": 1e-6,           # optimizer epsilon
         "weight_decay": 0.01,
-        "patience": 30,
+        "patience": 2,
         "gamma": 2.0,          # Focal Loss gamma
 
         # Logging / Paths

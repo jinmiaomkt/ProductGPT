@@ -21,12 +21,12 @@ def get_config():
 
         # Training parameters
         "batch_size": 32,
-        "num_epochs": 200,
-        "warmup_steps": 5,
+        "num_epochs": 600,
+        "warmup_steps": 10,
         "lr": 1e-4,         # peak LR
         "min_lr": 1e-6,
         "weight_decay": 0.01,
-        "patience": 30,
+        "patience": 2,
         "gamma": 2.0,       # focal loss gamma
         "eps": 1e-6,        # LAMB optimizer epsilon
 
