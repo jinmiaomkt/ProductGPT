@@ -11,7 +11,7 @@ def get_config():
         
         # Model / Tokenizer Sizes
         "vocab_size_src": 48,
-        "vocab_size_tgt": 10,
+        "vocab_size_tgt": 12,
         "seq_len_src": 10240,
         "seq_len_tgt": 1024,
 

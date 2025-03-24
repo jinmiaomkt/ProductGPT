@@ -141,11 +141,11 @@ def build_tokenizer_tgt():
     tokenizer = Tokenizer(models.WordLevel(unk_token="[UNK]"))
     tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
     fixed_vocab = {
-        "0": 0, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6,
-        "[SOS]": 7,
-        "[EOS]": 10,
-        "[UNK]": 8,
-        "[PAD]": 9  
+        "0": 0, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8,
+        "[SOS]": 9,
+        "[EOS]": 0,
+        "[UNK]": 10,
+        "[PAD]": 11  
     }
     tokenizer.model = models.WordLevel(vocab=fixed_vocab, unk_token="[UNK]")
     return tokenizer

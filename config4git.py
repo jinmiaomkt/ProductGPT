@@ -11,7 +11,7 @@ def get_config():
         
         # Vocabulary sizes
         "vocab_size_src": 48,
-        "vocab_size_tgt": 10,
+        "vocab_size_tgt": 12,
         "vocab_size_lto": 48,
 
         # Sequence lengths
