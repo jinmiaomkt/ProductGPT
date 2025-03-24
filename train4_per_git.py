@@ -387,7 +387,7 @@ def train_model(config):
                 "warmup_min_lr": config['min_lr'],
                 "warmup_max_lr": config['lr'],
                 "warmup_num_steps": config['warmup_steps'],
-                "total_num_steps": None,
+                "total_num_steps": config['num_epochs'],
                 "decay_style": "cosine"
             }
         },
