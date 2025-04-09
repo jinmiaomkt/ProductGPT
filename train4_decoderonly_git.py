@@ -12,7 +12,7 @@ import torch.nn.functional as F
 import numpy as np
 
 from torch.utils.data import Dataset, DataLoader, random_split
-from config4 import get_config, get_weights_file_path, latest_weights_file_path
+from config4git import get_config, get_weights_file_path, latest_weights_file_path
 from dataset4_decoderonly import TransformerDataset, load_json_dataset
 from sklearn.metrics import confusion_matrix, accuracy_score
 
