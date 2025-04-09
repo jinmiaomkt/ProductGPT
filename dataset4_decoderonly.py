@@ -52,5 +52,5 @@ class TransformerDataset(Dataset):
 
         return {
             "aggregate_input": aggregate_input,
-            "labe": label
+            "label": label
         }
