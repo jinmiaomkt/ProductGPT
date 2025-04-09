@@ -10,17 +10,20 @@ def load_json_dataset(filepath):
 
 # Transformer Dataset
 class TransformerDataset(Dataset):
-    def __init__(self, data, tokenizer_src, tokenizer_tgt, tokenizer_lto, seq_len_src, seq_len_tgt, seq_len_lto, num_heads, source_rate, lto_rate, pad_token=9, sos_token=7, eos_token=0):
+    def __init__(self, data, tokenizer_src, tokenizer_tgt, tokenizer_lto, tokenizer_ai, seq_len_src, seq_len_tgt, seq_len_lto, seq_len_ai, num_heads, source_rate, lto_rate, ai_rate,pad_token=0, sos_token=10, eos_token=11):
         self.data = data
         self.tokenizer_src = tokenizer_src
         self.tokenizer_tgt = tokenizer_tgt
         self.tokenizer_lto = tokenizer_lto
+        self.tokenizer_ai = tokenizer_ai
         self.seq_len_src = seq_len_src 
         self.seq_len_tgt = seq_len_tgt
         self.seq_len_lto = seq_len_lto 
+        self.seq_len_ai = seq_len_ai
         self.num_heads = num_heads
         self.source_rate = source_rate
         self.lto_rate = lto_rate
+        self.ai_rate = ai_rate
         self.pad_token = torch.tensor([pad_token], dtype=torch.int64)
         self.sos_token = torch.tensor([sos_token], dtype=torch.int64)
         self.eos_token = torch.tensor([eos_token], dtype=torch.int64)
@@ -35,16 +38,19 @@ class TransformerDataset(Dataset):
         src_text = " ".join(map(str, data_item["Item"])) if isinstance(data_item["Item"], list) else str(data_item["Item"])
         tgt_text = " ".join(map(str, data_item["Decision"])) if isinstance(data_item["Decision"], list) else str(data_item["Decision"])
         lto_text = " ".join(map(str, data_item["LTO"])) if isinstance(data_item["LTO"], list) else str(data_item["LTO"])
+        AI_text = " ".join(map(str, data_item["AggregateInput"])) if isinstance(data_item["AggregateInput"], list) else str(data_item["AggregateInput"])
 
         # Tokenize source and target
         src_input_tokens = self.tokenizer_src.encode(src_text).ids[:self.seq_len_src]
         tgt_input_tokens = self.tokenizer_tgt.encode(tgt_text).ids[:self.seq_len_tgt -1]
         lto_input_tokens = self.tokenizer_src.encode(lto_text).ids[:self.seq_len_lto]
+        aggregate_input_tokens = self.tokenizer_ai.encode(AI_text).ids[:self.seq_len_lto]
 
         # Padding calculations
         src_pad = max(0, self.seq_len_src - len(src_input_tokens))
         tgt_pad = max(0, self.seq_len_tgt - len(tgt_input_tokens) - 1)
         lto_pad = max(0, self.seq_len_lto - len(lto_input_tokens))
+        ai_pad = max(0, self.seq_len_ai - len(aggregate_input_tokens))
 
         # Encoder input with [SOS], [EOS], and padding
         source_input = torch.cat([
@@ -52,6 +58,14 @@ class TransformerDataset(Dataset):
             torch.tensor(src_input_tokens, dtype=torch.int64),
             # self.eos_token,
             torch.tensor([self.pad_token] * src_pad, dtype=torch.int64)
+        ])
+
+        # Encoder input with [SOS], [EOS], and padding
+        aggregate_input = torch.cat([
+            # self.sos_token,
+            torch.tensor(aggregate_input_tokens, dtype=torch.int64),
+            # self.eos_token,
+            torch.tensor([self.pad_token] * ai_pad, dtype=torch.int64)
         ])
 
         # Limited-time Offer input with [SOS], [EOS], and padding
@@ -81,11 +95,13 @@ class TransformerDataset(Dataset):
         assert lto_input.size(0) == self.seq_len_lto
         assert target_input.size(0) == self.seq_len_tgt
         assert label.size(0) == self.seq_len_tgt    
+        assert aggregate_input.size(0) == self.seq_len_ai    
 
         return {
             "source_input": source_input,
             "lto_input": lto_input,
             "target_input": target_input,
+            "aggregate_input": aggregate_input,
             # "src_src_self_mask": (source_input != self.pad_token).unsqueeze(0).int() & causal_mask_square(source_input.size(0)),
             # "tgt_tgt_self_mask": (target_input != self.pad_token).unsqueeze(0).int() & causal_mask_square(target_input.size(0)),
             # "lto_src_cross_mask": (lto_input != self.pad_token).unsqueeze(0).unsqueeze(0).repeat_interleave(self.source_rate, dim=-1).repeat(self.num_heads, 1, 1) & causal_mask_rectangular(lto_input.size(0), self.source_rate),
@@ -93,7 +109,8 @@ class TransformerDataset(Dataset):
             "label": label,  # (seq_len)
             "src_text": src_text,
             "tgt_text": tgt_text,
-            "lto_text": lto_text
+            "lto_text": lto_text,
+            "ai_text": AI_text
         }
 
 # # Causal mask for autoregressive decoding

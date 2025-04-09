@@ -5,8 +5,8 @@ import json
 import torch
 
 # Local modules
-from config4git import get_config
-from train4_per_git import train_model
+from config4 import get_config
+from train4_decoderonly import train_model
 
 # Define the hyperparameter ranges
 d_model_values = [32, 64, 128]
@@ -46,6 +46,7 @@ def hyperparam_sweep():
             "val_loss": final_metrics['val_loss'],
             "val_ppl": final_metrics['val_ppl'],
             "confusion_matrix": final_metrics['val_confusion_matrix'],
+            "hit_rate": final_metrics['val_hit_rate'],
             "best_checkpoint_path": final_metrics['best_checkpoint_path']
         }
         metrics_file = f"results_{unique_id}.json"
