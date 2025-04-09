@@ -15,7 +15,7 @@ def get_config():
         "batch_size": 8,
         "num_epochs": 200,
         "warmup_steps": 5,
-        "lr": 10**-2,
+        "lr": 10**-4,
         "min_lr": 10**-6,
         "d_model": 32,
         "N": 6,
@@ -28,7 +28,7 @@ def get_config():
         "lto_rate": 4,
         "ai_rate": 15,
         "weight_decay": 0.01,
-        "patience": 3,
+        "patience": 6,
         "gamma": 3,
         "eps": 10**-6,
 
