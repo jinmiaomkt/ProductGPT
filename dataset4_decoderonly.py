@@ -30,7 +30,7 @@ class TransformerDataset(Dataset):
         ai_text = " ".join(map(str, data_item["AggregateInput"])) if isinstance(data_item["AggregateInput"], list) else str(data_item["AggregateInput"])
         tgt_text = " ".join(map(str, data_item["Decision"])) if isinstance(data_item["Decision"], list) else str(data_item["Decision"])
 
-        aggregate_input_tokens = self.tokenizer_ai.encode(ai_text).ids[:self.seq_len_lto]
+        aggregate_input_tokens = self.tokenizer_ai.encode(ai_text).ids[:self.seq_len_ai]
         tgt_input_tokens = self.tokenizer_tgt.encode(tgt_text).ids[:self.seq_len_tgt]
 
         ai_pad = max(0, self.seq_len_ai - len(aggregate_input_tokens))
