@@ -34,7 +34,7 @@ def get_config():
 
         # Logging and paths
         "datasource": "ProductGPT",
-        "model_folder": "weights",
+        "model_folder": "/home/ec2-user/output",
         "model_basename": "MyProductGPT_",
         "preload": "latest",
         "tokenizer_file": "tokenizer_{0}.json",
