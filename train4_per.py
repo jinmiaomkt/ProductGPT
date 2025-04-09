@@ -205,11 +205,11 @@ def build_tokenizer_tgt():
     tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
 
     fixed_vocab = {
-        "0": 0, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6,
-        "[SOS]": 7,
-        "[EOS]": 0,
-        "[UNK]": 8,
-        "[PAD]": 9  
+        "0": 0, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, 
+        "[SOS]": 9,
+        "[EOS]": 10,
+        "[UNK]": 11,
+        "[PAD]": 12  
     }
     
     tokenizer.model = models.WordLevel(vocab=fixed_vocab, unk_token="[UNK]")
@@ -265,14 +265,17 @@ def get_dataloaders(config):
     tokenizer_src = build_tokenizer_src(train_data, "Item", vocab_size=config['vocab_size_src'])
     tokenizer_tgt = build_tokenizer_tgt()  # Uses fixed vocab
     tokenizer_lto = build_tokenizer_src(train_data, "Item", vocab_size=config['vocab_size_src'])
+    tokenizer_ai = build_tokenizer_src(train_data, "AggregateInput", vocab_size=config['vocab_size_src'])
     
+    tokenizer_src.save("drive/MyDrive/ProductGPT_weights/source_tokenizer.json")
+
     # Create datasets
     # Make sure your TransformerDataset is designed to handle a list of user records, each containing a 'decisions' list.
-    # def __init__(self, data, tokenizer_src, tokenizer_tgt, tokenizer_lto, seq_len_src, seq_len_tgt, seq_len_lto, num_heads, source_rate, lto_rate, pad_token=0, sos_token=7, eos_token=0):
-    
-    train_dataset = TransformerDataset(train_data, tokenizer_src, tokenizer_tgt, tokenizer_lto, config['seq_len_src'], config['seq_len_tgt'], config['seq_len_lto'], config['num_heads'], config['source_rate'], config['lto_rate'])
-    val_dataset   = TransformerDataset(val_data, tokenizer_src, tokenizer_tgt, tokenizer_lto, config['seq_len_src'], config['seq_len_tgt'], config['seq_len_lto'], config['num_heads'], config['source_rate'], config['lto_rate'])
-    test_dataset  = TransformerDataset(test_data, tokenizer_src, tokenizer_tgt, tokenizer_lto, config['seq_len_src'], config['seq_len_tgt'], config['seq_len_lto'], config['num_heads'], config['source_rate'], config['lto_rate'])
+    # def __init__(self, data, tokenizer_src, tokenizer_tgt, tokenizer_lto, tokenizer_ai, seq_len_src, seq_len_tgt, seq_len_lto, seq_len_ai, num_heads, source_rate, lto_rate, ai_rate,pad_token=0, sos_token=10, eos_token=11):
+
+    train_dataset = TransformerDataset(train_data, tokenizer_src, tokenizer_tgt, tokenizer_lto, tokenizer_ai, config['seq_len_src'], config['seq_len_tgt'], config['seq_len_lto'], config['seq_len_ai'], config['num_heads'], config['source_rate'], config['lto_rate'], config['ai_rate'])
+    val_dataset   = TransformerDataset(val_data, tokenizer_src, tokenizer_tgt, tokenizer_lto,tokenizer_ai, config['seq_len_src'], config['seq_len_tgt'], config['seq_len_lto'], config['seq_len_ai'], config['num_heads'], config['source_rate'], config['lto_rate'], config['ai_rate'])
+    test_dataset  = TransformerDataset(test_data, tokenizer_src, tokenizer_tgt, tokenizer_lto, tokenizer_ai, config['seq_len_src'], config['seq_len_tgt'], config['seq_len_lto'], config['seq_len_ai'], config['num_heads'], config['source_rate'], config['lto_rate'], config['ai_rate'])
 
     # Create DataLoaders
     # For training, you can shuffle across users if that’s appropriate for your scenario.
@@ -314,6 +317,7 @@ def train_model(config):
         "gradient_accumulation_steps": 1,
         "zero_allow_untested_optimizer": True,
         "gradient_clipping": 1.0,
+        "use_lr_scheduler": True,
         "optimizer": {
             "type": "Lamb",
             "params": {
@@ -555,40 +559,6 @@ def train_model(config):
             if epochs_no_improve >= patience:
                 print("Early stopping.")
                 break
-
-                # Check if we are already near min LR
-                # currently_at_min_lr = False
-                # for param_group in optimizer.param_groups:
-                #     old_lr = param_group['lr']
-                #     if old_lr <= (min_lr + 1e-12):  # or some tiny epsilon
-                #         currently_at_min_lr = True
-                #         break
-
-                # if currently_at_min_lr:
-                #     # If the LR is at its minimum but still no improvement
-                #     # => decide to early stop or not
-                #     if early_stop_after_min_lr_patience:
-                #         print("No improvement and already at min LR => Early stopping.")
-                #         break
-                #     else:
-                #         print("No improvement, min LR reached, continuing anyway.")
-                #         # No LR reduce, but keep going or break
-
-                # else:
-                #     # Reduce LR
-                #     for param_group in optimizer.param_groups:
-                #         old_lr = param_group['lr']
-                #         new_lr = max(min_lr, old_lr * lr_reduce_factor)
-                #         param_group['lr'] = new_lr
-                #     # lr_reductions += 1
-                #     print(f"Reduced learning rate to {new_lr:.6f}")
-                    
-                #     # Optionally, if you only want to reduce LR a few times total:
-                #     # if lr_reductions >= max_lr_reductions:
-                #     #     print("Reached maximum LR reductions => Early stopping.")
-                #     #     break
-
-                # epochs_no_improve = 0  # reset after LR reduce
 
     if best_checkpoint_path:
         print(f"\nTraining complete. Best checkpoint was {best_checkpoint_path} with focal loss = {best_val_loss:.4f}")
