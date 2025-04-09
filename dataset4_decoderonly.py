@@ -22,7 +22,7 @@ class TransformerDataset(Dataset):
         self.eos_token = torch.tensor([eos_token], dtype=torch.int64)
             
     def __len__(self):
-        return len(self.samples)
+        return len(self.data)
 
     def __getitem__(self, idx):
         data_item = self.data[idx]
