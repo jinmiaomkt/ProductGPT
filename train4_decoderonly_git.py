@@ -44,7 +44,7 @@ def build_tokenizer_src():
         "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9, 
         "[PAD]": 0,  
         "[SOS]": 10,
-        "[EOS]": 11,
+        # "[EOS]": 11,
         "[UNK]": 12
     }
     for i in range(13, 61):
@@ -63,7 +63,7 @@ def build_tokenizer_tgt():
         "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9, 
         "[PAD]": 0,  
         "[SOS]": 10,
-        "[EOS]": 11,
+        # "[EOS]": 11,
         "[UNK]": 12
     }
     tokenizer.model = models.WordLevel(vocab=fixed_vocab, unk_token="[UNK]")
@@ -162,8 +162,6 @@ def get_dataloaders(config):
     # tokenizer_src.save(os.path.join(config["model_folder"], "tokenizer_src.json"))
     tokenizer_tgt.save(os.path.join(config["model_folder"], "tokenizer_tgt.json"))
     tokenizer_ai.save(os.path.join(config["model_folder"], "tokenizer_ai.json"))
-
-    #   def __init__(self, data, tokenizer_ai, tokenizer_tgt, seq_len_ai, seq_len_tgt, num_heads, ai_rate, pad_token=0, sos_token=10, eos_token=11):
 
     train_dataset = TransformerDataset(train_data, tokenizer_ai, tokenizer_tgt,  config['seq_len_ai'], config['seq_len_tgt'], config['num_heads'], config['ai_rate'], pad_token=0)
     val_dataset   = TransformerDataset(val_data, tokenizer_ai, tokenizer_tgt,  config['seq_len_ai'], config['seq_len_tgt'], config['num_heads'], config['ai_rate'], pad_token=0)
@@ -383,8 +381,9 @@ def evaluate(dataloader, model_engine, device, loss_fn):
     pad_id = tokenizer_tgt.token_to_id("[PAD]")
     sos_id = tokenizer_tgt.token_to_id("[SOS]")
     unk_id = tokenizer_tgt.token_to_id("[UNK]")
-    eos_id = tokenizer_tgt.token_to_id("[EOS]")
-    special_tokens = {pad_id, sos_id, unk_id, eos_id}
+    # eos_id = tokenizer_tgt.token_to_id("[EOS]")
+    # special_tokens = {pad_id, sos_id, unk_id, eos_id}
+    special_tokens = {pad_id, sos_id, unk_id}
 
     with torch.no_grad():
         for batch in dataloader:
@@ -437,7 +436,7 @@ def evaluate(dataloader, model_engine, device, loss_fn):
     conf_mat = confusion_matrix(all_labels, all_preds, labels=unique_labels)
     hit_rate = accuracy_score(all_labels, all_preds)
 
-    label_mapping = {9: "9", 1: "1", 2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 0: "[PAD]"}
+    label_mapping = {0: "[PAD]", 1: "1", 2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9"}
     readable_labels = [label_mapping.get(i, str(i)) for i in unique_labels]
     print(f"Label IDs: {unique_labels}")
     print(f"Label meanings: {readable_labels}")
