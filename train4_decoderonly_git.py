@@ -73,7 +73,7 @@ def build_tokenizer_tgt():
 # FocalLoss
 ##############################################################################
 class FocalLoss(nn.Module):
-    def __init__(self, gamma=2.0, reduction='mean', ignore_index=20, pad_token = 20):
+    def __init__(self, gamma=2.0, reduction='mean', ignore_index=0, pad_token = 0):
         super(FocalLoss, self).__init__()
         self.gamma = gamma
         self.reduction = reduction
@@ -381,7 +381,7 @@ def evaluate(dataloader, model_engine, device, loss_fn):
             logits  = model_engine(dec_inp)
 
             # Gather logits at decision positions (e.g., first token of every 15-token block)
-            decision_positions = torch.arange(4, logits.size(1), step=15, device=logits.device)
+            decision_positions = torch.arange(14, logits.size(1), step=15, device=logits.device)
             decision_logits = logits[:, decision_positions, :]  # shape: (B, N, vocab_size)
 
             # SHIFT for loss
