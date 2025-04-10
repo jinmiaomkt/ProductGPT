@@ -10,7 +10,7 @@ def load_json_dataset(filepath):
 
 # Transformer Dataset
 class TransformerDataset(Dataset):
-    def __init__(self, data, tokenizer_ai, tokenizer_tgt, seq_len_ai, seq_len_tgt, num_heads, ai_rate, pad_token=0, sos_token=10, eos_token=11):
+    def __init__(self, data, tokenizer_ai, tokenizer_tgt, seq_len_ai, seq_len_tgt, num_heads, ai_rate, pad_token=0, sos_token=10):
         self.data = data
         self.tokenizer_ai = tokenizer_ai
         self.tokenizer_tgt = tokenizer_tgt
@@ -19,7 +19,7 @@ class TransformerDataset(Dataset):
         self.ai_rate = ai_rate
         self.pad_token = torch.tensor([pad_token], dtype=torch.int64)
         self.sos_token = torch.tensor([sos_token], dtype=torch.int64)
-        self.eos_token = torch.tensor([eos_token], dtype=torch.int64)
+        # self.eos_token = torch.tensor([eos_token], dtype=torch.int64)
             
     def __len__(self):
         return len(self.data)
