@@ -391,8 +391,8 @@ def evaluate(dataloader, model_engine, device, loss_fn):
                 class9_logits = logits[..., 9]  # (B, T)
                 print(f"Avg logit for class 9: {class9_logits.mean().item():.4f}")
 
-            counts = (label == 9).sum()
-            print("Class 9 count at decision positions:", counts.item())
+            # counts = (label == 9).sum()
+            # print("Class 9 count at decision positions:", counts.item())
 
             # Gather logits at decision positions (e.g., first token of every 15-token block)
             decision_positions = torch.arange(14, logits.size(1), step=15, device=logits.device)
