@@ -445,9 +445,9 @@ def evaluate(dataloader, model_engine, device, loss_fn):
             label   = batch['label'].to(device)
             logits  = model_engine(dec_inp)
 
-            with torch.no_grad():
-                class9_logits = logits[..., 9]  # (B, T)
-                print(f"Avg logit for class 9: {class9_logits.mean().item():.4f}")
+            # with torch.no_grad():
+            #     class9_logits = logits[..., 9]  # (B, T)
+            #     print(f"Avg logit for class 9: {class9_logits.mean().item():.4f}")
 
             # counts = (label == 9).sum()
             # print("Class 9 count at decision positions:", counts.item())
