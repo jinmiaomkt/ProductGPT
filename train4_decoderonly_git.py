@@ -266,8 +266,8 @@ def train_model(config):
             #   }
             # then restore them:
             model_engine.load_state_dict(checkpoint['model_state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-
+            # optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            
             initial_epoch = checkpoint.get('epoch', 0) + 1
             global_step   = checkpoint.get('global_step', 0)
 
