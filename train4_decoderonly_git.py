@@ -73,7 +73,7 @@ def build_tokenizer_tgt():
 # FocalLoss
 ##############################################################################
 class FocalLoss(nn.Module):
-    def __init__(self, gamma=2.0, ignore_index=0):
+    def __init__(self, gamma=5.0, ignore_index=0):
         """
         We'll do the per-element masking by ourselves.
         """
@@ -304,13 +304,13 @@ def train_model(config):
             decision_positions = torch.arange(14, T, step=15, device=logits.device)  # shape: (N,)
             decision_logits = logits[:, decision_positions, :]  # shape: (B, N, V)
 
-            # Get the input tokens at those positions
-            decision_input_tokens = decoder_input[:, decision_positions]  # (B, N)
+            # # Get the input tokens at those positions
+            # decision_input_tokens = decoder_input[:, decision_positions]  # (B, N)
 
-            # Print a few examples
-            for b in range(min(2, decoder_input.size(0))):  # Print first 2 samples in the batch
-                input_tokens = decision_input_tokens[b].tolist()
-                print(f"[Decoder Input @ Decision Positions | Sample {b}]: {input_tokens}")
+            # # Print a few examples
+            # for b in range(min(2, decoder_input.size(0))):  # Print first 2 samples in the batch
+            #     input_tokens = decision_input_tokens[b].tolist()
+            #     print(f"[Decoder Input @ Decision Positions | Sample {b}]: {input_tokens}")
 
             loss = loss_fn(
                 decision_logits,  # predict next token
