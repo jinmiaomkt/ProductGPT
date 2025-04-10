@@ -206,7 +206,7 @@ def train_model(config):
 
     tokenizer_tgt = build_tokenizer_tgt()
     # Focal Loss
-    loss_fn = FocalLoss(gamma=config['gamma'], reduction='mean', ignore_index=tokenizer_tgt.token_to_id('[PAD]')).to(device)
+    loss_fn = FocalLoss(gamma=config['gamma'], ignore_index=tokenizer_tgt.token_to_id('[PAD]')).to(device)
 
     # DeepSpeed config
     ds_config = {
@@ -311,7 +311,7 @@ def train_model(config):
             for b in range(min(2, decoder_input.size(0))):  # Print first 2 samples in the batch
                 input_tokens = decision_input_tokens[b].tolist()
                 print(f"[Decoder Input @ Decision Positions | Sample {b}]: {input_tokens}")
-                
+
             loss = loss_fn(
                 decision_logits,  # predict next token
                 label
