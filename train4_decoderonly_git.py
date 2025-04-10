@@ -109,7 +109,7 @@ class FocalLoss(nn.Module):
 ##############################################################################
 # Perplexity helper
 ##############################################################################
-def calculate_perplexity(logits, targets, pad_token=20):
+def calculate_perplexity(logits, targets, pad_token=0):
     """
     logits: (B, T, vocab_size)
     targets: (B, T)
