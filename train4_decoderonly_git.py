@@ -72,42 +72,94 @@ def build_tokenizer_tgt():
 ##############################################################################
 # FocalLoss
 ##############################################################################
+# class FocalLoss(nn.Module):
+#     def __init__(self, gamma=5.0, ignore_index=0):
+#         """
+#         We'll do the per-element masking by ourselves.
+#         """
+#         super().__init__()
+#         self.gamma = gamma
+#         self.ignore_index = ignore_index
+
+#     def forward(self, inputs, targets):
+#         """
+#         inputs: (B, T, V)
+#         targets: (B, T)
+#         """
+#         B, T, V = inputs.shape
+
+#         # Flatten
+#         inputs_2d = inputs.reshape(-1, V)      # (B*T, V)
+#         targets_1d = targets.reshape(-1)       # (B*T,)
+
+#         # "none" reduction so we can manually mask
+#         ce_loss = F.cross_entropy(inputs_2d, targets_1d, reduction='none')  # shape (B*T,)
+
+#         # Build mask for "ignore_index"
+#         mask = (targets_1d != self.ignore_index)  # True where we keep the token
+
+#         # Keep only non-ignored tokens
+#         ce_loss = ce_loss[mask]
+
+#         # Standard focal loss formula
+#         pt = torch.exp(-ce_loss)   # shape (N_nonignored,)
+#         focal = (1 - pt)**self.gamma * ce_loss
+
+#         # Return average over non-ignored
+#         if focal.numel() == 0:
+#             return torch.tensor(0.0, device=inputs.device)
+#         return focal.mean()
+
+
 class FocalLoss(nn.Module):
-    def __init__(self, gamma=5.0, ignore_index=0):
+    def __init__(self, gamma=2.0, ignore_index=0, class_weights=None):
         """
-        We'll do the per-element masking by ourselves.
+        Args:
+            gamma (float): Focal loss exponent, default=2.
+            ignore_index (int): Token ID to ignore in the loss.
+            class_weights (Tensor): 1D tensor of shape [num_classes],
+                                    e.g. to upweight rare classes.
         """
         super().__init__()
         self.gamma = gamma
         self.ignore_index = ignore_index
+        # Register the weights as a buffer so they move to GPU with the model.
+        if class_weights is not None:
+            self.register_buffer('class_weights', class_weights)
+        else:
+            self.class_weights = None
 
     def forward(self, inputs, targets):
         """
-        inputs: (B, T, V)
-        targets: (B, T)
+        inputs: (B, T, V) => raw logits
+        targets: (B, T)   => integer class IDs
         """
         B, T, V = inputs.shape
 
-        # Flatten
-        inputs_2d = inputs.reshape(-1, V)      # (B*T, V)
-        targets_1d = targets.reshape(-1)       # (B*T,)
+        # Flatten to 1D
+        inputs_2d = inputs.reshape(-1, V)         # (B*T, V)
+        targets_1d = targets.reshape(-1)          # (B*T,)
 
-        # "none" reduction so we can manually mask
-        ce_loss = F.cross_entropy(inputs_2d, targets_1d, reduction='none')  # shape (B*T,)
+        # Use cross_entropy with 'none' reduction so we can apply focal transform ourselves
+        ce_loss = F.cross_entropy(
+            inputs_2d,
+            targets_1d,
+            reduction='none',
+            weight=self.class_weights  # <---- the magic: per-class weighting
+        )
 
-        # Build mask for "ignore_index"
-        mask = (targets_1d != self.ignore_index)  # True where we keep the token
+        # Mask out tokens == ignore_index
+        valid_mask = (targets_1d != self.ignore_index)
+        ce_loss = ce_loss[valid_mask]
 
-        # Keep only non-ignored tokens
-        ce_loss = ce_loss[mask]
+        # Focal transform
+        pt = torch.exp(-ce_loss)
+        focal = (1 - pt) ** self.gamma * ce_loss
 
-        # Standard focal loss formula
-        pt = torch.exp(-ce_loss)   # shape (N_nonignored,)
-        focal = (1 - pt)**self.gamma * ce_loss
-
-        # Return average over non-ignored
+        # If everything got masked, return 0
         if focal.numel() == 0:
             return torch.tensor(0.0, device=inputs.device)
+
         return focal.mean()
 
 ##############################################################################
@@ -203,8 +255,14 @@ def train_model(config):
     torch.quantization.prepare_qat(model, inplace=True)
 
     tokenizer_tgt = build_tokenizer_tgt()
+    
     # Focal Loss
-    loss_fn = FocalLoss(gamma=config['gamma'], ignore_index=tokenizer_tgt.token_to_id('[PAD]')).to(device)
+    # loss_fn = FocalLoss(gamma=config['gamma'], ignore_index=tokenizer_tgt.token_to_id('[PAD]')).to(device)
+
+    weights = torch.ones(10)
+    weights[9] = 10.0
+    weights = weights.to(device)
+    loss_fn = FocalLoss(gamma=config['gamma'], ignore_index=tokenizer_tgt.token_to_id('[PAD]'), class_weights=weights).to(device)
 
     # DeepSpeed config
     ds_config = {
