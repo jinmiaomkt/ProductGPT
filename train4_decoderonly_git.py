@@ -250,6 +250,33 @@ def train_model(config):
     initial_epoch = 0
     global_step   = 0
 
+    if config.get("preload") == "latest":
+        latest_ckpt_path = latest_weights_file_path(config)
+        if latest_ckpt_path is not None and Path(latest_ckpt_path).exists():
+            print(f"[INFO] Loading checkpoint from {latest_ckpt_path} ...")
+            checkpoint = torch.load(latest_ckpt_path, map_location=device)
+
+            # If you saved a dict like:
+            #   {
+            #     'epoch': ...,
+            #     'model_state_dict': ...,
+            #     'optimizer_state_dict': ...,
+            #     'global_step': ...
+            #   }
+            # then restore them:
+            model_engine.load_state_dict(checkpoint['model_state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
+            initial_epoch = checkpoint.get('epoch', 0) + 1
+            global_step   = checkpoint.get('global_step', 0)
+
+            print(f"[INFO] Successfully loaded. Resuming from epoch={initial_epoch}, global_step={global_step}.")
+        else:
+            print("[INFO] No previous checkpoint found. Starting fresh.")
+    else:
+        print("[INFO] Starting from a fresh model initialization (no preload).")
+
+
     best_val_loss = None
     best_checkpoint_path = None
     epochs_no_improve = 0
