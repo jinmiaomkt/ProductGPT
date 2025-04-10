@@ -259,8 +259,8 @@ def train_model(config):
     # Focal Loss
     # loss_fn = FocalLoss(gamma=config['gamma'], ignore_index=tokenizer_tgt.token_to_id('[PAD]')).to(device)
 
-    weights = torch.ones(10)
-    weights[9] = 10.0
+    weights = torch.ones(config['vocab_size_tgt'])
+    weights[9] = config['weight']
     weights = weights.to(device)
     loss_fn = FocalLoss(gamma=config['gamma'], ignore_index=tokenizer_tgt.token_to_id('[PAD]'), class_weights=weights).to(device)
 
