@@ -254,7 +254,8 @@ def train_model(config):
         latest_ckpt_path = latest_weights_file_path(config)
         if latest_ckpt_path is not None and Path(latest_ckpt_path).exists():
             print(f"[INFO] Loading checkpoint from {latest_ckpt_path} ...")
-            checkpoint = torch.load(latest_ckpt_path, map_location=device)
+            # checkpoint = torch.load(latest_ckpt_path, map_location=device)
+            checkpoint = torch.load(latest_ckpt_path, map_location=device, weights_only=False)
 
             # If you saved a dict like:
             #   {
