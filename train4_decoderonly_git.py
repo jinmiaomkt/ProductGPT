@@ -303,8 +303,8 @@ def train_model(config):
             decision_logits = logits[:, decision_positions, :]  # shape: (B, N, V)
 
             # Print how many "9"s occur at these positions
-            count_9 = (label == 9).sum().item()
-            print(f"[Batch {batch}] 9-count at decision positions = {count_9}")
+            # count_9 = (label == 9).sum().item()
+            # print(f"[Batch {batch}] 9-count at decision positions = {count_9}")
 
             loss = loss_fn(
                 decision_logits,  # predict next token
