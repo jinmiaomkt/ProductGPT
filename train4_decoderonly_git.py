@@ -396,11 +396,8 @@ def evaluate(dataloader, model_engine, device, loss_fn):
             decision_positions = torch.arange(14, logits.size(1), step=15, device=logits.device)
             decision_logits = logits[:, decision_positions, :]  # shape: (B, N, vocab_size)
 
-            sub_label       = label[:,  decision_positions]       # shape: (B, N)
-
             # SHIFT for loss
-            # loss = loss_fn(decision_logits, label)
-            loss = loss_fn(decision_logits, sub_label)
+            loss = loss_fn(decision_logits, label)
             total_loss += loss.item()
 
             # Perplexity
