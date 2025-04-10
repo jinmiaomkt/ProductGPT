@@ -73,38 +73,42 @@ def build_tokenizer_tgt():
 # FocalLoss
 ##############################################################################
 class FocalLoss(nn.Module):
-    def __init__(self, gamma=2.0, reduction='mean', ignore_index=0, pad_token = 0):
-        super(FocalLoss, self).__init__()
+    def __init__(self, gamma=2.0, ignore_index=0):
+        """
+        We'll do the per-element masking by ourselves.
+        """
+        super().__init__()
         self.gamma = gamma
-        self.reduction = reduction
         self.ignore_index = ignore_index
-        self.pad_token = pad_token
 
     def forward(self, inputs, targets):
-        # inputs: (batch, seq_len, vocab_size)
-        # targets: (batch, seq_len)
+        """
+        inputs: (B, T, V)
+        targets: (B, T)
+        """
         B, T, V = inputs.shape
-        inputs_2d = inputs.reshape(-1, V)
-        targets_1d = targets.reshape(-1)
 
-        # mask out ignore
-        mask = torch.ones_like(targets_1d, dtype=torch.bool)
-        if self.ignore_index is not None:
-            mask = (targets_1d != self.ignore_index)
+        # Flatten
+        inputs_2d = inputs.reshape(-1, V)      # (B*T, V)
+        targets_1d = targets.reshape(-1)       # (B*T,)
 
-        ce_loss = F.cross_entropy(inputs_2d, targets_1d, reduction='mean')
-        ce_loss = ce_loss * mask  # zero out ignored
+        # "none" reduction so we can manually mask
+        ce_loss = F.cross_entropy(inputs_2d, targets_1d, reduction='none')  # shape (B*T,)
 
-        pt = torch.exp(-ce_loss)
+        # Build mask for "ignore_index"
+        mask = (targets_1d != self.ignore_index)  # True where we keep the token
+
+        # Keep only non-ignored tokens
+        ce_loss = ce_loss[mask]
+
+        # Standard focal loss formula
+        pt = torch.exp(-ce_loss)   # shape (N_nonignored,)
         focal = (1 - pt)**self.gamma * ce_loss
 
-        if self.reduction == "mean":
-            denom = mask.sum().float()
-            return focal.sum() / (denom + 1e-6)
-        elif self.reduction == "sum":
-            return focal.sum()
-        else:
-            return focal
+        # Return average over non-ignored
+        if focal.numel() == 0:
+            return torch.tensor(0.0, device=inputs.device)
+        return focal.mean()
 
 ##############################################################################
 # Perplexity helper
@@ -300,6 +304,14 @@ def train_model(config):
             decision_positions = torch.arange(14, T, step=15, device=logits.device)  # shape: (N,)
             decision_logits = logits[:, decision_positions, :]  # shape: (B, N, V)
 
+            # Get the input tokens at those positions
+            decision_input_tokens = decoder_input[:, decision_positions]  # (B, N)
+
+            # Print a few examples
+            for b in range(min(2, decoder_input.size(0))):  # Print first 2 samples in the batch
+                input_tokens = decision_input_tokens[b].tolist()
+                print(f"[Decoder Input @ Decision Positions | Sample {b}]: {input_tokens}")
+                
             loss = loss_fn(
                 decision_logits,  # predict next token
                 label
