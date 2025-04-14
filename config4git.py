@@ -13,7 +13,7 @@ def get_config():
         "seq_len_lto": 4096,
         "seq_len_ai": 15360,
         "batch_size": 8,
-        "num_epochs": 1000,
+        "num_epochs": 10,
         "warmup_steps": 5,
         "lr": 10**-4,
         "min_lr": 10**-6,
@@ -34,7 +34,7 @@ def get_config():
         "weight": 10,
 
         # Logging and paths
-        "datasource": "ProductGPT",
+        # "datasource": "ProductGPT",
         "model_folder": "/home/ec2-user/output",
         "model_basename": "MyProductGPT_",
         "preload": "latest",
@@ -52,7 +52,7 @@ def get_weights_file_path(config, epoch: str) -> str:
       - model_basename + epoch
     """
     # e.g. "ProductGPT_weights" 
-    model_folder = f"{config['datasource']}_{config['model_folder']}"
+    model_folder = f"{config['model_folder']}"
     # e.g. "MyProductGPT_epoch5.pt" or "MyProductGPT_best.pt"
     model_filename = f"{config['model_basename']}{epoch}.pt"
 
@@ -67,15 +67,18 @@ def latest_weights_file_path(config) -> str:
     inside the folder <datasource>_<model_folder>.
     Returns the file path if found, otherwise None.
     """
-    model_folder = f"{config['datasource']}_{config['model_folder']}"
-    # Match e.g. "MyProductGPT_*.pt"
-    pattern = f"{config['model_basename']}*.pt"
-
+    model_folder = f"{config['model_folder']}"
+    
+    unique_id = f"dmodel{config['d_model']}_ff{config['d_ff']}_N{config['N']}_heads{config['num_heads']}_gamma{config['gamma']}"
+    # config['model_basename'] = f"MyProductGPT_{unique_id}_"
+    
+    basename = f"MyProductGPT_{unique_id}_"
+    model_filename = f"{basename}*.pt"
     folder_path = Path('.') / model_folder
     if not folder_path.exists():
         return None
 
-    weights_files = list(folder_path.glob(pattern))
+    weights_files = list(folder_path.glob(model_filename))
     if len(weights_files) == 0:
         return None
 
