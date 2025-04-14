@@ -13,16 +13,16 @@ def get_config():
         "seq_len_lto": 4096,
         "seq_len_ai": 15360,
         "batch_size": 8,
-        "num_epochs": 10,
+        "num_epochs": 200,
         "warmup_steps": 5,
         "lr": 10**-4,
         "min_lr": 10**-6,
-        "d_model": 32,
-        "N": 6,
-        "num_heads": 8,
+        "d_model": 16,
+        "N": 2,
+        "num_heads": 2,
         "dropout": 0.1,
         "kernel_type": "exp",
-        "d_ff": 32,
+        "d_ff": 16,
         "eval_freq": 40,
         "source_rate": 10,
         "lto_rate": 4,
@@ -53,9 +53,11 @@ def get_weights_file_path(config, epoch: str) -> str:
     """
     # e.g. "ProductGPT_weights" 
     model_folder = f"{config['model_folder']}"
-    # e.g. "MyProductGPT_epoch5.pt" or "MyProductGPT_best.pt"
-    model_filename = f"{config['model_basename']}{epoch}.pt"
 
+    unique_id = f"dmodel{config['d_model']}_ff{config['d_ff']}_N{config['N']}_heads{config['num_heads']}_gamma{config['gamma']}"
+    basename = f"MyProductGPT_{unique_id}_"
+    model_filename = f"{basename}*.pt"
+    
     full_path = Path('.') / model_folder
     full_path.mkdir(parents=True, exist_ok=True)  # create folder if it doesn't exist
 
@@ -70,10 +72,9 @@ def latest_weights_file_path(config) -> str:
     model_folder = f"{config['model_folder']}"
     
     unique_id = f"dmodel{config['d_model']}_ff{config['d_ff']}_N{config['N']}_heads{config['num_heads']}_gamma{config['gamma']}"
-    # config['model_basename'] = f"MyProductGPT_{unique_id}_"
-    
     basename = f"MyProductGPT_{unique_id}_"
     model_filename = f"{basename}*.pt"
+
     folder_path = Path('.') / model_folder
     if not folder_path.exists():
         return None

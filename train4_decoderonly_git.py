@@ -314,19 +314,8 @@ def train_model(config):
         latest_ckpt_path = latest_weights_file_path(config)
         if latest_ckpt_path is not None and Path(latest_ckpt_path).exists():
             print(f"[INFO] Loading checkpoint from {latest_ckpt_path} ...")
-            # checkpoint = torch.load(latest_ckpt_path, map_location=device)
             checkpoint = torch.load(latest_ckpt_path, map_location=device, weights_only=False)
-
-            # If you saved a dict like:
-            #   {
-            #     'epoch': ...,
-            #     'model_state_dict': ...,
-            #     'optimizer_state_dict': ...,
-            #     'global_step': ...
-            #   }
-            # then restore them:
             model_engine.load_state_dict(checkpoint['model_state_dict'])
-            # optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             
             initial_epoch = checkpoint.get('epoch', 0) + 1
             global_step   = checkpoint.get('global_step', 0)
@@ -336,7 +325,6 @@ def train_model(config):
             print("[INFO] No previous checkpoint found. Starting fresh.")
     else:
         print("[INFO] Starting from a fresh model initialization (no preload).")
-
 
     best_val_loss = None
     best_checkpoint_path = None
@@ -359,10 +347,6 @@ def train_model(config):
             B, T, V = logits.shape
             decision_positions = torch.arange(14, T, step=15, device=logits.device)  # shape: (N,)
             decision_logits = logits[:, decision_positions, :]  # shape: (B, N, V)
-
-            # Print how many "9"s occur at these positions
-            # count_9 = (label == 9).sum().item()
-            # print(f"[Batch {batch}] 9-count at decision positions = {count_9}")
 
             loss = loss_fn(
                 decision_logits,  # predict next token
@@ -413,6 +397,21 @@ def train_model(config):
     test_loss, test_conf_mat, test_ppl, test_hit_rate = evaluate(test_loader, model_engine, device, loss_fn)
     print(f"** Test Loss={test_loss:.4f}  Test PPL={test_ppl:.4f}  Test Hit Rate={test_hit_rate:.4f}")
     print("Test Confusion Matrix:\n", test_conf_mat)
+
+    json_out_path = Path(best_checkpoint_path).with_suffix(".json")
+    metadata = {
+        "best_checkpoint_path": best_checkpoint_path,
+        "best_val_loss": val_loss,
+        "best_val_ppl": val_ppl,
+        "best_val_confusion_matrix": val_conf_mat.tolist() if val_conf_mat is not None else None,
+        "best_val_hit_rate": val_hit_rate,
+        "test_loss": test_loss,
+        "test_ppl": test_ppl,
+        "test_confusion_matrix": test_conf_mat.tolist() if test_conf_mat is not None else None,
+        "test_hit_rate": test_hit_rate
+    }
+    with open(json_out_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
 
 ##############################################################################
 # The evaluate function, fixed

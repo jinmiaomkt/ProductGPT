@@ -5,13 +5,14 @@ import json
 import torch
 
 # Local modules
-from config4 import get_config
-from train4_decoderonly import train_model
-import gc
+from config4git import get_config
+from train4_decoderonly_git import train_model
 
 # Define the hyperparameter ranges
-d_model_values = [32, 64, 128]
-d_ff_values    = [32, 64, 128]
+# d_model_values = [32, 64, 128]
+# d_ff_values    = [32, 64, 128]
+d_model_values = [64]
+d_ff_values    = [64]
 N_values       = [2, 4, 8]
 num_heads_values = [2, 4, 8]
 gamma_values   = [1.0, 2.0, 4.0]
@@ -56,14 +57,7 @@ def hyperparam_sweep():
         with open(metrics_file, 'w') as f:
             json.dump(metrics_out, f, indent=2)
 
-        print(f"[INFO] Completed {unique_id}. Metrics saved to {metrics_file}")
-
-        # 6) Clear GPU memory after each run (important in big sweeps)
-        del final_metrics
-        torch.cuda.empty_cache()
-        gc.collect()
-
-        print("---------------------------------------------------------")
+        print(f"[Done] {unique_id} -> {metrics_file}")
 
 if __name__ == "__main__":
     hyperparam_sweep()
