@@ -8,6 +8,9 @@ import torch
 from config4git import get_config
 from train4_decoderonly_git import train_model
 
+import os
+import boto3
+
 # Define the hyperparameter ranges
 # d_model_values = [32, 64, 128]
 # d_ff_values    = [32, 64, 128]
@@ -18,6 +21,13 @@ num_heads_values = [2, 4, 8]
 # gamma_values   = [1.0, 2.0, 4.0]
 lr_values      = [0.0001, 0.00001, 0.000001]
 weight_values  = [2, 4, 8, 16]
+
+# Initialize S3 client
+s3 = boto3.client("s3")
+
+def upload_to_s3_boto(local_path, bucket_name, s3_key):
+    print(f"Uploading {local_path} to s3://{bucket_name}/{s3_key} ...")
+    s3.upload_file(local_path, bucket_name, s3_key)
 
 def hyperparam_sweep():
     all_combinations = itertools.product(d_model_values, d_ff_values, N_values, num_heads_values, weight_values)
@@ -60,6 +70,22 @@ def hyperparam_sweep():
             json.dump(metrics_out, f, indent=2)
 
         print(f"[Done] {unique_id} -> {metrics_file}")
+
+        # 6) Upload checkpoint + metrics to S3
+        bucket_name = config["s3_bucket"]
+
+        best_ckpt_path = final_metrics["best_checkpoint_path"]
+        if best_ckpt_path and os.path.exists(best_ckpt_path):
+            s3_checkpoint_key = f"{os.path.basename(best_ckpt_path)}"
+            upload_to_s3_boto(best_ckpt_path, bucket_name, s3_checkpoint_key)
+            os.remove(best_ckpt_path)
+
+        if os.path.exists(metrics_file):
+            s3_metrics_key = f"{metrics_file}"
+            upload_to_s3_boto(metrics_file, bucket_name, s3_metrics_key)
+            os.remove(metrics_file)
+
+        print("---------------------------------------------------------")
 
 if __name__ == "__main__":
     hyperparam_sweep()
