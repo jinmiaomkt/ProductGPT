@@ -14,6 +14,7 @@ import numpy as np
 from torch.utils.data import Dataset, DataLoader, random_split
 from dataset4_decoderonly import TransformerDataset, load_json_dataset
 from sklearn.metrics import confusion_matrix, accuracy_score, f1_score, average_precision_score
+from sklearn.preprocessing import label_binarize
 
 from tqdm import tqdm
 from pathlib import Path
@@ -440,8 +441,10 @@ def evaluate(dataloader, model_engine, device, loss_fn):
     total_loss = 0.0
     total_ppl  = 0.0
 
-    all_preds  = []
-    all_labels = []
+    all_preds      = []  # for confusion matrix & F1
+    all_labels     = []  # for confusion matrix & F1
+    all_probs      = []  # for AUPRC
+    valid_labels   = []  # same as all_labels, but used for AUPRC
 
     model_engine.eval()
     
@@ -483,30 +486,41 @@ def evaluate(dataloader, model_engine, device, loss_fn):
             ppl = calculate_perplexity(decision_logits, label, pad_token=pad_id)
             total_ppl += ppl
 
+            # For metrics: get probabilities and predictions
+            # decision_probs shape => (B, N, vocab_size)
+            decision_probs = F.softmax(decision_logits, dim=-1)  # per-class probabilities
+
+            # Flatten over (B*N)
+            B, N, V = decision_probs.shape
+            probs_2d  = decision_probs.view(-1, V).cpu().numpy()  # shape (B*N, V)
+            preds_2d  = probs_2d.argmax(axis=-1)                  # argmax for confusion matrix
+            labels_1d = label.view(-1).cpu().numpy()              # shape (B*N,)
+
             # SHIFT for predictions
-            preds  = torch.argmax(decision_logits, dim=-1)  # (B, T-1)
+            # preds  = torch.argmax(decision_logits, dim=-1)  # (B, T-1)
             # labels_2D = label[:, 1:]                             # (B, T-1)
 
             # Flatten to 1D
-            preds_1D  = preds.cpu().numpy().ravel()
-            labels_1D = label.cpu().numpy().ravel()
-
-            # print("labels_1D size before special-token filtering:", labels_1D.size)
+            # preds_1D  = preds.cpu().numpy().ravel()
+            # labels_1D = label.cpu().numpy().ravel()
 
             # Filter out special tokens from labels
             valid_mask = ~np.isin(labels_1D, list(special_tokens))
+            preds_2d   = preds_2d[valid_mask]
+            labels_1d  = labels_1d[valid_mask]
+            probs_2d   = probs_2d[valid_mask, :]   # keep the same positions
 
-            # print("labels_1D size after special-token filtering:", valid_mask.sum())
-
-            preds_1D  = preds_1D[valid_mask]
-            labels_1D = labels_1D[valid_mask]
-
-            all_preds.append(preds_1D)
-            all_labels.append(labels_1D)
+            # Append
+            all_preds.append(preds_2d)
+            all_labels.append(labels_1d)
+            all_probs.append(probs_2d)
+            valid_labels.append(labels_1d)
 
     # Merge all into single 1D arrays
     all_preds  = np.concatenate(all_preds)   # shape (N_total,)
     all_labels = np.concatenate(all_labels)  # shape (N_total,)
+    all_probs  = np.concatenate(all_probs, axis=0)   # shape (N_total, vocab_size)
+    valid_labels = np.concatenate(valid_labels)
 
     avg_loss = total_loss / len(dataloader)
     avg_ppl  = total_ppl  / len(dataloader)
@@ -516,13 +530,17 @@ def evaluate(dataloader, model_engine, device, loss_fn):
     conf_mat = confusion_matrix(all_labels, all_preds, labels=unique_labels)
     hit_rate = accuracy_score(all_labels, all_preds)
     macro_f1 = f1_score(all_labels, all_preds, average='macro')
-    auprc = average_precision_score(all_labels, all_preds, average='macro')
+    # auprc = average_precision_score(all_labels, all_preds, average='macro')
+
+    classes_for_bin = np.arange(1, 10)
+    y_true_bin = label_binarize(valid_labels, classes=classes_for_bin)
+    probs_for_auprc = all_probs[:, 1:10]  # keep columns 1..9
+    auprc = average_precision_score(y_true_bin, probs_for_auprc, average='macro')
 
     label_mapping = {0: "[PAD]", 1: "1", 2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9"}
     readable_labels = [label_mapping.get(i, str(i)) for i in unique_labels]
     print(f"Label IDs: {unique_labels}")
     print(f"Label meanings: {readable_labels}")
-
     print(f"Unique values in predictions: {np.unique(all_preds, return_counts=True)}")
     print(f"Unique values in labels: {np.unique(all_labels, return_counts=True)}")
 
