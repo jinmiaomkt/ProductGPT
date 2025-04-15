@@ -401,10 +401,10 @@ def train_model(config):
     json_out_path = Path(best_checkpoint_path).with_suffix(".json")
     metadata = {
         "best_checkpoint_path": best_checkpoint_path,
-        "best_val_loss": val_loss,
-        "best_val_ppl": val_ppl,
-        "best_val_confusion_matrix": val_conf_mat.tolist() if val_conf_mat is not None else None,
-        "best_val_hit_rate": val_hit_rate,
+        "val_loss": val_loss,
+        "val_ppl": val_ppl,
+        "val_confusion_matrix": val_conf_mat.tolist() if val_conf_mat is not None else None,
+        "val_hit_rate": val_hit_rate,
         "test_loss": test_loss,
         "test_ppl": test_ppl,
         "test_confusion_matrix": test_conf_mat.tolist() if test_conf_mat is not None else None,
@@ -412,6 +412,18 @@ def train_model(config):
     }
     with open(json_out_path, 'w') as f:
         json.dump(metadata, f, indent=2)
+
+    return {
+        "best_checkpoint_path": best_checkpoint_path,
+        "val_loss": val_loss,
+        "val_ppl": val_ppl,
+        "val_confusion_matrix": val_conf_mat.tolist() if val_conf_mat is not None else None,
+        "val_hit_rate": val_hit_rate,
+        "test_loss": test_loss,
+        "test_ppl": test_ppl,
+        "test_confusion_matrix": test_conf_mat.tolist() if test_conf_mat is not None else None,
+        "test_hit_rate": test_hit_rate
+    }
 
 ##############################################################################
 # The evaluate function, fixed
