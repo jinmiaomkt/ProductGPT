@@ -16,10 +16,9 @@ import boto3
 # d_ff_values    = [32, 64, 128]
 d_model_values = [64]
 d_ff_values    = [64]
-N_values       = [2, 4, 8]
-num_heads_values = [2, 4, 8]
-# gamma_values   = [1.0, 2.0, 4.0]
-lr_values      = [0.0001, 0.00001, 0.000001]
+N_values       = [6]
+num_heads_values = [8]
+lr_values      = [0.001, 0.0001, 0.00001, 0.000001]
 weight_values  = [2, 4, 8, 16]
 
 # Initialize S3 client
@@ -30,21 +29,22 @@ def upload_to_s3_boto(local_path, bucket_name, s3_key):
     s3.upload_file(local_path, bucket_name, s3_key)
 
 def hyperparam_sweep():
-    all_combinations = itertools.product(d_model_values, d_ff_values, N_values, num_heads_values, weight_values)
+    all_combinations = itertools.product(d_model_values, d_ff_values, N_values, num_heads_values, lr_values,weight_values)
 
-    for (d_model, d_ff, N, num_heads, weight) in all_combinations:
+    for (d_model, d_ff, N, num_heads, lr, weight) in all_combinations:
         # 1) Get default config
         config = get_config()
 
         # 2) Override hyperparams
-        config['d_model'] = d_model
-        config['d_ff']    = d_ff
-        config['N']       = N
+        config['d_model']   = d_model
+        config['d_ff']      = d_ff
+        config['N']         = N
         config['num_heads'] = num_heads
-        config['weight'] = weight
+        config['lr']        = lr
+        config['weight']    = weight
 
         # 3) Unique name
-        unique_id = f"dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_weight{weight}"
+        unique_id = f"dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_lr{lr}_weight{weight}"
         config['model_basename'] = f"MyProductGPT_{unique_id}"
 
         # 4) Train model
@@ -56,6 +56,8 @@ def hyperparam_sweep():
             "d_ff": d_ff,
             "N": N,
             "num_heads": num_heads,
+            "lr": lr,
+            "weight": weight,
             # "gamma": gamma,
             "val_loss": final_metrics['val_loss'],
             "val_ppl": final_metrics['val_ppl'],
