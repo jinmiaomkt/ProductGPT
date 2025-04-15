@@ -15,14 +15,14 @@ d_model_values = [64]
 d_ff_values    = [64]
 N_values       = [2, 4, 8]
 num_heads_values = [2, 4, 8]
-gamma_values   = [1.0, 2.0, 4.0]
+# gamma_values   = [1.0, 2.0, 4.0]
 lr_values      = [0.0001, 0.00001, 0.000001]
 weight_values  = [2, 4, 8, 16]
 
 def hyperparam_sweep():
-    all_combinations = itertools.product(d_model_values, d_ff_values, N_values, num_heads_values, gamma_values)
+    all_combinations = itertools.product(d_model_values, d_ff_values, N_values, num_heads_values, weight_values)
 
-    for (d_model, d_ff, N, num_heads, gamma) in all_combinations:
+    for (d_model, d_ff, N, num_heads, weight) in all_combinations:
         # 1) Get default config
         config = get_config()
 
@@ -31,10 +31,10 @@ def hyperparam_sweep():
         config['d_ff']    = d_ff
         config['N']       = N
         config['num_heads'] = num_heads
-        config['gamma'] = gamma
+        config['weight'] = weight
 
         # 3) Unique name
-        unique_id = f"dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_gamma{gamma}"
+        unique_id = f"dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_gamma{weight}"
         config['model_basename'] = f"MyProductGPT_{unique_id}_"
 
         # 4) Train model
@@ -46,11 +46,11 @@ def hyperparam_sweep():
             "d_ff": d_ff,
             "N": N,
             "num_heads": num_heads,
-            "gamma": gamma,
+            # "gamma": gamma,
             "val_loss": final_metrics['val_loss'],
             "val_ppl": final_metrics['val_ppl'],
-            "confusion_matrix": final_metrics['val_confusion_matrix'],
-            "hit_rate": final_metrics['val_hit_rate'],
+            "val_confusion_matrix": final_metrics['val_confusion_matrix'],
+            "val_hit_rate": final_metrics['val_hit_rate'],
             "best_checkpoint_path": final_metrics['best_checkpoint_path']
         }
         metrics_file = f"results_{unique_id}.json"

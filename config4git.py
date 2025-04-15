@@ -29,7 +29,7 @@ def get_config():
         "ai_rate": 15,
         "weight_decay": 0.01,
         "patience": 6,
-        "gamma": 5,
+        "gamma": 0,
         "eps": 10**-6,
         "weight": 10,
 
