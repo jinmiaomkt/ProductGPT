@@ -505,7 +505,7 @@ def evaluate(dataloader, model_engine, device, loss_fn):
             # labels_1D = label.cpu().numpy().ravel()
 
             # Filter out special tokens from labels
-            valid_mask = ~np.isin(labels_1D, list(special_tokens))
+            valid_mask = ~np.isin(labels_1d, list(special_tokens))
             preds_2d   = preds_2d[valid_mask]
             labels_1d  = labels_1d[valid_mask]
             probs_2d   = probs_2d[valid_mask, :]   # keep the same positions
