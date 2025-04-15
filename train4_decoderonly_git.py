@@ -13,7 +13,7 @@ import numpy as np
 
 from torch.utils.data import Dataset, DataLoader, random_split
 from dataset4_decoderonly import TransformerDataset, load_json_dataset
-from sklearn.metrics import confusion_matrix, accuracy_score
+from sklearn.metrics import confusion_matrix, accuracy_score, f1_score, average_precision_score
 
 from tqdm import tqdm
 from pathlib import Path
@@ -364,8 +364,8 @@ def train_model(config):
         print(f"\nEpoch {epoch}: LR={current_lr:.6f}  TrainLoss={train_loss:.4f}")
 
         # Evaluate
-        val_loss, val_conf_mat, val_ppl, val_hit_rate = evaluate(val_loader, model_engine, device, loss_fn)
-        print(f"Epoch {epoch} Val Loss={val_loss:.4f}  Val PPL={val_ppl:.4f}  Val Hit Rate={val_hit_rate:.4f}")
+        val_loss, val_conf_mat, val_ppl, val_hit_rate, val_f1_score, val_auprc = evaluate(val_loader, model_engine, device, loss_fn)
+        print(f"Epoch {epoch} Val Loss={val_loss:.4f}  \nVal PPL={val_ppl:.4f} \nVal Hit Rate={val_hit_rate:.4f} \nVal F1 Score={val_f1_score:.4f} \nVal Area Under Precision-Recall Curve={val_auprc:.4f}")
         print("Val Confusion Matrix:\n", val_conf_mat)
 
         # Early stopping or checkpoint
@@ -394,8 +394,8 @@ def train_model(config):
         state = torch.load(best_checkpoint_path, weights_only=False)
         model_engine.load_state_dict(state['model_state_dict'])
 
-    test_loss, test_conf_mat, test_ppl, test_hit_rate = evaluate(test_loader, model_engine, device, loss_fn)
-    print(f"** Test Loss={test_loss:.4f}  Test PPL={test_ppl:.4f}  Test Hit Rate={test_hit_rate:.4f}")
+    test_loss, test_conf_mat, test_ppl, test_hit_rate, test_f1_score, test_auprc = evaluate(test_loader, model_engine, device, loss_fn)
+    print(f"** Test Loss={test_loss:.4f} \nTest PPL={test_ppl:.4f} \nTest Hit Rate={test_hit_rate:.4f} \nTest F1 Score={test_f1_score:.4f} \nTest Area Under Precision-Recall Curve={test_auprc:.4f}")
     print("Test Confusion Matrix:\n", test_conf_mat)
 
     json_out_path = Path(best_checkpoint_path).with_suffix(".json")
@@ -405,10 +405,14 @@ def train_model(config):
         "val_ppl": val_ppl,
         "val_confusion_matrix": val_conf_mat.tolist() if val_conf_mat is not None else None,
         "val_hit_rate": val_hit_rate,
+        "val_f1_score": val_f1_score,
+        "val_auprc": val_auprc,
         "test_loss": test_loss,
         "test_ppl": test_ppl,
         "test_confusion_matrix": test_conf_mat.tolist() if test_conf_mat is not None else None,
-        "test_hit_rate": test_hit_rate
+        "test_hit_rate": test_hit_rate,
+        "test_f1_score": test_f1_score,
+        "test_auprc": test_auprc
     }
     with open(json_out_path, 'w') as f:
         json.dump(metadata, f, indent=2)
@@ -419,10 +423,14 @@ def train_model(config):
         "val_ppl": val_ppl,
         "val_confusion_matrix": val_conf_mat.tolist() if val_conf_mat is not None else None,
         "val_hit_rate": val_hit_rate,
+        "val_f1_score": val_f1_score,
+        "val_auprc": val_auprc,
         "test_loss": test_loss,
         "test_ppl": test_ppl,
         "test_confusion_matrix": test_conf_mat.tolist() if test_conf_mat is not None else None,
-        "test_hit_rate": test_hit_rate
+        "test_hit_rate": test_hit_rate,
+        "test_f1_score": test_f1_score,
+        "test_auprc": test_auprc
     }
 
 ##############################################################################
@@ -507,6 +515,8 @@ def evaluate(dataloader, model_engine, device, loss_fn):
     unique_labels = np.unique(all_labels)
     conf_mat = confusion_matrix(all_labels, all_preds, labels=unique_labels)
     hit_rate = accuracy_score(all_labels, all_preds)
+    macro_f1 = f1_score(all_labels, all_preds, average='macro')
+    auprc = average_precision_score(all_labels, all_preds, average='macro')
 
     label_mapping = {0: "[PAD]", 1: "1", 2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9"}
     readable_labels = [label_mapping.get(i, str(i)) for i in unique_labels]
@@ -516,7 +526,7 @@ def evaluate(dataloader, model_engine, device, loss_fn):
     print(f"Unique values in predictions: {np.unique(all_preds, return_counts=True)}")
     print(f"Unique values in labels: {np.unique(all_labels, return_counts=True)}")
 
-    return avg_loss, conf_mat, avg_ppl, hit_rate
+    return avg_loss, conf_mat, avg_ppl, hit_rate, macro_f1, auprc
 
 ##############################################################################
 # MAIN

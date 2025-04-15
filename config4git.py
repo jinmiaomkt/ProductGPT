@@ -54,9 +54,9 @@ def get_weights_file_path(config, epoch: str) -> str:
     # e.g. "ProductGPT_weights" 
     model_folder = f"{config['model_folder']}"
 
-    unique_id = f"dmodel{config['d_model']}_ff{config['d_ff']}_N{config['N']}_heads{config['num_heads']}_gamma{config['gamma']}"
-    basename = f"MyProductGPT_{unique_id}_"
-    model_filename = f"{basename}*.pt"
+    unique_id = f"dmodel{config['d_model']}_ff{config['d_ff']}_N{config['N']}_heads{config['num_heads']}_weight{config['weight']}"
+    basename = f"MyProductGPT_{unique_id}"
+    model_filename = f"{basename}.pt"
     
     full_path = Path('.') / model_folder
     full_path.mkdir(parents=True, exist_ok=True)  # create folder if it doesn't exist
@@ -71,9 +71,9 @@ def latest_weights_file_path(config) -> str:
     """
     model_folder = f"{config['model_folder']}"
     
-    unique_id = f"dmodel{config['d_model']}_ff{config['d_ff']}_N{config['N']}_heads{config['num_heads']}_gamma{config['gamma']}"
-    basename = f"MyProductGPT_{unique_id}_"
-    model_filename = f"{basename}*.pt"
+    unique_id = f"dmodel{config['d_model']}_ff{config['d_ff']}_N{config['N']}_heads{config['num_heads']}_weight{config['weight']}"
+    basename = f"MyProductGPT_{unique_id}"
+    model_filename = f"{basename}.pt"
 
     folder_path = Path('.') / model_folder
     if not folder_path.exists():

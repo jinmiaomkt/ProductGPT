@@ -34,8 +34,8 @@ def hyperparam_sweep():
         config['weight'] = weight
 
         # 3) Unique name
-        unique_id = f"dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_gamma{weight}"
-        config['model_basename'] = f"MyProductGPT_{unique_id}_"
+        unique_id = f"dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_weight{weight}"
+        config['model_basename'] = f"MyProductGPT_{unique_id}"
 
         # 4) Train model
         final_metrics = train_model(config)
@@ -51,6 +51,8 @@ def hyperparam_sweep():
             "val_ppl": final_metrics['val_ppl'],
             "val_confusion_matrix": final_metrics['val_confusion_matrix'],
             "val_hit_rate": final_metrics['val_hit_rate'],
+            "val_f1_score": final_metrics['val_f1_score'],
+            "val_auprc": final_metrics['val_auprc'],
             "best_checkpoint_path": final_metrics['best_checkpoint_path']
         }
         metrics_file = f"results_{unique_id}.json"
