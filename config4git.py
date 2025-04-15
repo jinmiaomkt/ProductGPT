@@ -40,7 +40,10 @@ def get_config():
         "preload": "latest",
         # "preload": None,
         "tokenizer_file": "tokenizer_{0}.json",
-        "experiment_name": "runs/tmodel"
+        "experiment_name": "runs/tmodel", 
+
+        "s3_bucket": "productgptbucket",  # <- replace with your real bucket name
+        "s3_prefix": "my_runs",            # optional folder name in bucket
     }
 
 
