@@ -12,7 +12,6 @@ import torch.nn.functional as F
 import numpy as np
 
 from torch.utils.data import Dataset, DataLoader, random_split
-from dataset4_decoderonly import TransformerDataset, load_json_dataset
 from sklearn.metrics import confusion_matrix, accuracy_score, f1_score, average_precision_score
 from sklearn.preprocessing import label_binarize
 
@@ -26,7 +25,7 @@ import logging
 logging.getLogger("deepspeed").setLevel(logging.ERROR)
 
 from model4_decoderonly import build_transformer
-from dataset4_decision_only import TransformerDataset
+from dataset4_decision_only import TransformerDataset, load_json_dataset
 from tokenizers import Tokenizer, models, pre_tokenizers, trainers
 from tokenizers.models import WordLevel
 from config4_decision_only_git import get_config, get_weights_file_path, latest_weights_file_path
