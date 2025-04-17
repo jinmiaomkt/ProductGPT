@@ -365,7 +365,7 @@ def train_model(config):
         print(f"\nEpoch {epoch}: LR={current_lr:.6f}  TrainLoss={train_loss:.4f}")
 
         # Evaluate
-        val_loss, val_conf_mat, val_ppl, val_hit_rate, val_f1_score, val_auprc = evaluate(val_loader, model_engine, device, loss_fn)
+        val_loss, val_conf_mat, val_ppl, val_hit_rate, val_f1_score, val_auprc = evaluate(val_loader, model_engine, device, loss_fn, config['ai_rate'])
         print(f"Epoch {epoch} Val Loss={val_loss:.4f}  \nVal PPL={val_ppl:.4f} \nVal Hit Rate={val_hit_rate:.4f} \nVal F1 Score={val_f1_score:.4f} \nVal Area Under Precision-Recall Curve={val_auprc:.4f}")
         print("Val Confusion Matrix:\n", val_conf_mat)
 
@@ -395,7 +395,7 @@ def train_model(config):
         state = torch.load(best_checkpoint_path, weights_only=False)
         model_engine.load_state_dict(state['model_state_dict'])
 
-    test_loss, test_conf_mat, test_ppl, test_hit_rate, test_f1_score, test_auprc = evaluate(test_loader, model_engine, device, loss_fn)
+    test_loss, test_conf_mat, test_ppl, test_hit_rate, test_f1_score, test_auprc = evaluate(test_loader, model_engine, device, loss_fn, config['ai_rate'])
     print(f"** Test Loss={test_loss:.4f} \nTest PPL={test_ppl:.4f} \nTest Hit Rate={test_hit_rate:.4f} \nTest F1 Score={test_f1_score:.4f} \nTest Area Under Precision-Recall Curve={test_auprc:.4f}")
     print("Test Confusion Matrix:\n", test_conf_mat)
 
@@ -437,7 +437,7 @@ def train_model(config):
 ##############################################################################
 # The evaluate function, fixed
 ##############################################################################
-def evaluate(dataloader, model_engine, device, loss_fn):
+def evaluate(dataloader, model_engine, device, loss_fn, stepsize):
     total_loss = 0.0
     total_ppl  = 0.0
 
@@ -475,7 +475,7 @@ def evaluate(dataloader, model_engine, device, loss_fn):
             # print("Class 9 count at decision positions:", counts.item())
 
             # Gather logits at decision positions (e.g., first token of every 15-token block)
-            decision_positions = torch.arange(config['ai_rate'] - 1, logits.size(1), step=config['ai_rate'], device=logits.device)
+            decision_positions = torch.arange(stepsize - 1, logits.size(1), step=stepsize, device=logits.device)
             decision_logits = logits[:, decision_positions, :]  # shape: (B, N, vocab_size)
 
             # SHIFT for loss
