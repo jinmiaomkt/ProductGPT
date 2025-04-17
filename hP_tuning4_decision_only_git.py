@@ -12,14 +12,12 @@ import os
 import boto3
 
 # Define the hyperparameter ranges
-# d_model_values = [32, 64, 128]
-# d_ff_values    = [32, 64, 128]
-d_model_values = [64]
-d_ff_values    = [64]
-N_values       = [6]
-num_heads_values = [8]
-lr_values      = [0.001, 0.0001, 0.00001, 0.000001]
-weight_values  = [2, 4, 8, 16]
+d_model_values = [32, 64, 128]
+d_ff_values    = [32, 64, 128]
+N_values       = [2, 4, 6, 8]
+num_heads_values = [2, 4, 8, 16]
+lr_values      = [0.00001]
+weight_values  = [8]
 
 # Initialize S3 client
 s3 = boto3.client("s3")
@@ -29,7 +27,7 @@ def upload_to_s3_boto(local_path, bucket_name, s3_key):
     s3.upload_file(local_path, bucket_name, s3_key)
 
 def hyperparam_sweep():
-    all_combinations = itertools.product(d_model_values, d_ff_values, N_values, num_heads_values, lr_values,weight_values)
+    all_combinations = itertools.product(d_model_values, d_ff_values, N_values, num_heads_values, lr_values, weight_values)
 
     for (d_model, d_ff, N, num_heads, lr, weight) in all_combinations:
         # 1) Get default config
@@ -45,7 +43,7 @@ def hyperparam_sweep():
 
         # 3) Unique name
         unique_id = f"dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_lr{lr}_weight{weight}"
-        config['model_basename'] = f"MyProductGPT_{unique_id}"
+        config['model_basename'] = f"DecisionOnly_{unique_id}"
 
         # 4) Train model
         final_metrics = train_model(config)
@@ -67,7 +65,7 @@ def hyperparam_sweep():
             "val_auprc": final_metrics['val_auprc'],
             "best_checkpoint_path": final_metrics['best_checkpoint_path']
         }
-        metrics_file = f"results_{unique_id}.json"
+        metrics_file = f"DecisionOnly_{unique_id}.json"
         with open(metrics_file, 'w') as f:
             json.dump(metrics_out, f, indent=2)
 

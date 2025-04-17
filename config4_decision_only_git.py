@@ -12,10 +12,10 @@ def get_config():
         "seq_len_tgt": 1024,
         "seq_len_lto": 4096,
         "seq_len_ai": 1024,
-        "batch_size": 8,
+        "batch_size": 64,
         "num_epochs": 200,
         "warmup_steps": 5,
-        "lr": 10**-4,
+        "lr": 10**-5,
         "min_lr": 10**-6,
         "d_model": 16,
         "N": 2,
@@ -31,7 +31,7 @@ def get_config():
         "patience": 6,
         "gamma": 0,
         "eps": 10**-6,
-        "weight": 10,
+        "weight": 8,
 
         # Logging and paths
         # "datasource": "ProductGPT",
