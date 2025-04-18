@@ -531,7 +531,7 @@ class Transformer(nn.Module):
         input_seq: (B, seq_len) integer tokens
         returns:   (B, seq_len, vocab_size)
         """
-        x = self.token_emb(input_seq)
+        x = self.token_embed(input_seq)
         x = self.pos_enc(x)
         x = self.decoder(x)
         logits = self.projection(x)
