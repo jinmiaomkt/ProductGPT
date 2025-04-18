@@ -21,7 +21,7 @@ from torch.utils.data import Dataset, DataLoader
 from tokenizers import Tokenizer, models, pre_tokenizers, trainers
 from dataset4_decoderonly import TransformerDataset, load_json_dataset
 
-from model4_per_feature_git import build_transformer
+from model4_decoderonly_feature_git import build_transformer
 from config4git import get_config, get_weights_file_path, latest_weights_file_path
 
 from sklearn.metrics import confusion_matrix, accuracy_score, f1_score, average_precision_score
