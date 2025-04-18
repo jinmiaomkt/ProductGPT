@@ -9,10 +9,17 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 # ----------------------------------------------------------------------------------
 # 1.  Search space
 # ----------------------------------------------------------------------------------
-d_model_values     = [32, 64, 128]
-d_ff_values        = [32, 64, 128]
+d_model_values     = [64, 128, 256]
+d_ff_values        = [64, 128, 256]
 N_values           = [2, 4, 6, 8]
 num_heads_values   = [2, 4, 8, 16]
+
+d_model_values     = [256]
+d_ff_values        = [256]
+N_values           = [8]
+num_heads_values   = [16]
+
+
 lr_values          = [0.00001, 0.000001, 0.0000001]
 weight_values      = [4]
 
