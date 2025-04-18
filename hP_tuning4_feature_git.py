@@ -3,6 +3,9 @@
 from config4git import get_config
 from train4_decoderonly_feature_git import train_model
 
+import multiprocessing as mp
+mp.set_start_method("spawn", force=True)    # ← must run only once, at import time
+
 import os, random, itertools, json, uuid, boto3, torch
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
