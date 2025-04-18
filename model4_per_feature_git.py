@@ -6,7 +6,7 @@ import random
 import pandas as pd
 import numpy as np
 
-df = pd.read_excel("/content/drive/MyDrive/ProductGPT/SelectedFigureWeaponEmbeddingIndex.xlsx", sheet_name=0)
+df = pd.read_excel("/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx", sheet_name=0)
 
 ## NewProductIndex3 is not a feature
 feature_cols = [
@@ -178,7 +178,7 @@ class SpecialPlusFeatureLookup(nn.Module):
 
         out[is_product] = product_embeds
         return out
-    
+
 class LayerNormalization(nn.Module):
 
     def __init__(self, features: int, eps:float=10**-6) -> None:
@@ -258,26 +258,26 @@ class ResidualConnection(nn.Module):
         def forward(self, x, sublayer):
             return x + self.dropout(sublayer(self.norm(x)))
 
-# --- New: StochasticLayerWrapper for layer dropout ---
-class StochasticLayerWrapper(nn.Module):
-    def __init__(self, layer: nn.Module, dropout_rate: float):
-        """
-        Wrap a block (encoder or decoder block) and randomly drop it during training.
-        When the layer is not dropped, its residual contribution is scaled by 1/(1 - dropout_rate).
-        """
-        super().__init__()
-        self.layer = layer
-        self.dropout_rate = dropout_rate
+# # --- New: StochasticLayerWrapper for layer dropout ---
+# class StochasticLayerWrapper(nn.Module):
+#     def __init__(self, layer: nn.Module, dropout_rate: float):
+#         """
+#         Wrap a block (encoder or decoder block) and randomly drop it during training.
+#         When the layer is not dropped, its residual contribution is scaled by 1/(1 - dropout_rate).
+#         """
+#         super().__init__()
+#         self.layer = layer
+#         self.dropout_rate = dropout_rate
 
-    def forward(self, x, *args, **kwargs):
-        # During evaluation, always run the layer.
-        if not self.training or random.random() >= self.dropout_rate:
-            out = self.layer(x, *args, **kwargs)
-            # Assume the layer returns x + F(x); scale F(x) accordingly:
-            return x + (out - x) / (1 - self.dropout_rate)
-        else:
-            # Skip the layer entirely.
-            return x
+#     def forward(self, x, *args, **kwargs):
+#         # During evaluation, always run the layer.
+#         if not self.training or random.random() >= self.dropout_rate:
+#             out = self.layer(x, *args, **kwargs)
+#             # Assume the layer returns x + F(x); scale F(x) accordingly:
+#             return x + (out - x) / (1 - self.dropout_rate)
+#         else:
+#             # Skip the layer entirely.
+#             return x
         
 class CausalPerformer(nn.Module):
     def __init__(self, d_model: int, n_heads: int, dropout: float = 0.1, kernel_type: str = "exp",
@@ -475,7 +475,7 @@ class ProjectionLayer(nn.Module):
     
 class Transformer(nn.Module):
 
-    def __init__(self, encoder: Encoder, decoder: Decoder, src_embed: SpecialPlusFeatureLookup, tgt_embed: InputEmbeddings, lto_embed: SpecialPlusFeatureLookup, src_pos: PositionalEncoding, tgt_pos: PositionalEncoding, lto_pos: PositionalEncoding, projection_layer: ProjectionLayer) -> None:
+    def __init__(self, encoder: Encoder, decoder: Decoder, src_embed: SpecialPlusFeatureLookup, tgt_embed: SpecialPlusFeatureLookup, lto_embed: SpecialPlusFeatureLookup, src_pos: PositionalEncoding, tgt_pos: PositionalEncoding, lto_pos: PositionalEncoding, projection_layer: ProjectionLayer) -> None:
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
@@ -527,12 +527,14 @@ def build_transformer(src_vocab_size: int,
         special_token_ids = special_token_ids,
         hidden_dim = d_ff # using d_ff as MLP hidden size
     )
+    
     # tgt_embed = SpecialPlusFeatureLookup(
     #     d_model = d_model,
     #     feature_tensor = feature_tensor,
     #     special_token_ids = special_token_ids,
     #     hidden_dim = d_ff
     # )
+    
     lto_embed = SpecialPlusFeatureLookup(
         d_model = d_model,
         feature_tensor = feature_tensor,

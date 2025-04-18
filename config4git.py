@@ -3,7 +3,7 @@ from pathlib import Path
 def get_config():
     return {
         # Data
-        "filepath": "/home/ec2-user/data/clean_list_int_wide4_simple6_IndexBasedTrain.json",
+        "filepath": "/home/ec2-user/data/clean_list_int_wide4_simple6_FeatureBasedTrain.json",
         "vocab_size_src": 68,
         "vocab_size_tgt": 18,
         "vocab_size_lto": 68,
@@ -31,7 +31,7 @@ def get_config():
         "patience": 6,
         "gamma": 0,
         "eps": 10**-6,
-        "weight": 10,
+        "weight": 4,
 
         # Logging and paths
         # "datasource": "ProductGPT",
@@ -56,9 +56,9 @@ def get_weights_file_path(config, epoch: str) -> str:
     """
     # e.g. "ProductGPT_weights" 
     model_folder = f"{config['model_folder']}"
-
-    unique_id = f"dmodel{config['d_model']}_ff{config['d_ff']}_N{config['N']}_heads{config['num_heads']}_weight{config['weight']}"
-    basename = f"MyProductGPT_{unique_id}"
+    # dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_lr{lr}_weight{weight}
+    unique_id = f"dmodel{config['d_model']}_ff{config['d_ff']}_N{config['N']}_heads{config['num_heads']}_lr{config['lr']}_weight{config['weight']}"
+    basename = f"FullProductGPT_{unique_id}"
     model_filename = f"{basename}.pt"
     
     full_path = Path('.') / model_folder
@@ -74,8 +74,8 @@ def latest_weights_file_path(config) -> str:
     """
     model_folder = f"{config['model_folder']}"
     
-    unique_id = f"dmodel{config['d_model']}_ff{config['d_ff']}_N{config['N']}_heads{config['num_heads']}_weight{config['weight']}"
-    basename = f"MyProductGPT_{unique_id}"
+    unique_id = f"dmodel{config['d_model']}_ff{config['d_ff']}_N{config['N']}_heads{config['num_heads']}_lr{config['lr']}_weight{config['weight']}"
+    basename = f"FullProductGPT_{unique_id}"
     model_filename = f"{basename}.pt"
 
     folder_path = Path('.') / model_folder
