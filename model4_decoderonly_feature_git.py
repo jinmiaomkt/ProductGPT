@@ -60,7 +60,7 @@ feature_array = np.zeros((max_token_id + 1, feature_dim), dtype=np.float32)
 
 for idx in range(len(df)):
     # The product ID for this row (should be in [1..65])
-    token_id = int(df["NewProductIndex6"].iloc[idx])  
+    token_id = int(df["NewProductIndex"].iloc[idx])  
     
     # Gather the numeric features from the row. 
     # If you only want the columns in `feature_cols` (excluding "NewProductIndex3"), do:
