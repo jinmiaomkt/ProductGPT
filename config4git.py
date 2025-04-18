@@ -58,7 +58,7 @@ def get_weights_file_path(config, epoch: str) -> str:
     model_folder = f"{config['model_folder']}"
     # dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_lr{lr}_weight{weight}
     unique_id = f"dmodel{config['d_model']}_ff{config['d_ff']}_N{config['N']}_heads{config['num_heads']}_lr{config['lr']}_weight{config['weight']}"
-    basename = f"FullProductGPT_{unique_id}"
+    basename = f"FeatureBased_FullProductGPT_{unique_id}"
     model_filename = f"{basename}.pt"
     
     full_path = Path('.') / model_folder
@@ -75,7 +75,7 @@ def latest_weights_file_path(config) -> str:
     model_folder = f"{config['model_folder']}"
     
     unique_id = f"dmodel{config['d_model']}_ff{config['d_ff']}_N{config['N']}_heads{config['num_heads']}_lr{config['lr']}_weight{config['weight']}"
-    basename = f"FullProductGPT_{unique_id}"
+    basename = f"FeatureBased_FullProductGPT_{unique_id}"
     model_filename = f"{basename}.pt"
 
     folder_path = Path('.') / model_folder
