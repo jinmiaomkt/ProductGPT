@@ -7,71 +7,151 @@ warnings.filterwarnings("ignore")
 import math
 import json
 import torch
+import re
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.quantization
 import numpy as np
+import pandas as pd
 
-from torch.utils.data import Dataset, DataLoader, random_split
+from tokenizers import Tokenizer, pre_tokenizers, trainers, models
+from tokenizers.pre_tokenizers import Split, Sequence
+
+from torch.utils.data import Dataset, DataLoader
+from tokenizers import Tokenizer, models, pre_tokenizers, trainers
 from dataset4_decoderonly import TransformerDataset, load_json_dataset
+
+from model4_per_feature_git import build_transformer
+from config4git import get_config, get_weights_file_path, latest_weights_file_path
+
 from sklearn.metrics import confusion_matrix, accuracy_score, f1_score, average_precision_score
 from sklearn.preprocessing import label_binarize
+
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader, random_split
+from torch.optim.lr_scheduler import LambdaLR
 
 from tqdm import tqdm
 from pathlib import Path
 
-# Deepspeed & LAMB
-import deepspeed
+# Huggingface datasets and tokenizers
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from tokenizers.trainers import WordLevelTrainer
+from tokenizers.pre_tokenizers import Whitespace
+
+# Import LAMB and AMP components
 from pytorch_lamb import Lamb
+import deepspeed
+# from deepspeed.runtime.lr_schedules import WarmupLR
+from torch.cuda.amp import GradScaler, autocast
+
+# For additional metrics
+from sklearn.metrics import confusion_matrix, accuracy_score
+import numpy as np
+
+# Set DeepSpeed logger to ERROR (so it only shows errors)
 import logging
 logging.getLogger("deepspeed").setLevel(logging.ERROR)
 
-from model4_decoderonly import build_transformer
-from dataset4_decoderonly import TransformerDataset
-from tokenizers import Tokenizer, models, pre_tokenizers, trainers
-from tokenizers.models import WordLevel
-from config4git import get_config, get_weights_file_path, latest_weights_file_path
+df = pd.read_excel("/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx", sheet_name=0)
+
+## NewProductIndex3 is not a feature
+feature_cols = [
+    "Rarity", 
+    "MaxLife", 
+    "MaxOffense", 
+    "MaxDefense",
+    "WeaponTypeOneHandSword", 
+    "WeaponTypeTwoHandSword", 
+    "WeaponTypeArrow", 
+    "WeaponTypeMagic", 
+    "WeaponTypePolearm",
+    "EthnicityIce", 
+    "EthnicityRock", 
+    "EthnicityWater", 
+    "EthnicityFire", 
+    "EthnicityGrass", 
+    "EthnicityThunder", 
+    "EthnicityWind", 
+    "EthnicityFemale", 
+    "EthnicityMale",
+    "CountryFengDan", 
+    "CountryRuiYue", 
+    "CountryDaoQi", 
+    "CountryZhiDong", 
+    "CountryMengDe", 
+    "CountryXuMi",
+    "type_figure",  # if it's numeric or one-hot encoded; else skip if it's a string
+    "MinimumAttack", 
+    "MaximumAttack",
+    "MinSpecialEffect", 
+    "MaxSpecialEffect",
+    "SpecialEffectEfficiency", 
+    "SpecialEffectExpertise",
+    "SpecialEffectAttack", 
+    "SpecialEffectSuper",
+    "SpecialEffectRatio", 
+    "SpecialEffectPhysical", 
+    "SpecialEffectLife", 
+    # "NewProductIndex3",  # only if you actually want it as a feature
+    "LTO" 
+]
+
+## Determine max_token_id and the dimension
+max_token_id =  120
+# This is the count of numeric columns (your "feature_dim"). 
+# For example, if you have 38 numeric columns (NOT counting the ID).
+feature_dim = 37
+
+feature_array = np.zeros((max_token_id + 1, feature_dim), dtype=np.float32)
+
+for idx in range(len(df)):
+    # The product ID for this row (should be in [1..65])
+    token_id = int(df["NewProductIndex6"].iloc[idx])  
+    
+    # Gather the numeric features from the row. 
+    # If you only want the columns in `feature_cols` (excluding "NewProductIndex3"), do:
+    feats = df.loc[idx, feature_cols].values  # shape (37,) => [Rarity, MaxLife, MaxOffense, ...]
+
+    feature_array[token_id, :] = feats
+
+feature_tensor = torch.from_numpy(feature_array)   
 
 ##############################################################################
-# Tokenizer-building functions
+# Compute Perplexity
 ##############################################################################
-def build_tokenizer_src():
+def calculate_perplexity(logits, targets, pad_token=9):
     """
-    Build a 'target' tokenizer for decisions with a fixed vocab.
-    e.g. 0..8, plus [SOS],[EOS],[UNK],[PAD], etc.
+    Computes Perplexity (PPL) for a given batch of logits and target tokens.
+    
+    :param logits: Tensor of shape (batch_size, seq_len, vocab_size) containing model output logits.
+    :param targets: Tensor of shape (batch_size, seq_len) containing ground-truth token indices.
+    :param pad_token: Token ID for padding, ignored in loss calculation.
+    :return: Perplexity score.
     """
-    tokenizer = Tokenizer(models.WordLevel(unk_token="[UNK]"))
-    tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
-    fixed_vocab = {
-        "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9, 
-        "[PAD]": 0,  
-        "[SOS]": 10,
-        # "[EOS]": 11,
-        "[UNK]": 12
-    }
-    for i in range(13, 61):
-        fixed_vocab[str(i)] = i
-    tokenizer.model = models.WordLevel(vocab=fixed_vocab, unk_token="[UNK]")
-    return tokenizer
+    log_probs = F.log_softmax(logits, dim=-1)  # Convert logits to log probabilities
+    batch_size, seq_len, vocab_size = logits.shape
+    log_probs = log_probs.view(-1, vocab_size)  # Flatten batch and seq_len
+    targets = targets.view(-1)  # Flatten targets
+    
+    # Ignore padding tokens if specified
+    if pad_token is not None:
+        mask = targets != pad_token
+        log_probs = log_probs[mask]
+        targets = targets[mask]
 
-def build_tokenizer_tgt():
-    """
-    Build a 'target' tokenizer for decisions with a fixed vocab.
-    e.g. 0..8, plus [SOS],[EOS],[UNK],[PAD], etc.
-    """
-    tokenizer = Tokenizer(models.WordLevel(unk_token="[UNK]"))
-    tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
-    fixed_vocab = {
-        "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9, 
-        "[PAD]": 0,  
-        "[SOS]": 10,
-        # "[EOS]": 11,
-        "[UNK]": 12
-    }
-    tokenizer.model = models.WordLevel(vocab=fixed_vocab, unk_token="[UNK]")
-    return tokenizer
+    # Compute Negative Log-Likelihood Loss
+    nll_loss = F.nll_loss(log_probs, targets, reduction="mean")
+
+    # Convert to Perplexity
+    perplexity = torch.exp(nll_loss)
+
+    return perplexity.item()
 
 ##############################################################################
-# FocalLoss
+# Focal Loss Implementation
 ##############################################################################
 class FocalLoss(nn.Module):
     def __init__(self, gamma=0.0, ignore_index=0, class_weights=None):
@@ -123,116 +203,138 @@ class FocalLoss(nn.Module):
             return torch.tensor(0.0, device=inputs.device)
 
         return focal.mean()
-
+    
 ##############################################################################
-# Perplexity helper
+# Functions for building tokenizers
 ##############################################################################
-def calculate_perplexity(logits, targets, pad_token=0):
+def build_tokenizer_src():
     """
-    logits: (B, T, vocab_size)
-    targets: (B, T)
+    Build a 'target' tokenizer for decisions with a fixed vocab.
+    e.g. 0..8, plus [SOS],[EOS],[UNK],[PAD], etc.
     """
-    log_probs = F.log_softmax(logits, dim=-1)
-    B, T, V = logits.shape
+    tokenizer = Tokenizer(models.WordLevel(unk_token="[UNK]"))
+    tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+    fixed_vocab = {
+        "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9, 
+        "[PAD]": 0,  
+        "[SOS]": 10,
+        # "[EOS]": 11,
+        "[UNK]": 12
+    }
+    for i in range(13, 61):
+        fixed_vocab[str(i)] = i
+    tokenizer.model = models.WordLevel(vocab=fixed_vocab, unk_token="[UNK]")
+    return tokenizer
 
-    log_probs_2d = log_probs.reshape(-1, V)
-    targets_1d   = targets.reshape(-1)
-
-    # mask out pad
-    mask = (targets_1d != pad_token)
-    log_probs_2d = log_probs_2d[mask]
-    targets_1d   = targets_1d[mask]
-
-    nll = F.nll_loss(log_probs_2d, targets_1d, reduction='mean')
-    return torch.exp(nll).item()
+def build_tokenizer_tgt():
+    """
+    Build a 'target' tokenizer for decisions with a fixed vocab.
+    e.g. 0..8, plus [SOS],[EOS],[UNK],[PAD], etc.
+    """
+    tokenizer = Tokenizer(models.WordLevel(unk_token="[UNK]"))
+    tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+    fixed_vocab = {
+        "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9, 
+        "[PAD]": 0,  
+        "[SOS]": 10,
+        # "[EOS]": 11,
+        "[UNK]": 12
+    }
+    tokenizer.model = models.WordLevel(vocab=fixed_vocab, unk_token="[UNK]")
+    return tokenizer
 
 ##############################################################################
-# get_dataloaders
+# DataLoader Preparation
 ##############################################################################
+
 def get_dataloaders(config):
     data = load_json_dataset(config['filepath'])
     
-    train_size = int(0.8 * len(data))
-    val_size   = int(0.1 * len(data))
-    test_size  = len(data) - train_size - val_size
-
-    seed_value = 33
+    train_ds_size = int(0.8 * len(data))
+    val_ds_size = int(0.1 * len(data))
+    test_ds_size = len(data) - train_ds_size - val_ds_size
+    
+    # Set a random seed for reproducibility
+    seed_value = 33  
+    # You can change this to any integer for different splits
     torch.manual_seed(seed_value)
 
+    # Perform the split with deterministic randomness
     train_data, val_data, test_data = random_split(
-        data, [train_size, val_size, test_size],
-        generator=torch.Generator().manual_seed(seed_value)
+        data, [train_ds_size, val_ds_size, test_ds_size], generator=torch.Generator().manual_seed(seed_value)
     )
 
-    # Build tokenizers
-    tokenizer_tgt = build_tokenizer_tgt()  
-    tokenizer_ai = build_tokenizer_src()
+    # Build tokenizers using the train_data (recommended)    
+    # tokenizer_src = build_tokenizer_src(train_data, "Item", vocab_size=config['vocab_size_src'])
+    tokenizer_tgt = build_tokenizer_tgt()  # Uses fixed vocab
+    # tokenizer_lto = build_tokenizer_src(train_data, "Item", vocab_size=config['vocab_size_src'])
+    tokenizer_ai = build_tokenizer_src()  # Uses fixed vocab
 
-    pad_id_src = tokenizer_ai.token_to_id("[PAD]")
-    print("Product tokenizer's [PAD] ID:", pad_id_src)
+    # (self, data, tokenizer_ai, tokenizer_tgt, seq_len_ai, seq_len_tgt, num_heads, ai_rate, pad_token=0, sos_token=10):
 
-    # Save them
-    # tokenizer_lto.save(os.path.join(config["model_folder"], "tokenizer_lto.json"))
-    # tokenizer_src.save(os.path.join(config["model_folder"], "tokenizer_src.json"))
-    tokenizer_tgt.save(os.path.join(config["model_folder"], "tokenizer_tgt.json"))
-    tokenizer_ai.save(os.path.join(config["model_folder"], "tokenizer_ai.json"))
+    train_dataset = TransformerDataset(train_data, tokenizer_tgt, tokenizer_ai, config['seq_len_ai'], config['seq_len_tgt'], config['num_heads'], config['ai_rate'])
+    val_dataset = TransformerDataset(val_data, tokenizer_tgt, tokenizer_ai, config['seq_len_ai'], config['seq_len_tgt'], config['num_heads'], config['ai_rate'])
+    test_dataset = TransformerDataset(test_data, tokenizer_tgt, tokenizer_ai, config['seq_len_ai'], config['seq_len_tgt'], config['num_heads'], config['ai_rate'])
 
-    train_dataset = TransformerDataset(train_data, tokenizer_ai, tokenizer_tgt,  config['seq_len_ai'], config['seq_len_tgt'], config['num_heads'], config['ai_rate'], pad_token=0)
-    val_dataset   = TransformerDataset(val_data, tokenizer_ai, tokenizer_tgt,  config['seq_len_ai'], config['seq_len_tgt'], config['num_heads'], config['ai_rate'], pad_token=0)
-    test_dataset  = TransformerDataset(test_data, tokenizer_ai, tokenizer_tgt,  config['seq_len_ai'], config['seq_len_tgt'], config['num_heads'], config['ai_rate'], pad_token=0)
+    # Create DataLoaders
+    # For training, you can shuffle across users if that’s appropriate for your scenario.
+    train_dataloader = DataLoader(train_dataset, batch_size=config['batch_size'], num_workers=4, shuffle=True)
+    val_dataloader   = DataLoader(val_dataset,   batch_size=config['batch_size'], num_workers=4, shuffle=False)
+    test_dataloader  = DataLoader(test_dataset,  batch_size=config['batch_size'], num_workers=4, shuffle=False)
 
-    train_loader = DataLoader(train_dataset, batch_size=config['batch_size'], shuffle=True)
-    val_loader   = DataLoader(val_dataset,   batch_size=config['batch_size'], shuffle=False)
-    test_loader  = DataLoader(test_dataset,  batch_size=config['batch_size'], shuffle=False)
-    return train_loader, val_loader, test_loader
+    return train_dataloader, val_dataloader, test_dataloader
 
 ##############################################################################
-# build_model
+# Model
 ##############################################################################
-def get_model(config):
+def get_model(config, feature_tensor, special_token_ids):
     model = build_transformer(
-        vocab_size   = config['vocab_size_src'],
-        d_model      = config['d_model'],
-        n_layers     = config['N'],
-        n_heads      = config['num_heads'],
-        d_ff         = config['d_ff'],
-        dropout      = config['dropout'],
-        max_seq_len  = config['seq_len_ai']
-    )
+        vocab_size = config['vocab_size_tgt'],  
+        max_seq_len = config['seq_len_ai'],
+        d_model = config['d_model'], 
+        n_layers = config['N'], 
+        n_heads = config['num_heads'], 
+        dropout = config['dropout'], 
+        kernel_type = config['kernel_type'], 
+        d_ff = config['d_ff'], 
+        feature_tensor = feature_tensor,
+        special_token_ids = special_token_ids)
     return model
 
 ##############################################################################
-# Training loop
+# Training Loop
 ##############################################################################
 def train_model(config):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Define the device
+    device = "cuda" if torch.cuda.is_available() else "mps" if torch.has_mps or torch.backends.mps.is_available() else "cpu"
     device = torch.device(device)
     print("Using device:", device)
 
-    train_loader, val_loader, test_loader = get_dataloaders(config)
-    model = get_model(config).to(device)
+    train_dataloader, val_dataloader, test_dataloader = get_dataloaders(config)
+    special_ids = [0, 57, 58, 59, 60]
 
-    # QAT
+    model = get_model(config, 
+                      feature_tensor,
+                      special_ids).to(device)
+
     model.qconfig = torch.quantization.get_default_qat_qconfig('fbgemm')
     torch.quantization.prepare_qat(model, inplace=True)
 
     tokenizer_tgt = build_tokenizer_tgt()
-    
-    # Focal Loss
-    # loss_fn = FocalLoss(gamma=config['gamma'], ignore_index=tokenizer_tgt.token_to_id('[PAD]')).to(device)
 
     weights = torch.ones(config['vocab_size_ai'])
     weights[9] = config['weight']
     weights = weights.to(device)
     loss_fn = FocalLoss(gamma=config['gamma'], ignore_index=tokenizer_tgt.token_to_id('[PAD]'), class_weights=weights).to(device)
-
-    # DeepSpeed config
+    
+    # -------------------------------
+    # DeepSpeed Configuration
+    # -------------------------------
     ds_config = {
         "train_micro_batch_size_per_gpu": config['batch_size'],
         "gradient_accumulation_steps": 1,
         "zero_allow_untested_optimizer": True,
         "gradient_clipping": 1.0,
-        "use_lr_scheduler": True,
         "optimizer": {
             "type": "Lamb",
             "params": {
@@ -242,51 +344,51 @@ def train_model(config):
             }
         },
         "lr_scheduler": {
-            "type": "WarmupDecayLR",
+            "type": "WarmupDecayLR", 
             "params": {
-                "warmup_min_lr": config['min_lr'],
-                "warmup_max_lr": config['lr'],
-                "warmup_num_steps": config['warmup_steps'],
-                "total_num_steps": None,
-                "decay_style": "cosine"
+                "warmup_min_lr": config['min_lr'],       
+                "warmup_max_lr": config['lr'],       
+                "warmup_num_steps": config['warmup_steps'],     
+                "total_num_steps": None,    
+                "decay_style": "cosine"      
             }
-        },
+        },        
         "fp16": {
             "enabled": False
         },
         "zero_optimization": {
             "stage": 1
         },
+        # "steps_per_print": 200,
         "wall_clock_breakdown": False
     }
 
-    total_steps = config["num_epochs"] * len(train_loader)
-    ds_config["lr_scheduler"]["params"]["total_num_steps"] = total_steps
+    # Dynamically set total_num_steps
+    total_num_steps = config["num_epochs"] * len(train_dataloader)
+    ds_config["lr_scheduler"]["params"]["total_num_steps"] = total_num_steps
 
+    # Initialize DeepSpeed engine.
     model_engine, optimizer, _, _ = deepspeed.initialize(
         model=model,
         model_parameters=model.parameters(),
         config=ds_config
     )
 
+    # If the user specified a model to preload before training, load it
     initial_epoch = 0
-    global_step   = 0
+    global_step = 0
 
-    if config.get("preload") == "latest":
-        latest_ckpt_path = latest_weights_file_path(config)
-        if latest_ckpt_path is not None and Path(latest_ckpt_path).exists():
-            print(f"[INFO] Loading checkpoint from {latest_ckpt_path} ...")
-            checkpoint = torch.load(latest_ckpt_path, map_location=device, weights_only=False)
-            model_engine.load_state_dict(checkpoint['model_state_dict'])
-            
-            initial_epoch = checkpoint.get('epoch', 0) + 1
-            global_step   = checkpoint.get('global_step', 0)
-
-            print(f"[INFO] Successfully loaded. Resuming from epoch={initial_epoch}, global_step={global_step}.")
-        else:
-            print("[INFO] No previous checkpoint found. Starting fresh.")
+    preload = config['preload']
+    model_filename = latest_weights_file_path(config) if preload == 'latest' else get_weights_file_path(config, preload) if preload else None
+    if model_filename:
+        print(f'Preloading model {model_filename}')
+        state = torch.load(model_filename, weights_only=False)
+        model.load_state_dict(state['model_state_dict'])
+        initial_epoch = state['epoch'] + 1
+        optimizer.load_state_dict(state['optimizer_state_dict'])
+        global_step = state['global_step']
     else:
-        print("[INFO] Starting from a fresh model initialization (no preload).")
+        print('No model to preload, starting from scratch')
 
     best_val_loss = None
     best_checkpoint_path = None
@@ -296,7 +398,7 @@ def train_model(config):
         model_engine.train()
         torch.cuda.empty_cache()
 
-        batch_iterator = tqdm(train_loader, desc=f"Epoch {epoch:02d}")
+        batch_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch:02d}")
         total_loss = 0.0
 
         for batch in batch_iterator:
@@ -321,12 +423,12 @@ def train_model(config):
             total_loss += loss.item()
             global_step += 1
 
-        train_loss = total_loss / len(train_loader)
+        train_loss = total_loss / len(train_dataloader)
         current_lr = model_engine.optimizer.param_groups[0]["lr"]
         print(f"\nEpoch {epoch}: LR={current_lr:.6f}  TrainLoss={train_loss:.4f}")
 
         # Evaluate
-        val_loss, val_conf_mat, val_ppl, val_hit_rate, val_f1_score, val_auprc = evaluate(val_loader, model_engine, device, loss_fn, config['ai_rate'])
+        val_loss, val_conf_mat, val_ppl, val_hit_rate, val_f1_score, val_auprc = evaluate(val_dataloader, model_engine, device, loss_fn, config['ai_rate'])
         print(f"Epoch {epoch} Val Loss={val_loss:.4f}  \nVal PPL={val_ppl:.4f} \nVal Hit Rate={val_hit_rate:.4f} \nVal F1 Score={val_f1_score:.4f} \nVal Area Under Precision-Recall Curve={val_auprc:.4f}")
         print("Val Confusion Matrix:\n", val_conf_mat)
 
@@ -356,7 +458,7 @@ def train_model(config):
         state = torch.load(best_checkpoint_path, weights_only=False)
         model_engine.load_state_dict(state['model_state_dict'])
 
-    test_loss, test_conf_mat, test_ppl, test_hit_rate, test_f1_score, test_auprc = evaluate(test_loader, model_engine, device, loss_fn, config['ai_rate'])
+    test_loss, test_conf_mat, test_ppl, test_hit_rate, test_f1_score, test_auprc = evaluate(test_dataloader, model_engine, device, loss_fn, config['ai_rate'])
     print(f"** Test Loss={test_loss:.4f} \nTest PPL={test_ppl:.4f} \nTest Hit Rate={test_hit_rate:.4f} \nTest F1 Score={test_f1_score:.4f} \nTest Area Under Precision-Recall Curve={test_auprc:.4f}")
     print("Test Confusion Matrix:\n", test_conf_mat)
 
