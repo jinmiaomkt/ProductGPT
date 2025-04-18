@@ -218,7 +218,7 @@ def build_tokenizer_src():
         "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9, 
         "[PAD]": 0,  
         "[SOS]": 10,
-        # "[EOS]": 11,
+        "[EOS]": 11,
         "[UNK]": 12
     }
     for i in range(13, 61):
@@ -237,7 +237,7 @@ def build_tokenizer_tgt():
         "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9, 
         "[PAD]": 0,  
         "[SOS]": 10,
-        # "[EOS]": 11,
+        "[EOS]": 11,
         "[UNK]": 12
     }
     tokenizer.model = models.WordLevel(vocab=fixed_vocab, unk_token="[UNK]")
@@ -520,9 +520,9 @@ def evaluate(dataloader, model_engine, device, loss_fn, stepsize):
     pad_id = tokenizer_tgt.token_to_id("[PAD]")
     sos_id = tokenizer_tgt.token_to_id("[SOS]")
     unk_id = tokenizer_tgt.token_to_id("[UNK]")
-    # eos_id = tokenizer_tgt.token_to_id("[EOS]")
+    eos_id = tokenizer_tgt.token_to_id("[EOS]")
     # special_tokens = {pad_id, sos_id, unk_id, eos_id}
-    special_tokens = {pad_id, sos_id, unk_id}
+    special_tokens = {pad_id, sos_id, unk_id, eos_id}
 
     with torch.no_grad():
         for batch in dataloader:
