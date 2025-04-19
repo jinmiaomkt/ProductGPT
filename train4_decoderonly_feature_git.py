@@ -132,6 +132,20 @@ for idx, row in df.iterrows():
 
 feature_tensor = torch.from_numpy(feature_array)   
 
+# ---- quick audit of the feature table ---------------------------------
+zeros   = np.where(feature_array.sum(axis=1) == 0)[0]
+nonzero = np.where(feature_array.sum(axis=1) != 0)[0]
+
+print(f"TOTAL rows in feature_array : {feature_array.shape[0]}")
+print(f"Rows with ALL‑ZERO features : {zeros}  (count = {len(zeros)})")
+print(f"Rows with non‑zero features : first 5 examples")
+for t in nonzero[:5]:
+    print(f"  token {t:<2d}  ->  {feature_array[t][:8]} ...")
+
+feat_df = pd.DataFrame(feature_array, columns=feature_cols)
+feat_df["token_id"] = feat_df.index
+print(feat_df.iloc[FIRST_PROD_ID:LAST_PROD_ID+1].head())
+
 ##############################################################################
 # Compute Perplexity
 ##############################################################################
@@ -340,7 +354,7 @@ def train_model(config):
     tokenizer_tgt = build_tokenizer_tgt()
 
     weights = torch.ones(config['vocab_size_tgt'])
-    weights[9] = config['weight']
+    # weights[9] = config['weight']
     weights = weights.to(device)
     loss_fn = FocalLoss(gamma=config['gamma'], ignore_index=tokenizer_tgt.token_to_id('[PAD]'), class_weights=weights).to(device)
     
@@ -606,8 +620,10 @@ def evaluate(dataloader, model_engine, device, loss_fn, stepsize):
     avg_ppl  = total_ppl  / len(dataloader)
 
     # Now we can do confusion_matrix and accuracy
-    unique_labels = np.unique(all_labels)
-    conf_mat = confusion_matrix(all_labels, all_preds, labels=unique_labels)
+    # unique_labels = np.unique(all_labels)
+    decision_ids = np.arange(1, 10)   
+    # conf_mat = confusion_matrix(all_labels, all_preds, labels=unique_labels)
+    conf_mat = confusion_matrix(all_labels, all_preds, labels=decision_ids)
     hit_rate = accuracy_score(all_labels, all_preds)
     macro_f1 = f1_score(all_labels, all_preds, average='macro')
     # auprc = average_precision_score(all_labels, all_preds, average='macro')
@@ -618,8 +634,8 @@ def evaluate(dataloader, model_engine, device, loss_fn, stepsize):
     auprc = average_precision_score(y_true_bin, probs_for_auprc, average='macro')
 
     label_mapping = {0: "[PAD]", 1: "1", 2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9"}
-    readable_labels = [label_mapping.get(i, str(i)) for i in unique_labels]
-    print(f"Label IDs: {unique_labels}")
+    readable_labels = [label_mapping.get(i, str(i)) for i in decision_ids]
+    print(f"Label IDs: {decision_ids}")
     print(f"Label meanings: {readable_labels}")
     print(f"Unique values in predictions: {np.unique(all_preds, return_counts=True)}")
     print(f"Unique values in labels: {np.unique(all_labels, return_counts=True)}")
