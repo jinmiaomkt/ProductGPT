@@ -23,17 +23,17 @@ feature_cols = [
     "EthnicityRock", 
     "EthnicityWater", 
     "EthnicityFire", 
-    "EthnicityGrass", 
+    # "EthnicityGrass", 
     "EthnicityThunder", 
     "EthnicityWind", 
     "GenderFemale", 
     "GenderMale",
-    "CountryFengDan", 
+    # "CountryFengDan", 
     "CountryRuiYue", 
     "CountryDaoQi", 
     "CountryZhiDong", 
     "CountryMengDe", 
-    "CountryXuMi",
+    # "CountryXuMi",
     "type_figure",  # if it's numeric or one-hot encoded; else skip if it's a string
     "MinimumAttack", 
     "MaximumAttack",
@@ -54,7 +54,7 @@ feature_cols = [
 max_token_id =  120
 # This is the count of numeric columns (your "feature_dim"). 
 # For example, if you have 38 numeric columns (NOT counting the ID).
-feature_dim = 37
+feature_dim = 34
 
 feature_array = np.zeros((max_token_id + 1, feature_dim), dtype=np.float32)
 
@@ -64,7 +64,7 @@ for idx in range(len(df)):
     
     # Gather the numeric features from the row. 
     # If you only want the columns in `feature_cols` (excluding "NewProductIndex3"), do:
-    feats = df.loc[idx, feature_cols].values  # shape (37,) => [Rarity, MaxLife, MaxOffense, ...]
+    feats = df.loc[idx, feature_cols].values  # shape (34,) => [Rarity, MaxLife, MaxOffense, ...]
 
     feature_array[token_id, :] = feats
 
