@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt   # required only for the heat‑map
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Load the results JSON
 # ─────────────────────────────────────────────────────────────────────────────
-json_path = Path("/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/TuningResult/results_dmodel64_ff64_N6_heads8_lr0.0001_weight4.json")          # <= put your real path here
+json_path = Path("/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/TuningResult/metrics_FullProductGPT_FeatureBasec_d16_ff16_N4_h4_lr1e-05_w4.json")          # <= put your real path here
 with json_path.open() as f:
     stats = json.load(f)
 
@@ -30,12 +30,12 @@ metrics = {
     "Validation AUPRC"                  : stats["val_auprc"],
     "Best checkpoint path"              : stats["best_checkpoint_path"],
     # model‑size hyper‑params, if you want them here:
-    "d_model"                           : stats["d_model"],
-    "d_ff"                              : stats["d_ff"],
-    "Encoder layers (N)"                : stats["N"],
-    "Heads"                             : stats["num_heads"],
-    "Learning rate"                     : stats["lr"],
-    "Weight multiplier"                 : stats["weight"],
+    # "d_model"                           : stats["d_model"],
+    # "d_ff"                              : stats["d_ff"],
+    # "Encoder layers (N)"                : stats["N"],
+    # "Heads"                             : stats["num_heads"],
+    # "Learning rate"                     : stats["lr"],
+    # "Weight multiplier"                 : stats["weight"],
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

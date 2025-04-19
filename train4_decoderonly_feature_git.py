@@ -55,6 +55,23 @@ import numpy as np
 import logging
 logging.getLogger("deepspeed").setLevel(logging.ERROR)
 
+# ------------------------------------------------------------
+# token‑ID layout (matches your description)
+# ------------------------------------------------------------
+PAD_ID        = 0
+DEC_IDS       = list(range(1, 10))        # decision classes 1‑9
+SOS_DEC_ID    = 10
+EOS_DEC_ID    = 11
+UNK_DEC_ID    = 12
+
+FIRST_PROD_ID = 13
+LAST_PROD_ID  = 56                        # product IDs w/ 37‑dim features
+EOS_PROD_ID   = 57
+SOS_PROD_ID   = 58
+
+SPECIAL_IDS   = [PAD_ID, SOS_DEC_ID, EOS_DEC_ID, UNK_DEC_ID, EOS_PROD_ID, SOS_PROD_ID]           # used later
+MAX_TOKEN_ID  = SOS_PROD_ID                # 58
+
 df = pd.read_excel("/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx", sheet_name=0)
 
 ## NewProductIndex3 is not a feature
@@ -75,8 +92,8 @@ feature_cols = [
     "EthnicityGrass", 
     "EthnicityThunder", 
     "EthnicityWind", 
-    "EthnicityFemale", 
-    "EthnicityMale",
+    "GenderFemale", 
+    "GenderMale",
     "CountryFengDan", 
     "CountryRuiYue", 
     "CountryDaoQi", 
@@ -100,22 +117,18 @@ feature_cols = [
 ]
 
 ## Determine max_token_id and the dimension
-max_token_id =  120
-# This is the count of numeric columns (your "feature_dim"). 
-# For example, if you have 38 numeric columns (NOT counting the ID).
+max_token_id =  58
 feature_dim = 37
-
 feature_array = np.zeros((max_token_id + 1, feature_dim), dtype=np.float32)
 
-for idx in range(len(df)):
+for idx, row in df.iterrows():
     # The product ID for this row (should be in [1..65])
     token_id = int(df["NewProductIndex6"].iloc[idx])  
-    
-    # Gather the numeric features from the row. 
-    # If you only want the columns in `feature_cols` (excluding "NewProductIndex3"), do:
-    feats = df.loc[idx, feature_cols].values  # shape (37,) => [Rarity, MaxLife, MaxOffense, ...]
-
-    feature_array[token_id, :] = feats
+    # feats = df.loc[idx, feature_cols].values  
+    # shape (37,) => [Rarity, MaxLife, MaxOffense, ...]
+    # feature_array[token_id, :] = feats
+    if FIRST_PROD_ID <= token_id <= LAST_PROD_ID:
+        feature_array[token_id] = row[feature_cols].values.astype(np.float32)
 
 feature_tensor = torch.from_numpy(feature_array)   
 
@@ -221,8 +234,12 @@ def build_tokenizer_src():
         "[EOS]": 11,
         "[UNK]": 12
     }
-    for i in range(13, 61):
+    for i in range(13, 57):
         fixed_vocab[str(i)] = i
+
+    fixed_vocab[str(57)] = 57
+    fixed_vocab[str(58)] = 58
+
     tokenizer.model = models.WordLevel(vocab=fixed_vocab, unk_token="[UNK]")
     return tokenizer
 
@@ -311,7 +328,7 @@ def train_model(config):
     print("Using device:", device)
 
     train_dataloader, val_dataloader, test_dataloader = get_dataloaders(config)
-    special_ids = [0, 57, 58, 59, 60]
+    special_ids = SPECIAL_IDS
 
     model = get_model(config, 
                       feature_tensor,
@@ -522,7 +539,7 @@ def evaluate(dataloader, model_engine, device, loss_fn, stepsize):
     unk_id = tokenizer_tgt.token_to_id("[UNK]")
     eos_id = tokenizer_tgt.token_to_id("[EOS]")
     # special_tokens = {pad_id, sos_id, unk_id, eos_id}
-    special_tokens = {pad_id, sos_id, unk_id, eos_id}
+    special_tokens = {pad_id, sos_id, unk_id, eos_id, EOS_PROD_ID, SOS_PROD_ID}
 
     with torch.no_grad():
         for batch in dataloader:
