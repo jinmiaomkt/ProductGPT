@@ -37,8 +37,8 @@ def get_config():
         # "datasource": "ProductGPT",
         "model_folder": "/home/ec2-user/output",
         "model_basename": "MyProductGPT_",
-        "preload": "latest",
-        # "preload": None,
+        # "preload": "latest",
+        "preload": None,
         "tokenizer_file": "tokenizer_{0}.json",
         "experiment_name": "runs/tmodel", 
 
