@@ -146,6 +146,11 @@ feat_df = pd.DataFrame(feature_array, columns=feature_cols)
 feat_df["token_id"] = feat_df.index
 print(feat_df.iloc[FIRST_PROD_ID:LAST_PROD_ID+1].head())
 
+# After building feature_array
+col_nonzero = (feature_array.sum(axis=0) != 0)
+print("Non‑zero columns:", np.array(feature_cols)[col_nonzero])
+print("Zero‑only columns:", np.array(feature_cols)[~col_nonzero])
+
 ##############################################################################
 # Compute Perplexity
 ##############################################################################
@@ -443,6 +448,12 @@ def train_model(config):
             decision_positions = torch.arange(config['ai_rate'] - 1, T, step=config['ai_rate'], device=logits.device)  # shape: (N,)
             decision_logits = logits[:, decision_positions, :]  # shape: (B, N, V)
 
+            debug_idx = torch.randint(0, B, (1,))
+            print("pos, pred, true:",
+                [(p.item(), logits[debug_idx, p].argmax(-1).item(),
+                    label[debug_idx, i].item())
+                for i,p in enumerate(decision_positions[:5])])
+            
             loss = loss_fn(
                 decision_logits,  # predict next token
                 label
