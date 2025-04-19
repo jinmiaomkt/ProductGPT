@@ -128,24 +128,24 @@ for idx, row in df.iterrows():
 
 feature_tensor = torch.from_numpy(feature_array)   
 
-# ---- quick audit of the feature table ---------------------------------
-zeros   = np.where(feature_array.sum(axis=1) == 0)[0]
-nonzero = np.where(feature_array.sum(axis=1) != 0)[0]
+# # ---- quick audit of the feature table ---------------------------------
+# zeros   = np.where(feature_array.sum(axis=1) == 0)[0]
+# nonzero = np.where(feature_array.sum(axis=1) != 0)[0]
 
-print(f"TOTAL rows in feature_array : {feature_array.shape[0]}")
-print(f"Rows with ALL‑ZERO features : {zeros}  (count = {len(zeros)})")
-print(f"Rows with non‑zero features : first 5 examples")
-for t in nonzero[:5]:
-    print(f"  token {t:<2d}  ->  {feature_array[t][:8]} ...")
+# print(f"TOTAL rows in feature_array : {feature_array.shape[0]}")
+# print(f"Rows with ALL‑ZERO features : {zeros}  (count = {len(zeros)})")
+# print(f"Rows with non‑zero features : first 5 examples")
+# for t in nonzero[:5]:
+#     print(f"  token {t:<2d}  ->  {feature_array[t][:8]} ...")
 
-feat_df = pd.DataFrame(feature_array, columns=feature_cols)
-feat_df["token_id"] = feat_df.index
-print(feat_df.iloc[FIRST_PROD_ID:LAST_PROD_ID+1].head())
+# feat_df = pd.DataFrame(feature_array, columns=feature_cols)
+# feat_df["token_id"] = feat_df.index
+# print(feat_df.iloc[FIRST_PROD_ID:LAST_PROD_ID+1].head())
 
-# After building feature_array
-col_nonzero = (feature_array.sum(axis=0) != 0)
-print("Non‑zero columns:", np.array(feature_cols)[col_nonzero])
-print("Zero‑only columns:", np.array(feature_cols)[~col_nonzero])
+# # After building feature_array
+# col_nonzero = (feature_array.sum(axis=0) != 0)
+# print("Non‑zero columns:", np.array(feature_cols)[col_nonzero])
+# print("Zero‑only columns:", np.array(feature_cols)[~col_nonzero])
 
 ##############################################################################
 # Compute Perplexity
@@ -355,7 +355,7 @@ def train_model(config):
     tokenizer_tgt = build_tokenizer_tgt()
 
     weights = torch.ones(config['vocab_size_tgt'])
-    # weights[9] = config['weight']
+    weights[9] = config['weight']
     weights = weights.to(device)
     loss_fn = FocalLoss(gamma=config['gamma'], ignore_index=tokenizer_tgt.token_to_id('[PAD]'), class_weights=weights).to(device)
     
@@ -444,11 +444,11 @@ def train_model(config):
             decision_positions = torch.arange(config['ai_rate'] - 1, T, step=config['ai_rate'], device=logits.device)  # shape: (N,)
             decision_logits = logits[:, decision_positions, :]  # shape: (B, N, V)
 
-            debug_idx = torch.randint(0, B, (1,))
-            print("pos, pred, true:",
-                [(p.item(), logits[debug_idx, p].argmax(-1).item(),
-                    label[debug_idx, i].item())
-                for i,p in enumerate(decision_positions[:5])])
+            # debug_idx = torch.randint(0, B, (1,))
+            # print("pos, pred, true:",
+            #     [(p.item(), logits[debug_idx, p].argmax(-1).item(),
+            #         label[debug_idx, i].item())
+            #     for i,p in enumerate(decision_positions[:5])])
             
             loss = loss_fn(
                 decision_logits,  # predict next token

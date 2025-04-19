@@ -31,7 +31,7 @@ def get_config():
         "patience": 6,
         "gamma": 2,
         "eps": 10**-6,
-        "weight": 4,
+        "weight": 10,
 
         # Logging and paths
         # "datasource": "ProductGPT",
