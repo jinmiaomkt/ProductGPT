@@ -65,7 +65,7 @@ EOS_DEC_ID    = 11
 UNK_DEC_ID    = 12
 
 FIRST_PROD_ID = 13
-LAST_PROD_ID  = 56                        # product IDs w/ 37‑dim features
+LAST_PROD_ID  = 56                        # product IDs w/ 34‑dim features
 EOS_PROD_ID   = 57
 SOS_PROD_ID   = 58
 
@@ -89,17 +89,17 @@ feature_cols = [
     "EthnicityRock", 
     "EthnicityWater", 
     "EthnicityFire", 
-    "EthnicityGrass", 
+    # "EthnicityGrass", 
     "EthnicityThunder", 
     "EthnicityWind", 
     "GenderFemale", 
     "GenderMale",
-    "CountryFengDan", 
+    # "CountryFengDan", 
     "CountryRuiYue", 
     "CountryDaoQi", 
     "CountryZhiDong", 
     "CountryMengDe", 
-    "CountryXuMi",
+    # "CountryXuMi",
     "type_figure",  # if it's numeric or one-hot encoded; else skip if it's a string
     "MinimumAttack", 
     "MaximumAttack",
@@ -118,15 +118,11 @@ feature_cols = [
 
 ## Determine max_token_id and the dimension
 max_token_id =  58
-feature_dim = 37
+feature_dim = 34
 feature_array = np.zeros((max_token_id + 1, feature_dim), dtype=np.float32)
 
 for idx, row in df.iterrows():
-    # The product ID for this row (should be in [1..65])
     token_id = int(df["NewProductIndex6"].iloc[idx])  
-    # feats = df.loc[idx, feature_cols].values  
-    # shape (37,) => [Rarity, MaxLife, MaxOffense, ...]
-    # feature_array[token_id, :] = feats
     if FIRST_PROD_ID <= token_id <= LAST_PROD_ID:
         feature_array[token_id] = row[feature_cols].values.astype(np.float32)
 
@@ -186,7 +182,7 @@ def calculate_perplexity(logits, targets, pad_token=9):
 # Focal Loss Implementation
 ##############################################################################
 class FocalLoss(nn.Module):
-    def __init__(self, gamma=0.0, ignore_index=0, class_weights=None):
+    def __init__(self, gamma=2.0, ignore_index=0, class_weights=None):
         """
         Args:
             gamma (float): Focal loss exponent, default=2.
