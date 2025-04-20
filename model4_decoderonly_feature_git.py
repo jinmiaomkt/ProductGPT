@@ -145,16 +145,24 @@ class SpecialPlusFeatureLookup(nn.Module):
         :param token_ids: (batch_size, seq_len) integer IDs
         :return: (batch_size, seq_len, d_model) final embeddings
         """     
-        id_vec   = self.id_embed(token_ids)                                 # (B,T,D)
+        ids_long = token_ids.long()
+        id_vec   = self.id_embed(ids_long)                                 # (B,T,D)
 
         feature_raw = self.feature_table[id_vec]                            # (B,T,F)
         feat_vec = self.feat_proj(feature_raw)                              # (B,T,D)
 
-        # zero‑out where token is NOT a product
-        mask = self.product_mask[token_ids]                               # (B,T)
-        feat_vec = feat_vec.masked_fill(~mask.unsqueeze(-1), 0.0)
+        # ---- feature branch only for product tokens ------------------
+        prod_mask_bt = self.product_mask[ids_long]                          # (B,T) bool
+        if prod_mask_bt.any():
+            feats_raw   = self.feat_tbl[ids_long[prod_mask_bt]]             # (N,F)
+            feats_proj  = self.feat_proj(feats_raw)                         # (N,D)
 
-        return id_vec + feat_vec                                    # (B,T,D)
+            feat_vec = torch.zeros_like(id_vec)                             # (B,T,D)
+            feat_vec[prod_mask_bt] = feats_proj
+        else:
+            feat_vec = torch.zeros_like(id_vec)
+
+        return id_vec + feat_vec                                            # (B,T,D)
     
         # device = token_ids.device
         # B, S = token_ids.shape
