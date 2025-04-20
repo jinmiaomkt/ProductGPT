@@ -497,7 +497,7 @@ class Transformer(nn.Module):
     takes a single sequence of tokens and does next-token prediction.
     """
     def __init__(self, 
-                 src_seq_len: int, 
+                 tgt_seq_len: int, 
                  # src_seq_len: int,
                  # tgt_seq_len: int,
                  # lto_seq_len: int,
@@ -539,7 +539,7 @@ class Transformer(nn.Module):
                 d_model        = d_model,
                 feature_tensor = feature_tensor,           # (59, 34)
                 product_ids    = list(range(13, 57)),      # 13 … 56
-                vocab_size     = src_seq_len                # 59
+                vocab_size     = tgt_seq_len                # 59
         )
 
 
@@ -554,7 +554,7 @@ class Transformer(nn.Module):
             blocks.append(blk)
         self.decoder = Decoder(d_model, nn.ModuleList(blocks))
         # Final projection to vocab
-        self.projection = ProjectionLayer(d_model, src_seq_len)
+        self.projection = ProjectionLayer(d_model, tgt_seq_len)
 
         # secondary head that projects only into the 9‑class decision space
         # self.decision_head = nn.Linear(d_model, len(DECISION_IDS))
@@ -591,7 +591,7 @@ def build_transformer(vocab_size: int,
                       kernel_type: str="exp"):
     
     transformer = Transformer(
-        src_seq_len   = vocab_size,
+        tgt_seq_len   = vocab_size,
         max_seq_len  = max_seq_len,
         d_model      = d_model,
         n_layers     = n_layers,
