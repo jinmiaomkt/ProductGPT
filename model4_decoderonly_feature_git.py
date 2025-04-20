@@ -101,7 +101,7 @@ class SpecialPlusFeatureLookup(nn.Module):
                 d_model: int,
                 feature_tensor: torch.Tensor,
                 product_ids: list[int], 
-                vocab_size: int):
+                vocab_size_src: int):
         super().__init__()
         """
         :param d_model: dimension of the final embedding for each token
@@ -114,11 +114,11 @@ class SpecialPlusFeatureLookup(nn.Module):
         self.feature_dim = feature_tensor.shape[1]
         self.max_id = feature_tensor.shape[0] - 1
 
-        self.id_embed = nn.Embedding(vocab_size, d_model)
+        self.id_embed = nn.Embedding(vocab_size_src, d_model)
         self.feat_proj = nn.Linear(feature_tensor.size(1), d_model, bias=False)
         self.register_buffer("feature_table", feature_tensor, persistent=False)
 
-        product_mask = torch.zeros(vocab_size, dtype=torch.bool)
+        product_mask = torch.zeros(vocab_size_src, dtype=torch.bool)
         product_mask[product_ids] = True
         self.register_buffer("product_mask", product_mask, persistent=False)   # ✔️ buffer
 
@@ -497,8 +497,8 @@ class Transformer(nn.Module):
     takes a single sequence of tokens and does next-token prediction.
     """
     def __init__(self, 
-                 tgt_seq_len: int, 
-                 # src_seq_len: int,
+                 vocab_size_tgt: int, 
+                 vocab_size_src: int,
                  # tgt_seq_len: int,
                  # lto_seq_len: int,
                  max_seq_len: int,
@@ -511,6 +511,7 @@ class Transformer(nn.Module):
                  special_token_ids: torch.Tensor,
                  kernel_type="exp"):
         super().__init__()
+
         # Embedding
         # self.token_emb = InputEmbeddings(d_model, vocab_size)
         # self.pos_enc   = PositionalEncoding(d_model, max_seq_len, dropout)
@@ -539,9 +540,8 @@ class Transformer(nn.Module):
                 d_model        = d_model,
                 feature_tensor = feature_tensor,           # (59, 34)
                 product_ids    = list(range(13, 57)),      # 13 … 56
-                vocab_size     = tgt_seq_len                # 59
+                vocab_size     = vocab_size_src                # 59
         )
-
 
         self.pos_enc   = PositionalEncoding(d_model, max_seq_len, dropout)
 
@@ -554,10 +554,7 @@ class Transformer(nn.Module):
             blocks.append(blk)
         self.decoder = Decoder(d_model, nn.ModuleList(blocks))
         # Final projection to vocab
-        self.projection = ProjectionLayer(d_model, tgt_seq_len)
-
-        # secondary head that projects only into the 9‑class decision space
-        # self.decision_head = nn.Linear(d_model, len(DECISION_IDS))
+        self.projection = ProjectionLayer(d_model, vocab_size_tgt)
 
         # (Optional) param init
         for p in self.parameters():
@@ -579,7 +576,8 @@ class Transformer(nn.Module):
 ##############################################################################
 # 12. Build function
 ##############################################################################
-def build_transformer(vocab_size: int,
+def build_transformer(vocab_size_src: int,
+                      vocab_size_tgt: int,
                       max_seq_len: int,
                       d_model: int,
                       n_layers: int,
@@ -591,7 +589,8 @@ def build_transformer(vocab_size: int,
                       kernel_type: str="exp"):
     
     transformer = Transformer(
-        tgt_seq_len   = vocab_size,
+        vocab_size_src   = vocab_size_src,
+        vocab_size_tgt   = vocab_size_tgt,
         max_seq_len  = max_seq_len,
         d_model      = d_model,
         n_layers     = n_layers,
