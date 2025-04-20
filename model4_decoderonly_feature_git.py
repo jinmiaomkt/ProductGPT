@@ -118,8 +118,8 @@ class SpecialPlusFeatureLookup(nn.Module):
         self.feat_proj = nn.Linear(feature_tensor.size(1), d_model, bias=False)
         self.register_buffer("feature_table", feature_tensor, persistent=False)
 
-        self.product_mask = torch.zeros(vocab_size, dtype=torch.bool)
-        self.product_mask[product_ids] = True
+        product_mask = torch.zeros(vocab_size, dtype=torch.bool)
+        product_mask[product_ids] = True
         self.register_buffer("product_mask", self.product_mask, persistent=False)   # ✔️ buffer
 
         # Build a dictionary mapping special IDs -> index in special embedding
