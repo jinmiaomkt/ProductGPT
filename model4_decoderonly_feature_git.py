@@ -50,8 +50,14 @@ feature_cols = [
     "LTO" 
 ]
 
+# --------------------------------------------
+# decision / product partition of the vocab
+# --------------------------------------------
+DECISION_IDS = torch.tensor([1,2,3,4,5,6,7,8,9])          # len = 9
+PRODUCT_IDS  = torch.tensor(list(range(13, 57)))          # 13 … 56
+
 ## Determine max_token_id and the dimension
-max_token_id =  120
+max_token_id =  68
 # This is the count of numeric columns (your "feature_dim"). 
 # For example, if you have 38 numeric columns (NOT counting the ID).
 feature_dim = 34
@@ -92,10 +98,10 @@ class SpecialPlusFeatureLookup(nn.Module):
     """
 
     def __init__(self,
-                 d_model: int,
-                 feature_tensor: torch.Tensor,
-                 special_token_ids: list,
-                 hidden_dim: int):
+                d_model: int,
+                feature_tensor: torch.Tensor,
+                product_ids: list[int], 
+                vocab_size: int):
         super().__init__()
         """
         :param d_model: dimension of the final embedding for each token
@@ -104,81 +110,93 @@ class SpecialPlusFeatureLookup(nn.Module):
         :param special_token_ids: list of token IDs that have no product features (like [0,107,108,109])
         :param hidden_dim: optional dimension for an MLP hidden layer if you want more nonlinearity
         """
-
         self.d_model = d_model
         self.feature_dim = feature_tensor.shape[1]
         self.max_id = feature_tensor.shape[0] - 1
 
-        # We'll store the product feature table as a *buffer* if we do NOT want to learn it.
-        # If you want to fine-tune it, you can store as a Parameter. For now, let's do buffer:
-        self.register_buffer("feature_table", feature_tensor)
+        self.id_embed = nn.Embedding(vocab_size, d_model)
+        self.feat_proj = nn.Linear(feature_tensor.size(1), d_model, bias=False)
+        self.register_buffer("feature_table", feature_tensor, persistent=False)
+
+        self.product_mask = torch.zeros(vocab_size, dtype=torch.bool)
+        self.product_mask[product_ids] = True
 
         # Build a dictionary mapping special IDs -> index in special embedding
-        # E.g. {0: 0, 107: 1, 108: 2, 109: 3, ...}
-        self.special_id_map = {}
-        for idx, tok_id in enumerate(special_token_ids):
-            self.special_id_map[tok_id] = idx
+        # self.special_id_map = {}
+        # for idx, tok_id in enumerate(special_token_ids):
+        #     self.special_id_map[tok_id] = idx
 
-        self.num_special = len(special_token_ids)
-        self.special_embed = nn.Embedding(self.num_special, d_model)
+        # self.num_special = len(special_token_ids)
+        # self.special_embed = nn.Embedding(self.num_special, d_model)
 
-        # MLP or linear to map product features -> d_model
-        if hidden_dim > 0:
-            self.product_mlp = nn.Sequential(
-                nn.Linear(self.feature_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Linear(hidden_dim, d_model),
-            )
-        else:
-            # Single linear layer
-            self.product_mlp = nn.Linear(self.feature_dim, d_model)
+        # # MLP or linear to map product features -> d_model
+        # if hidden_dim > 0:
+        #     self.product_mlp = nn.Sequential(
+        #         nn.Linear(self.feature_dim, hidden_dim),
+        #         nn.ReLU(),
+        #         nn.Linear(hidden_dim, d_model),
+        #     )
+        # else:
+        #     # Single linear layer
+        #     self.product_mlp = nn.Linear(self.feature_dim, d_model)
 
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
         """
         :param token_ids: (batch_size, seq_len) integer IDs
         :return: (batch_size, seq_len, d_model) final embeddings
-        """
-        device = token_ids.device
-        B, S = token_ids.shape
+        """     
+        id_vec   = self.id_embed(token_ids)                                 # (B,T,D)
 
-        # We'll create an output buffer (B,S,d_model)
-        out = torch.zeros((B, S, self.d_model), device=device)
+        feature_raw = self.feature_table[id_vec]                            # (B,T,F)
+        feat_vec = self.feat_proj(feature_raw)                              # (B,T,D)
 
-        # 1) Identify special vs. product tokens
-        # We'll build an index map telling us which row in 'special_embed' each token corresponds to,
-        # or -1 if it's not a special token.
+        # zero‑out where token is NOT a product
+        mask = self.product_mask[token_ids]                               # (B,T)
+        feat_vec = feat_vec.masked_fill(~mask.unsqueeze(-1), 0.0)
 
-        special_idx = torch.full_like(token_ids, -1, device=device)
-        # for i, (special_id) in enumerate(self.special_id_map.items()):
-        #     # special_id is (tok_id -> index_in_special_embed)
-        #     # Actually we need to invert:  special_id_map[tok_id] = index_in_special_embed
-        #     pass
+        return id_vec + feat_vec                                    # (B,T,D)
+    
+        # device = token_ids.device
+        # B, S = token_ids.shape
 
-        for special_token, embed_index in self.special_id_map.items():
-            mask = (token_ids == special_token)
-            special_idx[mask] = embed_index
+        # # We'll create an output buffer (B,S,d_model)
+        # out = torch.zeros((B, S, self.d_model), device=device)
 
-        is_special = (special_idx >= 0)
-        is_product = ~is_special
+        # # 1) Identify special vs. product tokens
+        # # We'll build an index map telling us which row in 'special_embed' each token corresponds to,
+        # # or -1 if it's not a special token.
 
-        # 2) Embed special tokens
-        special_positions = special_idx[is_special]  # shape: (num_special_positions,)
-        special_embeds = self.special_embed(special_positions)  # (num_special_positions, d_model)
-        out[is_special] = special_embeds
+        # special_idx = torch.full_like(token_ids, -1, device=device)
+        # # for i, (special_id) in enumerate(self.special_id_map.items()):
+        # #     # special_id is (tok_id -> index_in_special_embed)
+        # #     # Actually we need to invert:  special_id_map[tok_id] = index_in_special_embed
+        # #     pass
 
-        # 3) Real product tokens
-        # Gather each product's row from our feature_table
-        # shape: (num_product_positions, feature_dim)
-        product_feature_vecs = self.feature_table[token_ids[is_product]]
+        # for special_token, embed_index in self.special_id_map.items():
+        #     mask = (token_ids == special_token)
+        #     special_idx[mask] = embed_index
 
-        # Pass them through the MLP/linear
-        product_embeds = self.product_mlp(product_feature_vecs)  # (num_product_positions, d_model)
-        product_embeds = gelu_approx(product_embeds)
-        # Typically we multiply by sqrt(d_model) for Transformer scale
-        product_embeds = product_embeds * math.sqrt(self.d_model)
+        # is_special = (special_idx >= 0)
+        # is_product = ~is_special
 
-        out[is_product] = product_embeds
-        return out
+        # # 2) Embed special tokens
+        # special_positions = special_idx[is_special]  # shape: (num_special_positions,)
+        # special_embeds = self.special_embed(special_positions)  # (num_special_positions, d_model)
+        # out[is_special] = special_embeds
+
+        # # 3) Real product tokens
+        # # Gather each product's row from our feature_table
+        # # shape: (num_product_positions, feature_dim)
+        # product_feature_vecs = self.feature_table[token_ids[is_product]]
+
+        # # Pass them through the MLP/linear
+        # product_embeds = self.product_mlp(product_feature_vecs)  # (num_product_positions, d_model)
+        # product_embeds = gelu_approx(product_embeds)
+        # # Typically we multiply by sqrt(d_model) for Transformer scale
+        # product_embeds = product_embeds * math.sqrt(self.d_model)
+
+        # out[is_product] = product_embeds
+        # return out
     
 ##############################################################################
 # 2. LayerNormalization
@@ -470,7 +488,7 @@ class Transformer(nn.Module):
     takes a single sequence of tokens and does next-token prediction.
     """
     def __init__(self, 
-                 tgt_vocab_size: int, 
+                 src_seq_len: int, 
                  # src_seq_len: int,
                  # tgt_seq_len: int,
                  # lto_seq_len: int,
@@ -488,12 +506,12 @@ class Transformer(nn.Module):
         # self.token_emb = InputEmbeddings(d_model, vocab_size)
         # self.pos_enc   = PositionalEncoding(d_model, max_seq_len, dropout)
 
-        self.token_embed = SpecialPlusFeatureLookup(
-            d_model = d_model,
-            feature_tensor = feature_tensor,
-            special_token_ids = special_token_ids,
-            hidden_dim = d_ff # using d_ff as MLP hidden size
-        )
+        # self.token_embed = SpecialPlusFeatureLookup(
+        #     d_model = d_model,
+        #     feature_tensor = feature_tensor,
+        #     special_token_ids = special_token_ids,
+        #     hidden_dim = d_ff # using d_ff as MLP hidden size
+        # )
 
         # lto_embed = SpecialPlusFeatureLookup(
         #     d_model = d_model,
@@ -508,6 +526,14 @@ class Transformer(nn.Module):
         # tgt_pos = PositionalEncoding(d_model, tgt_seq_len, dropout)
         # lto_pos = PositionalEncoding(d_model, lto_seq_len, dropout)
 
+        self.token_embed = SpecialPlusFeatureLookup(
+                d_model        = d_model,
+                feature_tensor = feature_tensor,           # (59, 34)
+                product_ids    = list(range(13, 57)),      # 13 … 56
+                vocab_size     = src_seq_len                # 59
+        )
+
+
         self.pos_enc   = PositionalEncoding(d_model, max_seq_len, dropout)
 
         # Build N decoder blocks
@@ -519,7 +545,10 @@ class Transformer(nn.Module):
             blocks.append(blk)
         self.decoder = Decoder(d_model, nn.ModuleList(blocks))
         # Final projection to vocab
-        self.projection = ProjectionLayer(d_model, tgt_vocab_size)
+        self.projection = ProjectionLayer(d_model, src_seq_len)
+
+        # secondary head that projects only into the 9‑class decision space
+        self.decision_head = nn.Linear(d_model, len(DECISION_IDS))
 
         # (Optional) param init
         for p in self.parameters():
@@ -534,7 +563,8 @@ class Transformer(nn.Module):
         x = self.token_embed(input_seq)
         x = self.pos_enc(x)
         x = self.decoder(x)
-        logits = self.projection(x)
+        x = self.projection(x)
+        logits = self.decision_head(x)
         return logits
 
 ##############################################################################
@@ -552,7 +582,7 @@ def build_transformer(vocab_size: int,
                       kernel_type: str="exp"):
     
     transformer = Transformer(
-        tgt_vocab_size   = vocab_size,
+        src_seq_len   = vocab_size,
         max_seq_len  = max_seq_len,
         d_model      = d_model,
         n_layers     = n_layers,

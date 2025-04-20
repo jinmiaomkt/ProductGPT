@@ -72,6 +72,12 @@ SOS_PROD_ID   = 58
 SPECIAL_IDS   = [PAD_ID, SOS_DEC_ID, EOS_DEC_ID, UNK_DEC_ID, EOS_PROD_ID, SOS_PROD_ID]           # used later
 MAX_TOKEN_ID  = SOS_PROD_ID                # 58
 
+# --------------------------------------------
+# decision / product partition of the vocab
+# --------------------------------------------
+DECISION_IDS = torch.tensor([1,2,3,4,5,6,7,8,9])          # len = 9
+PRODUCT_IDS  = torch.tensor(list(range(13, 57)))          # 13 … 56
+
 df = pd.read_excel("/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx", sheet_name=0)
 
 ## NewProductIndex3 is not a feature
@@ -321,7 +327,7 @@ def get_dataloaders(config):
 ##############################################################################
 def get_model(config, feature_tensor, special_token_ids):
     model = build_transformer(
-        vocab_size = config['vocab_size_tgt'],  
+        vocab_size = config['vocab_size_src'],  
         max_seq_len = config['seq_len_ai'],
         d_model = config['d_model'], 
         n_layers = config['N'], 
