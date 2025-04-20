@@ -1,58 +1,73 @@
-import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Hide most TF log messages
+# import os
+# import warnings
+# import math
+# import json
+# import torch
+# import re
+# import torch.nn as nn
+# import torch.nn.functional as F
+# import torch.quantization
+# import numpy as np
+# import pandas as pd
 
-import warnings
-warnings.filterwarnings("ignore")
+# from tokenizers import Tokenizer, pre_tokenizers, trainers, models
+# from tokenizers.pre_tokenizers import Split, Sequence
 
-import math
-import json
-import torch
-import re
+# from torch.utils.data import Dataset, DataLoader
+# from tokenizers import Tokenizer, models, pre_tokenizers, trainers
+# from dataset4_decoderonly import TransformerDataset, load_json_dataset
+
+# from model4_decoderonly_feature_git import build_transformer
+# from config4git import get_config, get_weights_file_path, latest_weights_file_path
+
+# from sklearn.metrics import confusion_matrix, accuracy_score, f1_score, average_precision_score
+# from sklearn.preprocessing import label_binarize
+
+# import torch
+# import torch.nn as nn
+# from torch.utils.data import Dataset, DataLoader, random_split
+# from torch.optim.lr_scheduler import LambdaLR
+
+# from tqdm import tqdm
+# from pathlib import Path
+
+# # Huggingface datasets and tokenizers
+# from tokenizers import Tokenizer
+# from tokenizers.models import WordLevel
+# from tokenizers.trainers import WordLevelTrainer
+# from tokenizers.pre_tokenizers import Whitespace
+
+# # Import LAMB and AMP components
+# from pytorch_lamb import Lamb
+# import deepspeed
+# # from deepspeed.runtime.lr_schedules import WarmupLR
+# from torch.cuda.amp import GradScaler, autocast
+
+# # For additional metrics
+# from sklearn.metrics import confusion_matrix, accuracy_score
+# import numpy as np
+
+# # Set DeepSpeed logger to ERROR (so it only shows errors)
+# import logging
+
+import os, warnings, math, json, logging, re, torch, numpy as np, pandas as pd
+from pathlib import Path
+from tqdm import tqdm
+from sklearn.metrics import confusion_matrix, accuracy_score, f1_score, average_precision_score
+from sklearn.preprocessing import label_binarize
+from torch.utils.data import DataLoader, random_split
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.quantization
-import numpy as np
-import pandas as pd
+import deepspeed
+from pytorch_lamb import Lamb
+from tokenizers import Tokenizer, models, pre_tokenizers
 
-from tokenizers import Tokenizer, pre_tokenizers, trainers, models
-from tokenizers.pre_tokenizers import Split, Sequence
-
-from torch.utils.data import Dataset, DataLoader
-from tokenizers import Tokenizer, models, pre_tokenizers, trainers
 from dataset4_decoderonly import TransformerDataset, load_json_dataset
-
 from model4_decoderonly_feature_git import build_transformer
 from config4git import get_config, get_weights_file_path, latest_weights_file_path
 
-from sklearn.metrics import confusion_matrix, accuracy_score, f1_score, average_precision_score
-from sklearn.preprocessing import label_binarize
-
-import torch
-import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader, random_split
-from torch.optim.lr_scheduler import LambdaLR
-
-from tqdm import tqdm
-from pathlib import Path
-
-# Huggingface datasets and tokenizers
-from tokenizers import Tokenizer
-from tokenizers.models import WordLevel
-from tokenizers.trainers import WordLevelTrainer
-from tokenizers.pre_tokenizers import Whitespace
-
-# Import LAMB and AMP components
-from pytorch_lamb import Lamb
-import deepspeed
-# from deepspeed.runtime.lr_schedules import WarmupLR
-from torch.cuda.amp import GradScaler, autocast
-
-# For additional metrics
-from sklearn.metrics import confusion_matrix, accuracy_score
-import numpy as np
-
-# Set DeepSpeed logger to ERROR (so it only shows errors)
-import logging
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Hide most TF log messages
+warnings.filterwarnings("ignore")
 logging.getLogger("deepspeed").setLevel(logging.ERROR)
 
 # ------------------------------------------------------------
@@ -68,9 +83,10 @@ FIRST_PROD_ID = 13
 LAST_PROD_ID  = 56                        # product IDs w/ 34‑dim features
 EOS_PROD_ID   = 57
 SOS_PROD_ID   = 58
+UNK_PROD_ID   = 59
 
 SPECIAL_IDS   = [PAD_ID, SOS_DEC_ID, EOS_DEC_ID, UNK_DEC_ID, EOS_PROD_ID, SOS_PROD_ID]           # used later
-MAX_TOKEN_ID  = SOS_PROD_ID                # 58
+MAX_TOKEN_ID  = UNK_PROD_ID                # 58
 
 # --------------------------------------------
 # decision / product partition of the vocab
@@ -123,9 +139,8 @@ feature_cols = [
 ]
 
 ## Determine max_token_id and the dimension
-max_token_id =  58
-feature_dim = 34
-feature_array = np.zeros((max_token_id + 1, feature_dim), dtype=np.float32)
+feature_dim = len(feature_cols)
+feature_array = np.zeros((MAX_TOKEN_ID + 1, feature_dim), dtype=np.float32)
 
 for idx, row in df.iterrows():
     token_id = int(df["NewProductIndex6"].iloc[idx])  
@@ -260,6 +275,7 @@ def build_tokenizer_src():
 
     fixed_vocab[str(57)] = 57
     fixed_vocab[str(58)] = 58
+    fixed_vocab[str(59)] = 59
 
     tokenizer.model = models.WordLevel(vocab=fixed_vocab, unk_token="[UNK]")
     return tokenizer

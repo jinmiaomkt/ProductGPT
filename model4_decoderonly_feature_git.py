@@ -120,7 +120,7 @@ class SpecialPlusFeatureLookup(nn.Module):
 
         product_mask = torch.zeros(vocab_size_src, dtype=torch.bool)
         product_mask[product_ids] = True
-        self.register_buffer("product_mask", product_mask, persistent=False)   # ✔️ buffer
+        self.register_buffer("product_mask", product_mask, persistent=False)   
 
         # Build a dictionary mapping special IDs -> index in special embedding
         # self.special_id_map = {}
@@ -539,7 +539,7 @@ class Transformer(nn.Module):
         self.token_embed = SpecialPlusFeatureLookup(
                 d_model        = d_model,
                 feature_tensor = feature_tensor,           # (59, 34)
-                product_ids    = list(range(13, 57)),      # 13 … 56
+                product_ids    = list(range(13, 57), 59),      # 13 … 56
                 vocab_size_src     = vocab_size_src                # 59
         )
 
