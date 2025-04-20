@@ -327,7 +327,8 @@ def get_dataloaders(config):
 ##############################################################################
 def get_model(config, feature_tensor, special_token_ids):
     model = build_transformer(
-        vocab_size = config['vocab_size_tgt'],  
+        vocab_size_src = config['vocab_size_src'],
+        vocab_size_tgt = config['vocab_size_tgt'],  
         max_seq_len = config['seq_len_ai'],
         d_model = config['d_model'], 
         n_layers = config['N'], 
