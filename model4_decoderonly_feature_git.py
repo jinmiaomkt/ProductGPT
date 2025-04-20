@@ -120,7 +120,7 @@ class SpecialPlusFeatureLookup(nn.Module):
 
         product_mask = torch.zeros(vocab_size, dtype=torch.bool)
         product_mask[product_ids] = True
-        self.register_buffer("product_mask", self.product_mask, persistent=False)   # ✔️ buffer
+        self.register_buffer("product_mask", product_mask, persistent=False)   # ✔️ buffer
 
         # Build a dictionary mapping special IDs -> index in special embedding
         # self.special_id_map = {}
