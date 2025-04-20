@@ -539,7 +539,7 @@ class Transformer(nn.Module):
         self.token_embed = SpecialPlusFeatureLookup(
                 d_model        = d_model,
                 feature_tensor = feature_tensor,           # (59, 34)
-                product_ids    = list(range(13, 57), 59),      # 13 … 56
+                product_ids    = list(range(13, 57)) + [59],      # 13 … 56
                 vocab_size_src     = vocab_size_src                # 59
         )
 
