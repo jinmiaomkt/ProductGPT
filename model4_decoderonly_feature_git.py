@@ -557,7 +557,7 @@ class Transformer(nn.Module):
         self.projection = ProjectionLayer(d_model, src_seq_len)
 
         # secondary head that projects only into the 9‑class decision space
-        self.decision_head = nn.Linear(d_model, len(DECISION_IDS))
+        # self.decision_head = nn.Linear(d_model, len(DECISION_IDS))
 
         # (Optional) param init
         for p in self.parameters():
@@ -572,8 +572,8 @@ class Transformer(nn.Module):
         x = self.token_embed(input_seq)
         x = self.pos_enc(x)
         x = self.decoder(x)
-        x = self.projection(x)
-        logits = self.decision_head(x)
+        logits = self.projection(x)
+        # logits = self.decision_head(x)
         return logits
 
 ##############################################################################
