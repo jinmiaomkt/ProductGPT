@@ -87,83 +87,131 @@ def gelu_approx(x: torch.Tensor) -> torch.Tensor:
         math.sqrt(2.0 / math.pi) * (x + 0.044715 * x.pow(3))
     ))
 
+
 class SpecialPlusFeatureLookup(nn.Module):
-    """
-    A single module that, given a batch of token IDs [0..109],
-    produces an embedding of dimension d_model.
+    def __init__(self, d_model: int,
+                 feature_tensor: torch.Tensor,
+                 product_ids: list[int],
+                 vocab_size_src: int):
 
-    - For special tokens (like {0,107,108,109}), we use a small learned embedding.
-    - For real product IDs [1..65], we gather from a
-      precomputed feature_tensor and pass through an MLP to get a d_model vector.
-    """
-
-    def __init__(self,
-                d_model: int,
-                feature_tensor: torch.Tensor,
-                product_ids: list[int], 
-                vocab_size_src: int):
         super().__init__()
-        """
-        :param d_model: dimension of the final embedding for each token
-        :param feature_tensor: shape (max_token_id+1, feature_dim)
-                              A buffer/parameter with row i = feature vector for token i
-        :param special_token_ids: list of token IDs that have no product features (like [0,107,108,109])
-        :param hidden_dim: optional dimension for an MLP hidden layer if you want more nonlinearity
-        """
         self.d_model = d_model
-        self.feature_dim = feature_tensor.shape[1]
-        self.max_id = feature_tensor.shape[0] - 1
+        self.feature_dim = feature_tensor.size(1)
 
-        self.id_embed = nn.Embedding(vocab_size_src, d_model)
-        self.feat_proj = nn.Linear(feature_tensor.size(1), d_model, bias=False)
-        self.register_buffer("feature_table", feature_tensor, persistent=False)
+        # ── id and feature branches ─────────────────────────────
+        self.id_embed  = nn.Embedding(vocab_size_src, d_model)
+        self.feat_proj = nn.Linear(self.feature_dim, d_model, bias=False)
 
-        product_mask = torch.zeros(vocab_size_src, dtype=torch.bool)
-        product_mask[product_ids] = True
-        self.register_buffer("product_mask", product_mask, persistent=False)   
+        # constant look‑up table (59,34)
+        self.register_buffer("feat_tbl", feature_tensor, persistent=False)
 
-        # Build a dictionary mapping special IDs -> index in special embedding
-        # self.special_id_map = {}
-        # for idx, tok_id in enumerate(special_token_ids):
-        #     self.special_id_map[tok_id] = idx
+        # mask: True for product tokens (13‥56 and 59)
+        prod_mask = torch.zeros(vocab_size_src, dtype=torch.bool)
+        prod_mask[product_ids] = True
+        self.register_buffer("prod_mask", prod_mask, persistent=False)
 
-        # self.num_special = len(special_token_ids)
-        # self.special_embed = nn.Embedding(self.num_special, d_model)
+        # learnable scale so the network can re‑weight the branches
+        self.gamma = nn.Parameter(torch.tensor(1.0))
 
-        # # MLP or linear to map product features -> d_model
-        # if hidden_dim > 0:
-        #     self.product_mlp = nn.Sequential(
-        #         nn.Linear(self.feature_dim, hidden_dim),
-        #         nn.ReLU(),
-        #         nn.Linear(hidden_dim, d_model),
-        #     )
-        # else:
-        #     # Single linear layer
-        #     self.product_mlp = nn.Linear(self.feature_dim, d_model)
-
-    def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
+    def forward(self, ids: torch.Tensor,
+                ext_features: torch.Tensor | None = None):
         """
-        :param token_ids: (batch_size, seq_len) integer IDs
-        :return: (batch_size, seq_len, d_model) final embeddings
-        """     
-        ids_long = token_ids.long()
-        id_vec   = self.id_embed(ids_long)                                 # (B,T,D)
+        ids          : (B,T)  int64
+        ext_features : (B,T,34) optional, used only for UNK products
+        """
+        ids_long = ids.long()                            # (B,T)
 
-        feature_raw = self.feature_table[ids_long]                            # (B,T,F)
-        feat_vec = self.feat_proj(feature_raw)                              # (B,T,D)
+        # id branch
+        id_vec = self.id_embed(ids_long)                 # (B,T,D)
 
-        # ---- feature branch only for product tokens ------------------
-        prod_mask_bt = self.product_mask[ids_long]                          # (B,T) bool
-        if prod_mask_bt.any():
-            feats_raw   = self.feat_tbl[ids_long[prod_mask_bt]]             # (N,F)
-            feats_proj  = self.feat_proj(feats_raw)                         # (N,D)
+        # feature branch
+        raw_feat = self.feat_tbl[ids_long] if ext_features is None else ext_features
+        feat_vec = self.feat_proj(raw_feat)              # (B,T,D)
 
-            feat_vec = torch.zeros_like(id_vec)                             # (B,T,D)
-            feat_vec[prod_mask_bt] = feats_proj
-        else:
-            feat_vec = torch.zeros_like(id_vec)
+        # zero‑out features for NON‑product tokens
+        keep = self.prod_mask[ids_long]                  # (B,T) bool
+        feat_vec = feat_vec * keep.unsqueeze(-1)         # broadcast
 
-        return id_vec + feat_vec                                            # (B,T,D)
+        # weighted sum
+        return id_vec + self.gamma * feat_vec
+
+# class SpecialPlusFeatureLookup(nn.Module):
+#     """
+#     A single module that, given a batch of token IDs [0..109],
+#     produces an embedding of dimension d_model.
+
+#     - For special tokens (like {0,107,108,109}), we use a small learned embedding.
+#     - For real product IDs [1..65], we gather from a
+#       precomputed feature_tensor and pass through an MLP to get a d_model vector.
+#     """
+
+#     def __init__(self,
+#                 d_model: int,
+#                 feature_tensor: torch.Tensor,
+#                 product_ids: list[int], 
+#                 vocab_size_src: int):
+#         super().__init__()
+#         """
+#         :param d_model: dimension of the final embedding for each token
+#         :param feature_tensor: shape (max_token_id+1, feature_dim)
+#                               A buffer/parameter with row i = feature vector for token i
+#         :param special_token_ids: list of token IDs that have no product features (like [0,107,108,109])
+#         :param hidden_dim: optional dimension for an MLP hidden layer if you want more nonlinearity
+#         """
+#         self.d_model = d_model
+#         self.feature_dim = feature_tensor.shape[1]
+#         self.max_id = feature_tensor.shape[0] - 1
+
+#         self.id_embed = nn.Embedding(vocab_size_src, d_model)
+#         self.feat_proj = nn.Linear(feature_tensor.size(1), d_model, bias=False)
+#         self.register_buffer("feature_table", feature_tensor, persistent=False)
+
+#         product_mask = torch.zeros(vocab_size_src, dtype=torch.bool)
+#         product_mask[product_ids] = True
+#         self.register_buffer("product_mask", product_mask, persistent=False)   
+
+#         # Build a dictionary mapping special IDs -> index in special embedding
+#         # self.special_id_map = {}
+#         # for idx, tok_id in enumerate(special_token_ids):
+#         #     self.special_id_map[tok_id] = idx
+
+#         # self.num_special = len(special_token_ids)
+#         # self.special_embed = nn.Embedding(self.num_special, d_model)
+
+#         # # MLP or linear to map product features -> d_model
+#         # if hidden_dim > 0:
+#         #     self.product_mlp = nn.Sequential(
+#         #         nn.Linear(self.feature_dim, hidden_dim),
+#         #         nn.ReLU(),
+#         #         nn.Linear(hidden_dim, d_model),
+#         #     )
+#         # else:
+#         #     # Single linear layer
+#         #     self.product_mlp = nn.Linear(self.feature_dim, d_model)
+
+#     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
+#         """
+#         :param token_ids: (batch_size, seq_len) integer IDs
+#         :return: (batch_size, seq_len, d_model) final embeddings
+#         """     
+#         ids_long = token_ids.long()
+#         id_vec   = self.id_embed(ids_long)                                 # (B,T,D)
+
+#         feature_raw = self.feature_table[ids_long]                            # (B,T,F)
+#         feat_vec = self.feat_proj(feature_raw)                              # (B,T,D)
+
+#         # ---- feature branch only for product tokens ------------------
+#         prod_mask_bt = self.product_mask[ids_long]                          # (B,T) bool
+#         if prod_mask_bt.any():
+#             feats_raw   = self.feat_tbl[ids_long[prod_mask_bt]]             # (N,F)
+#             feats_proj  = self.feat_proj(feats_raw)                         # (N,D)
+
+#             feat_vec = torch.zeros_like(id_vec)                             # (B,T,D)
+#             feat_vec[prod_mask_bt] = feats_proj
+#         else:
+#             feat_vec = torch.zeros_like(id_vec)
+
+#         return id_vec + feat_vec                                            # (B,T,D)
     
         # device = token_ids.device
         # B, S = token_ids.shape
@@ -552,16 +600,21 @@ class Transformer(nn.Module):
             ff_block  = FeedForwardBlock(d_model, d_ff, dropout)
             blk = DecoderBlock(d_model, performer, ff_block, dropout)
             blocks.append(blk)
-        self.decoder = Decoder(d_model, nn.ModuleList(blocks))
+        self.decoder = Decoder(d_model, nn.ModuleList(blocks))        
         # Final projection to vocab
         self.projection = ProjectionLayer(d_model, vocab_size_tgt)
+
+        self.proj_head = nn.Sequential(
+                nn.Linear(d_model, d_model),
+                nn.ReLU(inplace=True),
+                nn.Linear(d_model, 128))
 
         # (Optional) param init
         for p in self.parameters():
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, input_seq: torch.Tensor) -> torch.Tensor:
+    def forward(self, input_seq: torch.Tensor, return_hidden=False):
         """
         input_seq: (B, seq_len) integer tokens
         returns:   (B, seq_len, vocab_size)
@@ -571,6 +624,9 @@ class Transformer(nn.Module):
         x = self.decoder(x)
         logits = self.projection(x)
         # logits = self.decision_head(x)
+
+        if return_hidden:
+            return logits, x
         return logits
 
 ##############################################################################

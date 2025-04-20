@@ -359,6 +359,29 @@ def get_model(config, feature_tensor, special_token_ids):
 ##############################################################################
 # Training Loop
 ##############################################################################
+
+def nt_xent(z, pids, tau=0.1):
+    """
+    (very small) NT‑Xent on the product‑token mini‑batch
+
+        z      : (N,128)  – L2‑normalised projections
+        pids   : (N,)     – product indices; positives share the same pid
+    """
+    z = F.normalize(z, dim=-1)
+    sim = torch.matmul(z, z.T) / tau           # (N,N)
+
+    # mask self‑similarity
+    self_mask = torch.eye(len(z), device=z.device).bool()
+    sim.masked_fill_(self_mask, -1e9)
+
+    # build positive mask : same pid → 1
+    pos_mask = (pids.unsqueeze(0) == pids.unsqueeze(1)).bool() & ~self_mask
+    # for each anchor i, log ∑_pos exp(sim[i,j])
+    log_pos = torch.logsumexp(sim.masked_fill(~pos_mask, -1e9), dim=1)
+    log_all = torch.logsumexp(sim,                         dim=1)
+    loss = -(log_pos - log_all).mean()
+    return loss
+
 def train_model(config):
     # Define the device
     device = "cuda" if torch.cuda.is_available() else "mps" if torch.has_mps or torch.backends.mps.is_available() else "cpu"
@@ -381,7 +404,8 @@ def train_model(config):
     weights[9] = config['weight']
     weights = weights.to(device)
     loss_fn = FocalLoss(gamma=config['gamma'], ignore_index=tokenizer_tgt.token_to_id('[PAD]'), class_weights=weights).to(device)
-    
+    lambda_ctr = 0.1
+
     # -------------------------------
     # DeepSpeed Configuration
     # -------------------------------
@@ -453,40 +477,49 @@ def train_model(config):
         model_engine.train()
         torch.cuda.empty_cache()
 
+        cumm_ce, cumm_ctr = 0., 0.
+        
         batch_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch:02d}")
-        total_loss = 0.0
+        # total_loss = 0.0
 
         for batch in batch_iterator:
             decoder_input = batch['aggregate_input'].to(device)
             label         = batch['label'].to(device)
 
             model_engine.zero_grad()
-            logits = model_engine(decoder_input)  # (B, seq_len, vocab_size)
+            logits, h = model_engine(decoder_input, return_hidden = True)  # (B, seq_len, vocab_size)
 
             B, T, V = logits.shape
             decision_positions = torch.arange(config['ai_rate'] - 1, T, step=config['ai_rate'], device=logits.device)  # shape: (N,)
             decision_logits = logits[:, decision_positions, :]  # shape: (B, N, V)
-
-            # debug_idx = torch.randint(0, B, (1,))
-            # print("pos, pred, true:",
-            #     [(p.item(), logits[debug_idx, p].argmax(-1).item(),
-            #         label[debug_idx, i].item())
-            #     for i,p in enumerate(decision_positions[:5])])
             
-            loss = loss_fn(
+            loss_ce = loss_fn(
                 decision_logits,  # predict next token
                 label
             )
 
+            # ── contrastive regulariser on *all* tokens ───────────────────────
+            #   every token in `inp` is guaranteed to be a product‑ID (13‑56, 59)
+            flat_h   = h.reshape(-1, h.size(-1))                # (B*T, D_model)
+            flat_ids = decoder_input.reshape(-1)                          # (B*T,)
+
+            z        = model_engine.module.proj_head(flat_h)    # (B*T, 128)
+            loss_ctr = nt_xent(z, flat_ids)                     # NT‑Xent                      
+
+            loss = loss_ce + lambda_ctr * loss_ctr
+
             model_engine.backward(loss)
             model_engine.step()
 
-            total_loss += loss.item()
+            cumm_ce  += loss_ce.item()
+            cumm_ctr += loss_ctr.item()
+
+            # total_loss += loss.item()
             global_step += 1
 
-        train_loss = total_loss / len(train_dataloader)
+        loss = loss / len(train_dataloader)
         current_lr = model_engine.optimizer.param_groups[0]["lr"]
-        print(f"\nEpoch {epoch}: LR={current_lr:.6f}  TrainLoss={train_loss:.4f}")
+        print(f"\nEpoch {epoch}: LR={current_lr:.6f}  Train Cross-Entropy Loss={cumm_ce:.4f}  Contrastive Loss={cumm_ctr:.4f}  Train Loss={loss:.4f}")
 
         # Evaluate
         val_loss, val_conf_mat, val_ppl, val_hit_rate, val_f1_score, val_auprc = evaluate(val_dataloader, model_engine, device, loss_fn, config['ai_rate'])
