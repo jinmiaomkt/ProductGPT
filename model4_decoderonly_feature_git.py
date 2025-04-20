@@ -148,7 +148,7 @@ class SpecialPlusFeatureLookup(nn.Module):
         ids_long = token_ids.long()
         id_vec   = self.id_embed(ids_long)                                 # (B,T,D)
 
-        feature_raw = self.feature_table[id_vec]                            # (B,T,F)
+        feature_raw = self.feature_table[ids_long]                            # (B,T,F)
         feat_vec = self.feat_proj(feature_raw)                              # (B,T,D)
 
         # ---- feature branch only for product tokens ------------------
