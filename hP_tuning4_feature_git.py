@@ -12,16 +12,17 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 # ----------------------------------------------------------------------------------
 # 1.  Search space
 # ----------------------------------------------------------------------------------
-d_model_values     = [16, 32, 64]
-d_ff_values        = [16, 32, 64]
-N_values           = [2, 4, 6]
-num_heads_values   = [2, 4, 8]
+d_model_values     = [32, 64, 128]
+d_ff_values        = [32, 64, 128]
+N_values           = [6]
+num_heads_values   = [8]
+gamma_values       = [0.0, 1.0, 2.0]
 lr_values          = [0.00001]
-weight_values      = [4]
+weight_values      = [2, 4, 8]
 
 HP_GRID = list(itertools.product(
     d_model_values, d_ff_values, N_values,
-    num_heads_values, lr_values, weight_values))
+    num_heads_values,  gamma_values, lr_values, weight_values))
 
 # ----------------------------------------------------------------------------------
 # 2.  S3 helper
@@ -46,7 +47,7 @@ def run_single_job(hp_tuple, gpu_id):
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     os.environ["MASTER_PORT"] = str(random.randint(12000, 20000))
 
-    d_model, d_ff, N, num_heads, lr, weight = hp_tuple
+    d_model, d_ff, N, num_heads, gamma, lr, weight = hp_tuple
     cfg = get_config()
 
     cfg.update(dict(
@@ -54,11 +55,12 @@ def run_single_job(hp_tuple, gpu_id):
         d_ff      = d_ff,
         N         = N,
         num_heads = num_heads,
+        gamma     = gamma,
         lr        = lr,
         weight    = weight,
     ))
 
-    tag              = f"d{d_model}_ff{d_ff}_N{N}_h{num_heads}_lr{lr:.0e}_w{weight}"
+    tag              = f"d{d_model}_ff{d_ff}_N{N}_h{num_heads}_gamma{gamma}_lr{lr:.0e}_w{weight}"
     cfg["model_basename"] = f"ProdGPT_{tag}_{uuid.uuid4().hex[:6]}"
 
     # ---  launch training  --------------------------------------------------------
