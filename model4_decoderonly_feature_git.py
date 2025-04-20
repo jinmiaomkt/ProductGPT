@@ -540,7 +540,7 @@ class Transformer(nn.Module):
                 d_model        = d_model,
                 feature_tensor = feature_tensor,           # (59, 34)
                 product_ids    = list(range(13, 57)),      # 13 … 56
-                vocab_size     = vocab_size_src                # 59
+                vocab_size_src     = vocab_size_src                # 59
         )
 
         self.pos_enc   = PositionalEncoding(d_model, max_seq_len, dropout)
