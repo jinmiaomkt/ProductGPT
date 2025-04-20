@@ -503,8 +503,18 @@ def train_model(config):
             flat_h   = h.reshape(-1, h.size(-1))                # (B*T, D_model)
             flat_ids = decoder_input.reshape(-1)                          # (B*T,)
 
-            z        = model_engine.module.proj_head(flat_h)    # (B*T, 128)
-            loss_ctr = nt_xent(z, flat_ids)                     # NT‑Xent                      
+            k = config['k']                     # any number that fits your GPU
+            if flat_h.size(0) > k:
+                idx      = torch.randperm(flat_h.size(0), device=flat_h.device)[:k]
+                z_sub    = model_engine.module.proj_head(flat_h[idx])   # (k,128)
+                ids_sub  = flat_ids[idx]                                # (k,)
+            else:
+                z_sub, ids_sub = model_engine.module.proj_head(flat_h), flat_ids
+
+            loss_ctr = nt_xent(z_sub, ids_sub)                     # NT-Xent
+
+            # z        = model_engine.module.proj_head(flat_h)    # (B*T, 128)
+            # loss_ctr = nt_xent(z, flat_ids)                     # NT‑Xent                      
 
             loss = loss_ce + lambda_ctr * loss_ctr
 
