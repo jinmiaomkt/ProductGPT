@@ -359,28 +359,30 @@ def get_model(config, feature_tensor, special_token_ids):
 ##############################################################################
 # Training Loop
 ##############################################################################
-
 def nt_xent(z, pids, tau=0.1):
     """
-    (very small) NT‑Xent on the product‑token mini‑batch
-
-        z      : (N,128)  – L2‑normalised projections
-        pids   : (N,)     – product indices; positives share the same pid
+    NT‑Xent for a **tiny** set of product embeddings.
+    z    : (P, d)  already L2‑normalised
+    pids : (P,)    int64 product IDs  (duplicates removed)
     """
-    z = F.normalize(z, dim=-1)
-    sim = torch.matmul(z, z.T) / tau           # (N,N)
+    sim = (z @ z.T) / tau
+    mask_self = torch.eye(len(z), device=z.device).bool()
+    sim.masked_fill_(mask_self, -1e9)
 
-    # mask self‑similarity
-    self_mask = torch.eye(len(z), device=z.device).bool()
-    sim.masked_fill_(self_mask, -1e9)
+    pos_mask  = (pids[:,None] == pids[None,:]) & ~mask_self
+    log_pos = torch.logsumexp(sim.masked_fill(~pos_mask,-1e9), dim=1)
+    log_all = torch.logsumexp(sim, dim=1)
+    return -(log_pos - log_all).mean()
 
-    # build positive mask : same pid → 1
-    pos_mask = (pids.unsqueeze(0) == pids.unsqueeze(1)).bool() & ~self_mask
-    # for each anchor i, log ∑_pos exp(sim[i,j])
-    log_pos = torch.logsumexp(sim.masked_fill(~pos_mask, -1e9), dim=1)
-    log_all = torch.logsumexp(sim,                         dim=1)
-    loss = -(log_pos - log_all).mean()
-    return loss
+def unique_by_id(h_flat: torch.Tensor, ids_flat: torch.Tensor):
+    """
+    Average duplicate product‑token hidden states so each ID appears once.
+    """
+    uniq, inverse = ids_flat.unique(return_inverse=True)
+    z_sum  = torch.zeros(len(uniq), h_flat.size(1), device=h_flat.device)
+    z_sum  = z_sum.index_add(0, inverse, h_flat)
+    counts = torch.bincount(inverse).unsqueeze(1).float()
+    return z_sum / counts, uniq       # (P,d), (P,)
 
 def train_model(config):
     # Define the device
@@ -503,15 +505,19 @@ def train_model(config):
             flat_h   = h.reshape(-1, h.size(-1))                # (B*T, D_model)
             flat_ids = decoder_input.reshape(-1)                          # (B*T,)
 
-            k = config['k']                     # any number that fits your GPU
-            if flat_h.size(0) > k:
-                idx      = torch.randperm(flat_h.size(0), device=flat_h.device)[:k]
-                z_sub    = model_engine.module.proj_head(flat_h[idx])   # (k,128)
-                ids_sub  = flat_ids[idx]                                # (k,)
-            else:
-                z_sub, ids_sub = model_engine.module.proj_head(flat_h), flat_ids
+            z_mean, uniq_id = unique_by_id(flat_h, flat_ids)
+            z_proj = F.normalize(model_engine.module.proj_head(z_mean), dim=-1)
+            loss_ctr    = nt_xent(z_proj, uniq_id)
 
-            loss_ctr = nt_xent(z_sub, ids_sub)                     # NT-Xent
+            # k = config['k']                     # any number that fits your GPU
+            # if flat_h.size(0) > k:
+            #     idx      = torch.randperm(flat_h.size(0), device=flat_h.device)[:k]
+            #     z_sub    = model_engine.module.proj_head(flat_h[idx])   # (k,128)
+            #     ids_sub  = flat_ids[idx]                                # (k,)
+            # else:
+            #     z_sub, ids_sub = model_engine.module.proj_head(flat_h), flat_ids
+
+            # loss_ctr = nt_xent(z_sub, ids_sub)                     # NT-Xent
 
             # z        = model_engine.module.proj_head(flat_h)    # (B*T, 128)
             # loss_ctr = nt_xent(z, flat_ids)                     # NT‑Xent                      
