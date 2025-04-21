@@ -131,7 +131,7 @@ def calculate_perplexity(logits, targets, pad_token=9):
 # Focal Loss Implementation
 ##############################################################################
 class FocalLoss(nn.Module):
-    def __init__(self, gamma=2.0, ignore_index=0, class_weights=None):
+    def __init__(self, gamma=0.0, ignore_index=0, class_weights=None):
         """
         Args:
             gamma (float): Focal loss exponent, default=2.
