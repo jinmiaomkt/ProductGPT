@@ -87,7 +87,6 @@ def gelu_approx(x: torch.Tensor) -> torch.Tensor:
         math.sqrt(2.0 / math.pi) * (x + 0.044715 * x.pow(3))
     ))
 
-
 class SpecialPlusFeatureLookup(nn.Module):
     def __init__(self, d_model: int,
                  feature_tensor: torch.Tensor,
@@ -126,7 +125,7 @@ class SpecialPlusFeatureLookup(nn.Module):
 
         # feature branch
         raw_feat = self.feat_tbl[ids_long] if ext_features is None else ext_features
-        feat_vec = self.feat_proj(raw_feat)              # (B,T,D)
+        feat_vec = self.feat_proj(raw_feat)              # (Batch, T 34, d_model 64)
 
         # zero‑out features for NON‑product tokens
         keep = self.prod_mask[ids_long]                  # (B,T) bool
