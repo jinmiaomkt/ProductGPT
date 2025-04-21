@@ -15,7 +15,7 @@ N_values           = [2, 4, 6]
 num_heads_values   = [8]
 gamma_values       = [0]
 lr_values          = [0.00001]
-weight_values      = [4, 8， 16]
+weight_values      = [4, 8, 16]
 
 HP_GRID = list(itertools.product(
     d_model_values, d_ff_values, N_values,
