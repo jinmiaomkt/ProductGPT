@@ -9,13 +9,13 @@ mp.set_start_method("spawn", force=True)    # ← must run only once, at import 
 import os, random, itertools, json, uuid, boto3, torch
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-d_model_values     = [32, 64, 128]
-d_ff_values        = [64]
-N_values           = [2, 4, 6]
-num_heads_values   = [8]
+d_model_values     = [32]
+d_ff_values        = [32]
+N_values           = [2]
+num_heads_values   = [2]
 gamma_values       = [0]
-lr_values          = [0.00001]
-weight_values      = [4, 8, 16]
+lr_values          = [0.0001]
+weight_values      = [10]
 
 HP_GRID = list(itertools.product(
     d_model_values, d_ff_values, N_values,
