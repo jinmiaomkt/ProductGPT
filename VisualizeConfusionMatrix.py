@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt   # required only for the heat‑map
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Load the results JSON
 # ─────────────────────────────────────────────────────────────────────────────
-json_path = Path("/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/TuningResult/metrics_FullProductGPT_FeatureBasec_d16_ff16_N4_h4_lr1e-05_w4.json")          # <= put your real path here
+json_path = Path("/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/TuningResult/FeatureBased_FullProductGPT_dmodel32_ff32_N2_heads2_lr0.0001_weight10.json")          # <= put your real path here
 with json_path.open() as f:
     stats = json.load(f)
 

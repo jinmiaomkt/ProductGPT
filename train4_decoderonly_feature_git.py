@@ -1,55 +1,3 @@
-# import os
-# import warnings
-# import math
-# import json
-# import torch
-# import re
-# import torch.nn as nn
-# import torch.nn.functional as F
-# import torch.quantization
-# import numpy as np
-# import pandas as pd
-
-# from tokenizers import Tokenizer, pre_tokenizers, trainers, models
-# from tokenizers.pre_tokenizers import Split, Sequence
-
-# from torch.utils.data import Dataset, DataLoader
-# from tokenizers import Tokenizer, models, pre_tokenizers, trainers
-# from dataset4_decoderonly import TransformerDataset, load_json_dataset
-
-# from model4_decoderonly_feature_git import build_transformer
-# from config4git import get_config, get_weights_file_path, latest_weights_file_path
-
-# from sklearn.metrics import confusion_matrix, accuracy_score, f1_score, average_precision_score
-# from sklearn.preprocessing import label_binarize
-
-# import torch
-# import torch.nn as nn
-# from torch.utils.data import Dataset, DataLoader, random_split
-# from torch.optim.lr_scheduler import LambdaLR
-
-# from tqdm import tqdm
-# from pathlib import Path
-
-# # Huggingface datasets and tokenizers
-# from tokenizers import Tokenizer
-# from tokenizers.models import WordLevel
-# from tokenizers.trainers import WordLevelTrainer
-# from tokenizers.pre_tokenizers import Whitespace
-
-# # Import LAMB and AMP components
-# from pytorch_lamb import Lamb
-# import deepspeed
-# # from deepspeed.runtime.lr_schedules import WarmupLR
-# from torch.cuda.amp import GradScaler, autocast
-
-# # For additional metrics
-# from sklearn.metrics import confusion_matrix, accuracy_score
-# import numpy as np
-
-# # Set DeepSpeed logger to ERROR (so it only shows errors)
-# import logging
-
 import os, warnings, math, json, logging, re, torch, numpy as np, pandas as pd
 from pathlib import Path
 from tqdm import tqdm
@@ -148,26 +96,6 @@ for idx, row in df.iterrows():
         feature_array[token_id] = row[feature_cols].values.astype(np.float32)
 
 feature_tensor = torch.from_numpy(feature_array)   
-
-# # ---- quick audit of the feature table ---------------------------------
-# zeros   = np.where(feature_array.sum(axis=1) == 0)[0]
-# nonzero = np.where(feature_array.sum(axis=1) != 0)[0]
-
-# print(f"TOTAL rows in feature_array : {feature_array.shape[0]}")
-# print(f"Rows with ALL‑ZERO features : {zeros}  (count = {len(zeros)})")
-# print(f"Rows with non‑zero features : first 5 examples")
-# for t in nonzero[:5]:
-#     print(f"  token {t:<2d}  ->  {feature_array[t][:8]} ...")
-
-# feat_df = pd.DataFrame(feature_array, columns=feature_cols)
-# feat_df["token_id"] = feat_df.index
-# print(feat_df.iloc[FIRST_PROD_ID:LAST_PROD_ID+1].head())
-
-# # After building feature_array
-# col_nonzero = (feature_array.sum(axis=0) != 0)
-# print("Non‑zero columns:", np.array(feature_cols)[col_nonzero])
-# print("Zero‑only columns:", np.array(feature_cols)[~col_nonzero])
-
 ##############################################################################
 # Compute Perplexity
 ##############################################################################
