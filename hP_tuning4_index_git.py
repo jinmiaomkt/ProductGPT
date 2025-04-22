@@ -12,14 +12,12 @@ import os
 import boto3
 
 # Define the hyperparameter ranges
-# d_model_values = [32, 64, 128]
-# d_ff_values    = [32, 64, 128]
-d_model_values = [64]
-d_ff_values    = [64]
-N_values       = [6]
-num_heads_values = [8]
-lr_values      = [0.001, 0.0001, 0.00001, 0.000001]
-weight_values  = [2, 4, 8, 16]
+d_model_values = [32, 64, 128]
+d_ff_values    = [32, 64, 128]
+N_values       = [4, 6, 8]
+num_heads_values = [4, 6, 8]
+lr_values      = [0.0001, 0.00001, 0.000001]
+weight_values  = [4, 8]
 
 # Initialize S3 client
 s3 = boto3.client("s3")
@@ -58,7 +56,6 @@ def hyperparam_sweep():
             "num_heads": num_heads,
             "lr": lr,
             "weight": weight,
-            # "gamma": gamma,
             "val_loss": final_metrics['val_loss'],
             "val_ppl": final_metrics['val_ppl'],
             "val_confusion_matrix": final_metrics['val_confusion_matrix'],
@@ -67,7 +64,7 @@ def hyperparam_sweep():
             "val_auprc": final_metrics['val_auprc'],
             "best_checkpoint_path": final_metrics['best_checkpoint_path']
         }
-        metrics_file = f"results_{unique_id}.json"
+        metrics_file = f"IndexBased_FullProductGPT_{unique_id}.json"
         with open(metrics_file, 'w') as f:
             json.dump(metrics_out, f, indent=2)
 
@@ -78,12 +75,12 @@ def hyperparam_sweep():
 
         best_ckpt_path = final_metrics["best_checkpoint_path"]
         if best_ckpt_path and os.path.exists(best_ckpt_path):
-            s3_checkpoint_key = f"{os.path.basename(best_ckpt_path)}"
+            s3_checkpoint_key = f"checkpoints/{os.path.basename(best_ckpt_path)}"
             upload_to_s3_boto(best_ckpt_path, bucket_name, s3_checkpoint_key)
             os.remove(best_ckpt_path)
 
         if os.path.exists(metrics_file):
-            s3_metrics_key = f"{metrics_file}"
+            s3_metrics_key = f"matrics/{metrics_file}"
             upload_to_s3_boto(metrics_file, bucket_name, s3_metrics_key)
             os.remove(metrics_file)
 
