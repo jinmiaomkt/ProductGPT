@@ -75,6 +75,9 @@ train_size = int(0.8 * n)
 val_size   = int(0.1 * n)
 test_size  = n - train_size - val_size
 
+seed_value = 33
+torch.manual_seed(seed_value)
+
 train_ds, val_ds, test_ds = random_split(dataset, [train_size, val_size, test_size])
 
 train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True,  collate_fn=collate_fn)
