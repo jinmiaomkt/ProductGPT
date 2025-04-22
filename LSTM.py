@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, random_split
 from torch.nn.utils.rnn import pad_sequence
 from tqdm import tqdm
 from sklearn.metrics import (
@@ -67,14 +67,19 @@ def collate_fn(batch):
     return x_pad, y_pad
 
 # ------------------------------------------------------------------
-# 2) DataLoaders
+# 2) DataLoaders with 80:10:10 split
 # ------------------------------------------------------------------
 dataset = SequenceDataset(JSON_PATH)
-n_train = int(0.8 * len(dataset))
-train_ds, val_ds = torch.utils.data.random_split(dataset, [n_train, len(dataset)-n_train])
+n = len(dataset)
+train_size = int(0.8 * n)
+val_size   = int(0.1 * n)
+test_size  = n - train_size - val_size
 
-train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
+train_ds, val_ds, test_ds = random_split(dataset, [train_size, val_size, test_size])
+
+train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True,  collate_fn=collate_fn)
 val_loader   = DataLoader(val_ds,   batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_fn)
+# test_ds is created but not evaluated here
 
 # ------------------------------------------------------------------
 # 3) Model
@@ -90,14 +95,14 @@ class LSTMClassifier(nn.Module):
         return self.fc(out)              # (B, T, NUM_CLASSES)
 
 # ------------------------------------------------------------------
-# 4) Evaluation function (predict one decision per aggregated input)
+# 4) Evaluation (only on val_loader)
 # ------------------------------------------------------------------
 def evaluate(loader, model, device, loss_fn):
     model.eval()
     total_loss = 0.0
     total_ppl  = 0.0
-
     all_preds, all_labels, all_probs = [], [], []
+
     with torch.no_grad():
         for x_batch, y_batch in tqdm(loader, desc="Evaluating"):
             x = x_batch.to(device)        # (B, T, 15)
@@ -142,14 +147,14 @@ def evaluate(loader, model, device, loss_fn):
     return avg_loss, conf_mat, avg_ppl, hit_rate, f1, auprc
 
 # ------------------------------------------------------------------
-# 5) Train & validate loop
+# 5) Train & validate
 # ------------------------------------------------------------------
-device       = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model        = LSTMClassifier().to(device)
-weights      = torch.ones(NUM_CLASSES, device=device)
-weights[9]   = CLASS_9_WEIGHT
-loss_fn      = nn.CrossEntropyLoss(weight=weights, ignore_index=0)
-optimizer    = torch.optim.Adam(model.parameters(), lr=1e-3)
+device    = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model     = LSTMClassifier().to(device)
+weights   = torch.ones(NUM_CLASSES, device=device)
+weights[9] = CLASS_9_WEIGHT
+loss_fn   = nn.CrossEntropyLoss(weight=weights, ignore_index=0)
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
 for epoch in range(1, EPOCHS+1):
     model.train()
