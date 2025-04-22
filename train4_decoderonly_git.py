@@ -29,7 +29,7 @@ from model4_decoderonly import build_transformer
 from dataset4_decoderonly import TransformerDataset
 from tokenizers import Tokenizer, models, pre_tokenizers, trainers
 from tokenizers.models import WordLevel
-from config4git import get_config, get_weights_file_path, latest_weights_file_path
+from config4_index_git import get_config, get_weights_file_path, latest_weights_file_path
 
 ##############################################################################
 # Tokenizer-building functions
