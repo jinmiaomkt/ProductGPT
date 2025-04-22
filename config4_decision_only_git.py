@@ -7,7 +7,7 @@ def get_config():
         "vocab_size_src": 68,
         "vocab_size_tgt": 18,
         "vocab_size_lto": 68,
-        "vocab_size_ai": 68,
+        "vocab_size_ai": 18,
         "seq_len_src": 10240,
         "seq_len_tgt": 1024,
         "seq_len_lto": 4096,
