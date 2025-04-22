@@ -13,7 +13,7 @@ def get_config():
         "seq_len_lto": 4096,
         "seq_len_ai": 1024,
         "batch_size": 64,
-        "num_epochs": 200,
+        "num_epochs": 2000,
         "warmup_steps": 5,
         "lr": 10**-5,
         "min_lr": 10**-6,
