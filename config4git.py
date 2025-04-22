@@ -14,7 +14,7 @@ def get_config():
         "seq_len_ai": 15360,
         "k": 4096,
         "batch_size": 8,
-        "num_epochs": 200,
+        "num_epochs": 600,
         "warmup_steps": 5,
         "lr": 10**-4,
         "min_lr": 10**-6,
