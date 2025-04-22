@@ -204,7 +204,7 @@ def get_dataloaders(config):
 
     # Build tokenizers
     tokenizer_tgt = build_tokenizer_tgt()  
-    tokenizer_ai = build_tokenizer_src()
+    tokenizer_ai = build_tokenizer_tgt()
 
     pad_id_src = tokenizer_ai.token_to_id("[PAD]")
     print("Product tokenizer's [PAD] ID:", pad_id_src)
@@ -229,7 +229,7 @@ def get_dataloaders(config):
 ##############################################################################
 def get_model(config):
     model = build_transformer(
-        vocab_size   = config['vocab_size_src'],
+        vocab_size   = config['vocab_size_tgt'],
         d_model      = config['d_model'],
         n_layers     = config['N'],
         n_heads      = config['num_heads'],
