@@ -8,6 +8,7 @@ import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import boto3
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -48,25 +49,20 @@ class SequenceDataset(Dataset):
     def __init__(self, json_path):
         with open(json_path, "r") as f:
             records = json.load(f)
-
         self.x_seqs, self.y_seqs = [], []
         for row in records:
             flat = [0 if t=="NA" else int(t)
                     for t in row["AggregateInput"][0].split()]
             T    = len(flat) // INPUT_DIM
             x    = torch.tensor(flat, dtype=torch.float32).view(T, INPUT_DIM)
-
             dec  = [0 if t=="NA" else int(t)
                     for t in row["Decision"][0].split()]
             valid = min(T, len(dec)) - 1
             y    = torch.tensor(dec[1:valid+1], dtype=torch.long)
-
             self.x_seqs.append(x[:valid])
             self.y_seqs.append(y)
-
     def __len__(self):
         return len(self.x_seqs)
-
     def __getitem__(self, idx):
         return self.x_seqs[idx], self.y_seqs[idx]
 
@@ -84,7 +80,6 @@ class RNNClassifier(nn.Module):
         super().__init__()
         self.rnn = nn.RNN(INPUT_DIM, hidden_size, batch_first=True)
         self.fc  = nn.Linear(hidden_size, NUM_CLASSES)
-
     def forward(self, x):
         out, _ = self.rnn(x)         # (B, T, hidden_size)
         return self.fc(out)          # (B, T, NUM_CLASSES)
@@ -94,49 +89,39 @@ class RNNClassifier(nn.Module):
 # ------------------------------------------------------------------
 def evaluate(loader, model, device, loss_fn):
     model.eval()
-    total_loss = 0.0
-    total_ppl  = 0.0
+    total_loss = total_ppl = 0.0
+    all_preds = all_labels = all_probs = []
     all_preds, all_labels, all_probs = [], [], []
-
     with torch.no_grad():
-        for x_batch, y_batch in tqdm(loader, desc="Evaluating"):
-            x = x_batch.to(device)       # (B, T, 15)
-            y = y_batch.to(device)       # (B, T)
-
+        for x_batch, y_batch in loader:
+            x = x_batch.to(device)
+            y = y_batch.to(device)
             logits = model(x)            # (B, T, C)
-            B, T, C = logits.shape
-            flat_logits = logits.reshape(-1, C)   
-            flat_labels = y.reshape(-1)            
-
+            B, T, C = logits.size()
+            flat_logits = logits.reshape(-1, C)
+            flat_labels = y.reshape(-1)
             loss = loss_fn(flat_logits, flat_labels)
             total_loss += loss.item()
-
             probs = F.softmax(flat_logits, dim=-1)
-            true_p = probs[torch.arange(len(flat_labels)), flat_labels]
-            ppl = torch.exp(-torch.log(true_p + 1e-9).mean()).item()
-            total_ppl += ppl
-
+            p_true = probs[torch.arange(len(flat_labels)), flat_labels]
+            total_ppl += torch.exp(-torch.log(p_true + 1e-9).mean()).item()
             preds = probs.argmax(dim=-1).cpu().numpy()
             labs  = flat_labels.cpu().numpy()
-            mask  = labs != 0   # drop PAD=0
+            mask  = labs != 0
             all_preds.append(preds[mask])
             all_labels.append(labs[mask])
             all_probs.append(probs.cpu().numpy()[mask, :])
-
     all_preds  = np.concatenate(all_preds)
     all_labels = np.concatenate(all_labels)
     all_probs  = np.concatenate(all_probs, axis=0)
-
     avg_loss = total_loss / len(loader)
     avg_ppl  = total_ppl  / len(loader)
-
     cls_ids   = np.arange(1, NUM_CLASSES)
     conf_mat  = confusion_matrix(all_labels, all_preds, labels=cls_ids)
     hit_rate  = accuracy_score(all_labels, all_preds)
     f1        = f1_score(all_labels, all_preds, average="macro")
     y_bin     = label_binarize(all_labels, classes=cls_ids)
     auprc     = average_precision_score(y_bin, all_probs[:,1:], average="macro")
-
     return avg_loss, conf_mat, avg_ppl, hit_rate, f1, auprc
 
 # ------------------------------------------------------------------
@@ -145,46 +130,53 @@ def evaluate(loader, model, device, loss_fn):
 def run_one_experiment(params):
     hidden_size, lr, batch_size = params
     uid = f"h{hidden_size}_lr{lr}_bs{batch_size}"
-
-    # split
     ds = SequenceDataset(JSON_PATH)
-    n  = len(ds)
-    train_size = int(0.8*n)
-    val_size   = int(0.1*n)
+    n = len(ds)
+    train_size = int(0.8 * n)
+    val_size   = int(0.1 * n)
     test_size  = n - train_size - val_size
-
     train_ds, val_ds, _ = random_split(ds, [train_size, val_size, test_size])
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  collate_fn=collate_fn)
     val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
 
-    # setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model  = RNNClassifier(hidden_size).to(device)
-
     weights = torch.ones(NUM_CLASSES, device=device)
     weights[9] = CLASS_9_WEIGHT
-    loss_fn   = nn.CrossEntropyLoss(weight=weights, ignore_index=0)
-    optim     = torch.optim.Adam(model.parameters(), lr=lr)
+    loss_fn = nn.CrossEntropyLoss(weight=weights, ignore_index=0)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    # train
     for epoch in range(1, EPOCHS+1):
         model.train()
+        train_loss = 0.0
         for xb, yb in train_loader:
             xb, yb = xb.to(device), yb.to(device)
             logits = model(xb).reshape(-1, NUM_CLASSES)
             labels = yb.reshape(-1)
-            loss   = loss_fn(logits, labels)
-
-            optim.zero_grad()
+            loss = loss_fn(logits, labels)
+            optimizer.zero_grad()
             loss.backward()
-            optim.step()
+            optimizer.step()
+            train_loss += loss.item()
+        avg_train_loss = train_loss / len(train_loader)
 
-    # validate
-    val_loss, val_cm, val_ppl, val_hit, val_f1, val_auprc = evaluate(
-        val_loader, model, device, loss_fn
-    )
+        val_loss, val_cm, val_ppl, val_hit, val_f1, val_auprc = evaluate(
+            val_loader, model, device, loss_fn
+        )
 
-    # save & upload
+        # --- print per-epoch metrics and checkpoint name stub ---
+        ckpt_name = f"rnn_{uid}.pt"
+        print(f"\n[{uid}] Epoch {epoch}")
+        print(f"  Train Loss: {avg_train_loss:.4f}")
+        print(f"  Val   Loss: {val_loss:.4f}")
+        print(f"  Val   PPL:  {val_ppl:.4f}")
+        print(f"  Val   Hit Rate: {val_hit:.4f}")
+        print(f"  Val   F1 Score: {val_f1:.4f}")
+        print(f"  Val   AUPRC:    {val_auprc:.4f}")
+        print("  Val Confusion Matrix:\n", val_cm)
+        print(f"  (checkpoint will be saved as: {ckpt_name})")
+
+    # final save & upload
     ckpt  = f"rnn_{uid}.pt"
     torch.save(model.state_dict(), ckpt)
     metrics = {
@@ -225,8 +217,6 @@ def hyperparam_sweep_parallel(max_workers=None):
             except Exception as e:
                 print(f"[Error] params={params} → {e}")
 
-# ------------------------------------------------------------------
 # entrypoint
-# ------------------------------------------------------------------
 if __name__ == "__main__":
     hyperparam_sweep_parallel()
