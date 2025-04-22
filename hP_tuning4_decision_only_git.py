@@ -12,12 +12,12 @@ import os
 import boto3
 
 # Define the hyperparameter ranges
-d_model_values = [32, 64, 128]
-d_ff_values    = [32, 64, 128]
+d_model_values = [32, 64, 128, 256]
+d_ff_values    = [32, 64, 128, 256]
 N_values       = [2, 4, 6, 8]
 num_heads_values = [2, 4, 8, 16]
-lr_values      = [0.00001]
-weight_values  = [8]
+lr_values      = [0.001, 0.0001, 0.00001, 0.000001]
+weight_values  = [2, 4, 8, 16]
 
 # Initialize S3 client
 s3 = boto3.client("s3")
@@ -42,7 +42,7 @@ def hyperparam_sweep():
         config['weight']    = weight
 
         # 3) Unique name
-        unique_id = f"dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_lr{lr}_weight{weight}"
+        unique_id = f"dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_gamma{gamma}_lr{lr}_weight{weight}"
         config['model_basename'] = f"DecisionOnly_{unique_id}"
 
         # 4) Train model
@@ -54,6 +54,7 @@ def hyperparam_sweep():
             "d_ff": d_ff,
             "N": N,
             "num_heads": num_heads,
+            # "gamma": gamma,
             "lr": lr,
             "weight": weight,
             # "gamma": gamma,
@@ -76,12 +77,12 @@ def hyperparam_sweep():
 
         best_ckpt_path = final_metrics["best_checkpoint_path"]
         if best_ckpt_path and os.path.exists(best_ckpt_path):
-            s3_checkpoint_key = f"{os.path.basename(best_ckpt_path)}"
+            s3_checkpoint_key = f"checkpoints/{os.path.basename(best_ckpt_path)}"
             upload_to_s3_boto(best_ckpt_path, bucket_name, s3_checkpoint_key)
             os.remove(best_ckpt_path)
 
         if os.path.exists(metrics_file):
-            s3_metrics_key = f"{metrics_file}"
+            s3_metrics_key = f"metrics/{metrics_file}"
             upload_to_s3_boto(metrics_file, bucket_name, s3_metrics_key)
             os.remove(metrics_file)
 
