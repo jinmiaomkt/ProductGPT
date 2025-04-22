@@ -100,7 +100,7 @@ def evaluate(loader, model, device, loss_fn):
     all_preds, all_labels, all_probs = [], [], []
 
     with torch.no_grad():
-        for x_batch, y_batch in tqdm(loader, desc="Evaluating"):
+        for x_batch, y_batch in loader:
             x = x_batch.to(device)       # (B, T, 15)
             y = y_batch.to(device)       # (B, T)
 
@@ -114,8 +114,7 @@ def evaluate(loader, model, device, loss_fn):
 
             probs = F.softmax(flat_logits, dim=-1)
             true_p = probs[torch.arange(len(flat_labels)), flat_labels]
-            ppl = torch.exp(-torch.log(true_p + 1e-9).mean()).item()
-            total_ppl += ppl
+            total_ppl += torch.exp(-torch.log(true_p + 1e-9).mean()).item()
 
             preds = probs.argmax(dim=-1).cpu().numpy()
             labs  = flat_labels.cpu().numpy()
@@ -141,7 +140,7 @@ def evaluate(loader, model, device, loss_fn):
     return avg_loss, conf_mat, avg_ppl, hit_rate, f1, auprc
 
 # ------------------------------------------------------------------
-# 4) Single-run: train on 80%, validate on 10%
+# 4) Single-run: train on 80%, validate on 10%, print per-epoch
 # ------------------------------------------------------------------
 def run_one_experiment(params):
     hidden_size, lr, batch_size = params
@@ -152,13 +151,12 @@ def run_one_experiment(params):
     n  = len(ds)
     train_size = int(0.8 * n)
     val_size   = int(0.1 * n)
-    test_size  = n - train_size - val_size
+    # test_size = n - train_size - val_size
 
-    train_ds, val_ds, _ = random_split(ds, [train_size, val_size, test_size])
+    train_ds, val_ds, _ = random_split(ds, [train_size, val_size, n-train_size-val_size])
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  collate_fn=collate_fn)
     val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
 
-    # setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model  = GRUClassifier(hidden_size).to(device)
 
@@ -167,9 +165,9 @@ def run_one_experiment(params):
     loss_fn   = nn.CrossEntropyLoss(weight=weights, ignore_index=0)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    # train
     for epoch in range(1, EPOCHS+1):
         model.train()
+        train_loss = 0.0
         for xb, yb in train_loader:
             xb, yb = xb.to(device), yb.to(device)
             logits = model(xb).reshape(-1, NUM_CLASSES)
@@ -179,13 +177,25 @@ def run_one_experiment(params):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            train_loss += loss.item()
+        avg_train_loss = train_loss / len(train_loader)
 
-    # validate
-    val_loss, val_cm, val_ppl, val_hit, val_f1, val_auprc = evaluate(
-        val_loader, model, device, loss_fn
-    )
+        # evaluate after this epoch
+        val_loss, val_cm, val_ppl, val_hit, val_f1, val_auprc = evaluate(
+            val_loader, model, device, loss_fn
+        )
 
-    # save & upload
+        # print metrics
+        print(f"\n[{uid}] Epoch {epoch}")
+        print(f"Train Loss={avg_train_loss:.4f}")
+        print(f"Val   Loss={val_loss:.4f}")
+        print(f"Val   PPL={val_ppl:.4f}")
+        print(f"Val   Hit Rate={val_hit:.4f}")
+        print(f"Val   F1 Score={val_f1:.4f}")
+        print(f"Val   AUPRC={val_auprc:.4f}")
+        print("Val Confusion Matrix:\n", val_cm)
+
+    # final save & upload
     ckpt  = f"gru_{uid}.pt"
     torch.save(model.state_dict(), ckpt)
     metrics = {
