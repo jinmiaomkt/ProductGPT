@@ -90,6 +90,20 @@
 
 # if __name__ == "__main__":
 #     hyperparam_sweep()
+
+import multiprocessing as mp
+
+# force every new process to be launched with 'spawn'
+mp.set_start_method('spawn', force=True)
+
+import multiprocessing as mp
+import torch
+
+if torch.cuda.is_available():
+    max_workers = torch.cuda.device_count()
+else:
+    max_workers = max(1, mp.cpu_count() - 1)  # leave one core free
+
 import itertools
 import json
 import os
@@ -171,7 +185,7 @@ def run_one_experiment(params):
 
     return unique_id
 
-def hyperparam_sweep_parallel(max_workers=4):
+def hyperparam_sweep_parallel(max_workers=max_workers):
     combos = itertools.product(
         d_model_values,
         d_ff_values,
@@ -194,6 +208,10 @@ def hyperparam_sweep_parallel(max_workers=4):
             except Exception as e:
                 print(f"[Error] combo={combo} -> {e}")
 
+# if __name__ == "__main__":
+#     # tune max_workers to however many GPUs (or CPU cores) you have
+#     hyperparam_sweep_parallel(max_workers=4)
+
 if __name__ == "__main__":
-    # tune max_workers to however many GPUs (or CPU cores) you have
-    hyperparam_sweep_parallel(max_workers=4)
+    # launch
+    hyperparam_sweep_parallel(max_workers=max_workers)
