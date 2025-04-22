@@ -33,7 +33,7 @@ HP_GRID      = list(itertools.product(HIDDEN_SIZES, LR_VALUES, BATCH_SIZES))
 
 INPUT_DIM      = 15
 NUM_CLASSES    = 10    # 0=PAD, 1–9 real decisions
-EPOCHS         = 20
+EPOCHS         = 80
 CLASS_9_WEIGHT = 5.0
 
 JSON_PATH = "/home/ec2-user/data/clean_list_int_wide4_simple6_IndexBasedTrain.json"
