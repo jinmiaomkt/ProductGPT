@@ -260,9 +260,9 @@ from sklearn.metrics import (
     confusion_matrix,
     accuracy_score,
     f1_score,
-    average_precision_score,
-    label_binarize,
+    average_precision_score
 )
+from sklearn.preprocessing import label_binarize
 
 # ------------------------------------------------------------------
 # 1) Load & parse your reorganized JSON
