@@ -21,7 +21,7 @@ ckpts = [o["Key"] for o in resp.get("Contents", []) if o["Key"].endswith(".pt")]
 if not ckpts:
     raise RuntimeError("No .pt files found under that prefix!")
 for key in ckpts:
-    dest = LOCALDIR / Path(key).name
+    dest = LOCALDIR/Path(key).name
     if not dest.exists():
         print(f"▶ downloading s3://{BUCKET}/{key} → {dest}")
         s3.download_file(BUCKET, key, str(dest))
@@ -31,7 +31,7 @@ for key in ckpts:
 # ── DATASET / DATALOADER ──────────────────────────────────────────
 RAW_JSON    = "/home/ec2-user/data/clean_list_int_wide4_simple6_IndexBasedTrain.json"
 SEQ_LEN_AI  = 15
-SEQ_LEN_TGT = 1
+SEQ_LEN_TGT = SEQ_LEN_AI    # must match so labels cover all decision positions
 NUM_HEADS   = 4
 AI_RATE     = 15
 BATCH_SIZE  = 256
@@ -40,8 +40,8 @@ SEED        = 33
 def build_tokenizer_fixed():
     tok = Tokenizer(models.WordLevel(unk_token="[UNK]"))
     tok.pre_tokenizer = pre_tokenizers.Whitespace()
-    vocab = {str(i): i for i in range(60)}
-    vocab.update({"[PAD]":0, "[SOS]":10, "[EOS]":11, "[UNK]":12})
+    vocab = {str(i):i for i in range(60)}
+    vocab.update({"[PAD]":0,"[SOS]":10,"[EOS]":11,"[UNK]":12})
     tok.model = models.WordLevel(vocab=vocab, unk_token="[UNK]")
     return tok
 
@@ -61,8 +61,10 @@ _, val_data, _ = random_split(
 )
 
 val_ds     = TransformerDataset(
-    val_data, tokenizer_ai, tokenizer_tgt,
-    SEQ_LEN_AI, SEQ_LEN_TGT, NUM_HEADS, AI_RATE
+    val_data,
+    tokenizer_ai, tokenizer_tgt,
+    SEQ_LEN_AI, SEQ_LEN_TGT,
+    NUM_HEADS, AI_RATE
 )
 val_loader = DataLoader(
     val_ds, batch_size=BATCH_SIZE,
@@ -137,29 +139,28 @@ def harvest(model, loader, tag):
     all_scores, all_labels = [], []
     with torch.no_grad():
         for batch in loader:
-            X     = batch["aggregate_input"].to(device)
-            lab   = batch["label"].to(device)
-            logits = model(X)   # shape (B, T, V)
+            X     = batch["aggregate_input"].to(device)   # (B, seq_len_ai)
+            lab   = batch["label"].to(device)             # (B, seq_len_tgt)
+            logits = model(X)                             # (B, seq_len_ai, V)
 
-            # only at decision positions:
-            decision_positions = torch.arange(
-                AI_RATE - 1, logits.size(1), step=AI_RATE, device=device
-            )              # e.g. [14] for SEQ_LEN_AI=15
-            dec_logits = logits[:, decision_positions, :]             # (B, N, V)
-            dec_probs  = torch.softmax(dec_logits, dim=-1)[:,:,1]     # (B, N)
-            dec_labels = lab[:, decision_positions]                   # (B, N)
+            # extract only at decision-positions
+            dp = torch.arange(AI_RATE - 1, logits.size(1), step=AI_RATE, device=device)
+            dec_logits = logits[:, dp, :]                 # (B, num_decisions, V)
+            dec_probs  = torch.softmax(dec_logits, dim=-1)[:,:,1]  # (B, num_decisions)
+            dec_labels = lab[:, dp]                        # (B, num_decisions)
 
             all_scores.append(dec_probs.cpu())
             all_labels.append(dec_labels.cpu())
 
     y_score = torch.cat(all_scores).view(-1).numpy()
     y_true  = torch.cat(all_labels).view(-1).numpy()
-    np.save(f"{tag}_val_scores.npy",  y_score)
-    np.save(f"{tag}_val_labels.npy",  y_true)
-    print(f"{tag}: saved {y_score.shape[0]} samples, positive rate={y_true.mean():.3f}")
-    print(f"{tag}: AUPRC = {average_precision_score(y_true, y_score):.4f}")
 
-# ── MAIN CHECKPOINT LOOP ─────────────────────────────────────────
+    np.save(f"{tag}_val_scores.npy", y_score)
+    np.save(f"{tag}_val_labels.npy", y_true)
+
+    print(f"{tag}: N={y_score.size}  pos_rate={y_true.mean():.3f}  AUPRC={average_precision_score(y_true, y_score):.4f}")
+
+# ── MAIN LOOP ────────────────────────────────────────────────────
 for pt in LOCALDIR.glob("*.pt"):
     key = next((k for k in BUILDERS if k in pt.name.lower()), None)
     if key is None:
@@ -169,20 +170,19 @@ for pt in LOCALDIR.glob("*.pt"):
     print(f"\n▶ loading {pt.name} as {key}")
     net = BUILDERS[key](pt.name).to(device)
 
-    # LOAD & FILTER checkpoint
     chk = torch.load(pt, map_location=device, weights_only=False)
     sd  = chk.get("model_state_dict", chk)
     if isinstance(sd, dict) and "module" in sd and isinstance(sd["module"], dict):
         sd = sd["module"]
 
-    net_dict    = net.state_dict()
-    filtered_sd = {}
-    for k, v in sd.items():
-        newk = k[len("module."):] if k.startswith("module.") else k
-        if newk in net_dict and v.shape == net_dict[newk].shape:
-            filtered_sd[newk] = v
+    net_dict = net.state_dict()
+    filtered = {}
+    for k,v in sd.items():
+        name0 = k[len("module."):] if k.startswith("module.") else k
+        if name0 in net_dict and v.shape == net_dict[name0].shape:
+            filtered[name0] = v
 
-    net.load_state_dict(filtered_sd, strict=False)
+    net.load_state_dict(filtered, strict=False)
     harvest(net, val_loader, key)
 
 # ── UPLOAD RESULTS ────────────────────────────────────────────────
