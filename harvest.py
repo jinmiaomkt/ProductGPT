@@ -60,10 +60,14 @@ _, val_data, _ = random_split(
     generator=torch.Generator().manual_seed(SEED)
 )
 
-val_ds     = TransformerDataset(val_data, tokenizer_ai, tokenizer_tgt,
-                                SEQ_LEN_AI, SEQ_LEN_TGT, NUM_HEADS, AI_RATE)
-val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE,
-                        shuffle=False, num_workers=4, pin_memory=True)
+val_ds     = TransformerDataset(
+    val_data, tokenizer_ai, tokenizer_tgt,
+    SEQ_LEN_AI, SEQ_LEN_TGT, NUM_HEADS, AI_RATE
+)
+val_loader = DataLoader(
+    val_ds, batch_size=BATCH_SIZE,
+    shuffle=False, num_workers=4, pin_memory=True
+)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -107,10 +111,8 @@ def build_feature_transformer(_=None):
     return build_transformer(
         vocab_size_src=60, vocab_size_tgt=60,
         max_seq_len=SEQ_LEN_AI, d_model=64, d_ff=64,
-        n_layers=4, n_heads=4,
-        dropout=0.1, kernel_type="relu",
-        feature_tensor=feature_tensor,
-        special_token_ids=[]
+        n_layers=4, n_heads=4, dropout=0.1, kernel_type="relu",
+        feature_tensor=feature_tensor, special_token_ids=[]
     )
 
 def build_index_transformer(_=None):
@@ -118,10 +120,8 @@ def build_index_transformer(_=None):
     return build_transformer(
         vocab_size_src=60, vocab_size_tgt=60,
         max_seq_len=SEQ_LEN_AI, d_model=64, d_ff=64,
-        n_layers=6, n_heads=8,
-        dropout=0.1, kernel_type="relu",
-        feature_tensor=feature_tensor,
-        special_token_ids=[]
+        n_layers=6, n_heads=8, dropout=0.1, kernel_type="relu",
+        feature_tensor=feature_tensor, special_token_ids=[]
     )
 
 BUILDERS = {
@@ -134,20 +134,30 @@ BUILDERS = {
 # ── HARVEST FUNCTION ──────────────────────────────────────────────
 def harvest(model, loader, tag):
     model.eval()
-    scores, labels = [], []
+    all_scores, all_labels = [], []
     with torch.no_grad():
         for batch in loader:
-            X    = batch["aggregate_input"].to(device)
-            lab  = batch["label"].to(device)
-            logits = model(X)                        # (B, T, V)
-            probs  = torch.softmax(logits, dim=-1)[:,:,1]
-            scores.append(probs.cpu()); labels.append(lab.cpu())
-    y_score = torch.cat(scores).view(-1).numpy()
-    y_true  = torch.cat(labels).view(-1).numpy()
+            X     = batch["aggregate_input"].to(device)
+            lab   = batch["label"].to(device)
+            logits = model(X)   # shape (B, T, V)
+
+            # only at decision positions:
+            decision_positions = torch.arange(
+                AI_RATE - 1, logits.size(1), step=AI_RATE, device=device
+            )              # e.g. [14] for SEQ_LEN_AI=15
+            dec_logits = logits[:, decision_positions, :]             # (B, N, V)
+            dec_probs  = torch.softmax(dec_logits, dim=-1)[:,:,1]     # (B, N)
+            dec_labels = lab[:, decision_positions]                   # (B, N)
+
+            all_scores.append(dec_probs.cpu())
+            all_labels.append(dec_labels.cpu())
+
+    y_score = torch.cat(all_scores).view(-1).numpy()
+    y_true  = torch.cat(all_labels).view(-1).numpy()
     np.save(f"{tag}_val_scores.npy",  y_score)
     np.save(f"{tag}_val_labels.npy",  y_true)
-    auprc = average_precision_score(y_true, y_score)
-    print(f"{tag}: AUPRC={auprc:.4f}")
+    print(f"{tag}: saved {y_score.shape[0]} samples, positive rate={y_true.mean():.3f}")
+    print(f"{tag}: AUPRC = {average_precision_score(y_true, y_score):.4f}")
 
 # ── MAIN CHECKPOINT LOOP ─────────────────────────────────────────
 for pt in LOCALDIR.glob("*.pt"):
@@ -169,7 +179,6 @@ for pt in LOCALDIR.glob("*.pt"):
     filtered_sd = {}
     for k, v in sd.items():
         newk = k[len("module."):] if k.startswith("module.") else k
-        # only keep if shapes match
         if newk in net_dict and v.shape == net_dict[newk].shape:
             filtered_sd[newk] = v
 
