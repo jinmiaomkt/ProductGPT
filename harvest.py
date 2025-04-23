@@ -4,7 +4,9 @@ import os, re, boto3, numpy as np, pandas as pd, torch
 from pathlib import Path
 from tqdm import tqdm
 from sklearn.metrics import average_precision_score
+from sklearn.preprocessing import label_binarize
 from torch.utils.data import random_split, DataLoader
+
 from dataset4_decoderonly import TransformerDataset, load_json_dataset
 from tokenizers import Tokenizer, models, pre_tokenizers
 
@@ -31,7 +33,7 @@ for key in ckpts:
 # ── DATASET / DATALOADER ──────────────────────────────────────────
 RAW_JSON    = "/home/ec2-user/data/clean_list_int_wide4_simple6_IndexBasedTrain.json"
 SEQ_LEN_AI  = 15
-SEQ_LEN_TGT = SEQ_LEN_AI    # must match so labels cover all decision positions
+SEQ_LEN_TGT = SEQ_LEN_AI   # so label length covers every decision position
 NUM_HEADS   = 4
 AI_RATE     = 15
 BATCH_SIZE  = 256
@@ -127,38 +129,49 @@ def build_index_transformer(_=None):
     )
 
 BUILDERS = {
-    "featurebased":   build_feature_transformer,
-    "indexbased":     build_index_transformer,
-    "gru":            build_gru,
-    "lstm":           build_lstm,
+    "featurebased": build_feature_transformer,
+    "indexbased":   build_index_transformer,
+    "gru":          build_gru,
+    "lstm":         build_lstm,
 }
 
 # ── HARVEST FUNCTION ──────────────────────────────────────────────
 def harvest(model, loader, tag):
     model.eval()
-    all_scores, all_labels = [], []
+    all_logits, all_labels = [], []
     with torch.no_grad():
         for batch in loader:
-            X     = batch["aggregate_input"].to(device)   # (B, seq_len_ai)
-            lab   = batch["label"].to(device)             # (B, seq_len_tgt)
-            logits = model(X)                             # (B, seq_len_ai, V)
+            X   = batch["aggregate_input"].to(device)   # (B, seq_len_ai)
+            lab = batch["label"].to(device)             # (B, seq_len_tgt)
+            logits = model(X)                           # (B, seq_len_ai, V)
 
-            # extract only at decision-positions
+            # pick out the decision positions
             dp = torch.arange(AI_RATE - 1, logits.size(1), step=AI_RATE, device=device)
-            dec_logits = logits[:, dp, :]                 # (B, num_decisions, V)
-            dec_probs  = torch.softmax(dec_logits, dim=-1)[:,:,1]  # (B, num_decisions)
-            dec_labels = lab[:, dp]                        # (B, num_decisions)
+            dec_logits = logits[:, dp, :]               # (B, num_decisions, V)
+            dec_labels = lab[:, dp]                     # (B, num_decisions)
 
-            all_scores.append(dec_probs.cpu())
+            all_logits.append(dec_logits.cpu())
             all_labels.append(dec_labels.cpu())
 
-    y_score = torch.cat(all_scores).view(-1).numpy()
-    y_true  = torch.cat(all_labels).view(-1).numpy()
+    # flatten
+    logits_arr = torch.cat(all_logits).view(-1, logits.size(-1)).numpy()  # (N_total, V)
+    labels_arr = torch.cat(all_labels).view(-1).numpy()                  # (N_total,)
 
-    np.save(f"{tag}_val_scores.npy", y_score)
-    np.save(f"{tag}_val_labels.npy", y_true)
+    # we care only about decision‐classes 1…9
+    classes = np.arange(1, 10)
+    y_true_bin = label_binarize(labels_arr, classes=classes)            # (N, 9)
+    y_scores   = logits_arr[:, classes]                                # predicted proba for each class
+    y_scores   = np.exp(y_scores) / np.exp(logits_arr).sum(axis=1, keepdims=True)  # softmax
 
-    print(f"{tag}: N={y_score.size}  pos_rate={y_true.mean():.3f}  AUPRC={average_precision_score(y_true, y_score):.4f}")
+    # save raw arrays
+    np.save(f"{tag}_val_logits.npy", logits_arr)
+    np.save(f"{tag}_val_labels.npy", labels_arr)
+    np.save(f"{tag}_val_scores.npy", y_scores)
+
+    # compute macro‐AUPRC
+    auprc = average_precision_score(y_true_bin, y_scores, average='macro')
+    print(f"{tag}: N={labels_arr.size:,}, positive‐rate per class: {y_true_bin.mean(axis=0)}")
+    print(f"{tag}: Macro‐AUPRC = {auprc:.4f}")
 
 # ── MAIN LOOP ────────────────────────────────────────────────────
 for pt in LOCALDIR.glob("*.pt"):
