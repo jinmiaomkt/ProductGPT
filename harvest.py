@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # harvest_s3_models.py  – run on EC2
 # --------------------------------------------------------------
-import os, re, json, boto3, numpy as np, torch
+import os, re, json, boto3, numpy as np, pandas as pd, torch
 from pathlib import Path
 from tqdm import tqdm
 from sklearn.metrics import average_precision_score
@@ -15,11 +15,10 @@ LOCALDIR.mkdir(parents=True, exist_ok=True)
 s3 = boto3.client("s3")
 
 # -----------------  download .pt files  --------------------------
-resp   = s3.list_objects_v2(Bucket=BUCKET, Prefix=PREFIX)
-ckpts  = [obj["Key"] for obj in resp.get("Contents", []) if obj["Key"].endswith(".pt")]
+resp  = s3.list_objects_v2(Bucket=BUCKET, Prefix=PREFIX)
+ckpts = [obj["Key"] for obj in resp.get("Contents", []) if obj["Key"].endswith(".pt")]
 if not ckpts:
     raise RuntimeError("No .pt files found under that prefix!")
-
 for key in ckpts:
     dest = LOCALDIR / Path(key).name
     if not dest.exists():
@@ -33,13 +32,13 @@ from torch.utils.data import random_split, DataLoader
 from dataset4_decoderonly import TransformerDataset, load_json_dataset
 from tokenizers import Tokenizer, models, pre_tokenizers
 
-RAW_JSON   = "/home/ec2-user/data/clean_list_int_wide4_simple6_IndexBasedTrain.json"
-SEQ_LEN_AI = 15
-SEQ_LEN_TGT= 1
-NUM_HEADS  = 4
-AI_RATE    = 15
-BATCH_SIZE = 256
-SEED       = 33
+RAW_JSON    = "/home/ec2-user/data/clean_list_int_wide4_simple6_IndexBasedTrain.json"
+SEQ_LEN_AI  = 15
+SEQ_LEN_TGT = 1
+NUM_HEADS   = 4
+AI_RATE     = 15
+BATCH_SIZE  = 256
+SEED        = 33
 
 def build_tokenizer_fixed():
     tok = Tokenizer(models.WordLevel(unk_token="[UNK]"))
@@ -68,11 +67,40 @@ val_ds = TransformerDataset(
     SEQ_LEN_AI, SEQ_LEN_TGT, NUM_HEADS, AI_RATE
 )
 val_loader = DataLoader(
-    val_ds, batch_size=BATCH_SIZE, shuffle=False,
-    num_workers=4, pin_memory=True
+    val_ds, batch_size=BATCH_SIZE,
+    shuffle=False, num_workers=4, pin_memory=True
 )
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# -----------------  load feature_tensor  -------------------------
+# (matches the code in your model4_decoderonly_feature_git.py)
+df = pd.read_excel(
+    "/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx", sheet_name=0
+)
+feature_cols = [
+    "Rarity","MaxLife","MaxOffense","MaxDefense",
+    "WeaponTypeOneHandSword","WeaponTypeTwoHandSword","WeaponTypeArrow",
+    "WeaponTypeMagic","WeaponTypePolearm","EthnicityIce","EthnicityRock",
+    "EthnicityWater","EthnicityFire","EthnicityThunder","EthnicityWind",
+    "GenderFemale","GenderMale","CountryRuiYue","CountryDaoQi",
+    "CountryZhiDong","CountryMengDe","type_figure","MinimumAttack",
+    "MaximumAttack","MinSpecialEffect","MaxSpecialEffect",
+    "SpecialEffectEfficiency","SpecialEffectExpertise",
+    "SpecialEffectAttack","SpecialEffectSuper","SpecialEffectRatio",
+    "SpecialEffectPhysical","SpecialEffectLife","LTO"
+]
+FIRST_PROD_ID, LAST_PROD_ID = 13, 56
+feature_dim = len(feature_cols)
+# +1 because token IDs go up to e.g. 59
+feature_array = np.zeros((60, feature_dim), dtype=np.float32)
+
+for _, row in df.iterrows():
+    token_id = int(row["NewProductIndex6"])  # as in your original code
+    if FIRST_PROD_ID <= token_id <= LAST_PROD_ID:
+        feature_array[token_id] = row[feature_cols].values.astype(np.float32)
+
+feature_tensor = torch.from_numpy(feature_array)  # (60, feature_dim)
 
 # -----------------  model builders  ------------------------------
 def _parse_hidden_size(name, default=128):
@@ -80,11 +108,11 @@ def _parse_hidden_size(name, default=128):
     return int(m.group(1)) if m else default
 
 def build_gru(ckpt_name):
-    from hP_tuning_GRU import GRUClassifier          # exact class used during training
+    from hP_tuning_GRU import GRUClassifier
     return GRUClassifier(_parse_hidden_size(ckpt_name))
 
 def build_lstm(_):
-    from LSTM import LSTMClassifier                  # exact class used during training
+    from LSTM import LSTMClassifier
     return LSTMClassifier()
 
 def build_feature_transformer(_=None):
@@ -92,9 +120,11 @@ def build_feature_transformer(_=None):
     return build_transformer(
         vocab_size_src=60, vocab_size_tgt=60,
         max_seq_len=SEQ_LEN_AI,
-        d_model=64, d_ff=64, n_layers=4, n_heads=4,
+        d_model=64, d_ff=64,
+        n_layers=4, n_heads=4,
         dropout=0.1, kernel_type="relu",
-        feature_tensor=None, special_token_ids=[]
+        feature_tensor=feature_tensor,
+        special_token_ids=[]
     )
 
 def build_index_transformer(_=None):
@@ -102,12 +132,13 @@ def build_index_transformer(_=None):
     return build_transformer(
         vocab_size_src=60, vocab_size_tgt=60,
         max_seq_len=SEQ_LEN_AI,
-        d_model=64, d_ff=64, n_layers=6, n_heads=8,
+        d_model=64, d_ff=64,
+        n_layers=6, n_heads=8,
         dropout=0.1, kernel_type="relu",
-        feature_tensor=None, special_token_ids=[]
+        feature_tensor=feature_tensor,
+        special_token_ids=[]
     )
 
-# map filename substring → builder
 BUILDERS = {
     "featurebased": build_feature_transformer,
     "indexbased"  : build_index_transformer,
@@ -123,10 +154,9 @@ def harvest(model, loader, tag):
         for batch in loader:
             X   = batch["aggregate_input"].to(device)
             lab = batch["label"].to(device)
-            logits = model(X)                      # (B, T, V)
-            probs  = torch.softmax(logits, dim=-1)[:, :, 1]  # positive-class col
-            scores.append(probs.cpu())
-            labels.append(lab.cpu())
+            logits = model(X)
+            probs  = torch.softmax(logits, dim=-1)[:, :, 1]
+            scores.append(probs.cpu()); labels.append(lab.cpu())
     y_score = torch.cat(scores).view(-1).numpy()
     y_true  = torch.cat(labels).view(-1).numpy()
     np.save(f"{tag}_val_scores.npy", y_score)
@@ -137,15 +167,15 @@ def harvest(model, loader, tag):
 
 # -----------------  loop over checkpoints  -----------------------
 for pt in LOCALDIR.glob("*.pt"):
-    tag_key = next((k for k in BUILDERS if k in pt.name.lower()), None)
-    if tag_key is None:
-        print(f"⚠️  cannot map {pt.name} → builder; skipping")
+    key = next((k for k in BUILDERS if k in pt.name.lower()), None)
+    if key is None:
+        print(f"⚠️ cannot map {pt.name} → builder; skipping")
         continue
 
-    print(f"\n▶ loading {pt.name} as {tag_key}")
-    net = BUILDERS[tag_key](pt.name).to(device)
+    print(f"\n▶ loading {pt.name} as {key}")
+    net = BUILDERS[key](pt.name).to(device)
     net.load_state_dict(torch.load(pt, map_location=device))
-    harvest(net, val_loader, tag_key)
+    harvest(net, val_loader, key)
 
 # -----------------  upload .npy back to S3  ----------------------
 for npy in Path(".").glob("*_val_*.npy"):
