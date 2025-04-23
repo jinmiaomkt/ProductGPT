@@ -18,8 +18,8 @@ from config4git import get_config
 from train4_decoderonly_feature_git import train_model
 
 # Hyper‑parameter grids
-d_model_values    = [64, 128, 256]
-d_ff_values       = [64, 128, 256]
+d_model_values    = [64]
+d_ff_values       = [64]
 N_values          = [4, 6, 8]
 num_heads_values  = [4, 6, 8]
 gamma_values      = [0]
