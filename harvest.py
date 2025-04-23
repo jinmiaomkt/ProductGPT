@@ -1,16 +1,26 @@
 #!/usr/bin/env python
-# harvest_s3_models.py  – run on EC2
+# harvest_s3_models.py – run on EC2
 # --------------------------------------------------------------
-import os, re, json, boto3, numpy as np, pandas as pd, torch
+import os
+import re
+import json
+import boto3
+import numpy as np
+import pandas as pd
+import torch
 from pathlib import Path
 from tqdm import tqdm
 from sklearn.metrics import average_precision_score
+from torch.utils.data import random_split, DataLoader
+from dataset4_decoderonly import TransformerDataset, load_json_dataset
+from tokenizers import Tokenizer, models, pre_tokenizers
 
 # -----------------  S3 parameters  -------------------------------
 BUCKET   = "productgptbucket"
 PREFIX   = "winningmodel/"
 LOCALDIR = Path("/home/ec2-user/ProductGPT/checkpoints")
 LOCALDIR.mkdir(parents=True, exist_ok=True)
+
 s3 = boto3.client("s3")
 
 # -----------------  download .pt files  --------------------------
@@ -27,10 +37,6 @@ for key in ckpts:
         print(f"✓ already have {dest}")
 
 # -----------------  dataloader setup  ----------------------------
-from torch.utils.data import random_split, DataLoader
-from dataset4_decoderonly import TransformerDataset, load_json_dataset
-from tokenizers import Tokenizer, models, pre_tokenizers
-
 RAW_JSON    = "/home/ec2-user/data/clean_list_int_wide4_simple6_IndexBasedTrain.json"
 SEQ_LEN_AI  = 15
 SEQ_LEN_TGT = 1
@@ -66,14 +72,16 @@ val_ds = TransformerDataset(
     SEQ_LEN_AI, SEQ_LEN_TGT, NUM_HEADS, AI_RATE
 )
 val_loader = DataLoader(
-    val_ds, batch_size=BATCH_SIZE,
-    shuffle=False, num_workers=4, pin_memory=True
+    val_ds, batch_size=BATCH_SIZE, shuffle=False,
+    num_workers=4, pin_memory=True
 )
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # -----------------  load feature_tensor  -------------------------
-df = pd.read_excel("/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx", sheet_name=0)
+df = pd.read_excel(
+    "/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx", sheet_name=0
+)
 feature_cols = [
     "Rarity","MaxLife","MaxOffense","MaxDefense",
     "WeaponTypeOneHandSword","WeaponTypeTwoHandSword",
@@ -129,9 +137,9 @@ def build_index_transformer(_=None):
 
 BUILDERS = {
     "featurebased": build_feature_transformer,
-    "indexbased"  : build_index_transformer,
-    "gru"         : build_gru,
-    "lstm"        : build_lstm,
+    "indexbased":   build_index_transformer,
+    "gru":          build_gru,
+    "lstm":         build_lstm,
 }
 
 # -----------------  inference helper  ----------------------------
@@ -152,24 +160,30 @@ def harvest(model, loader, tag):
     auprc = average_precision_score(y_true, y_score)
     print(f"{tag}: AUPRC={auprc:.4f}")
 
-# -----------------  main loop  -----------------------
+# -----------------  loop over checkpoints  -----------------------
 for pt in LOCALDIR.glob("*.pt"):
     key = next((k for k in BUILDERS if k in pt.name.lower()), None)
     if key is None:
-        print(f"⚠️ skipping {pt.name}; no builder match")
+        print(f"⚠️ cannot map {pt.name} → builder; skipping")
         continue
 
     print(f"\n▶ loading {pt.name} as {key}")
-    # load full pickle (weights_only=False) so we can extract our state_dict
-    chk = torch.load(pt, map_location=device, weights_only=False)
-    # extract the dict we saved in training
-    sd  = chk.get("model_state_dict", chk)
-    # if DeepSpeed wrapped it under 'module', unwrap
-    if isinstance(sd, dict) and "module" in sd:
-        sd = sd["module"]
-    # rebuild and load
     net = BUILDERS[key](pt.name).to(device)
-    net.load_state_dict(sd)
+
+    # LOAD & FILTER the checkpoint
+    chk = torch.load(pt, map_location=device, weights_only=False)
+    sd  = chk.get("model_state_dict", chk)
+    if isinstance(sd, dict) and "module" in sd and isinstance(sd["module"], dict):
+        sd = sd["module"]
+
+    net_dict    = net.state_dict()
+    filtered_sd = {}
+    for k, v in sd.items():
+        k0 = k[len("module."):] if k.startswith("module.") else k
+        if k0 in net_dict:
+            filtered_sd[k0] = v
+
+    net.load_state_dict(filtered_sd, strict=False)
     harvest(net, val_loader, key)
 
 # -----------------  upload results  ----------------------
