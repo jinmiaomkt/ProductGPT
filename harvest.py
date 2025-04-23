@@ -11,7 +11,6 @@ BUCKET   = "productgptbucket"
 PREFIX   = "winningmodel/"
 LOCALDIR = Path("/home/ec2-user/ProductGPT/checkpoints")
 LOCALDIR.mkdir(parents=True, exist_ok=True)
-
 s3 = boto3.client("s3")
 
 # -----------------  download .pt files  --------------------------
@@ -27,7 +26,7 @@ for key in ckpts:
     else:
         print(f"✓ already have {dest}")
 
-# -----------------  dataset / dataloader  ------------------------
+# -----------------  dataloader setup  ----------------------------
 from torch.utils.data import random_split, DataLoader
 from dataset4_decoderonly import TransformerDataset, load_json_dataset
 from tokenizers import Tokenizer, models, pre_tokenizers
@@ -44,7 +43,7 @@ def build_tokenizer_fixed():
     tok = Tokenizer(models.WordLevel(unk_token="[UNK]"))
     tok.pre_tokenizer = pre_tokenizers.Whitespace()
     vocab = {str(i): i for i in range(60)}
-    vocab.update({"[PAD]": 0, "[SOS]": 10, "[EOS]": 11, "[UNK]": 12})
+    vocab.update({"[PAD]":0, "[SOS]":10, "[EOS]":11, "[UNK]":12})
     tok.model = models.WordLevel(vocab=vocab, unk_token="[UNK]")
     return tok
 
@@ -74,33 +73,26 @@ val_loader = DataLoader(
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # -----------------  load feature_tensor  -------------------------
-# (matches the code in your model4_decoderonly_feature_git.py)
-df = pd.read_excel(
-    "/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx", sheet_name=0
-)
+df = pd.read_excel("/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx", sheet_name=0)
 feature_cols = [
     "Rarity","MaxLife","MaxOffense","MaxDefense",
-    "WeaponTypeOneHandSword","WeaponTypeTwoHandSword","WeaponTypeArrow",
-    "WeaponTypeMagic","WeaponTypePolearm","EthnicityIce","EthnicityRock",
-    "EthnicityWater","EthnicityFire","EthnicityThunder","EthnicityWind",
-    "GenderFemale","GenderMale","CountryRuiYue","CountryDaoQi",
-    "CountryZhiDong","CountryMengDe","type_figure","MinimumAttack",
-    "MaximumAttack","MinSpecialEffect","MaxSpecialEffect",
-    "SpecialEffectEfficiency","SpecialEffectExpertise",
-    "SpecialEffectAttack","SpecialEffectSuper","SpecialEffectRatio",
-    "SpecialEffectPhysical","SpecialEffectLife","LTO"
+    "WeaponTypeOneHandSword","WeaponTypeTwoHandSword",
+    "WeaponTypeArrow","WeaponTypeMagic","WeaponTypePolearm",
+    "EthnicityIce","EthnicityRock","EthnicityWater","EthnicityFire",
+    "EthnicityThunder","EthnicityWind","GenderFemale","GenderMale",
+    "CountryRuiYue","CountryDaoQi","CountryZhiDong","CountryMengDe",
+    "type_figure","MinimumAttack","MaximumAttack",
+    "MinSpecialEffect","MaxSpecialEffect","SpecialEffectEfficiency",
+    "SpecialEffectExpertise","SpecialEffectAttack","SpecialEffectSuper",
+    "SpecialEffectRatio","SpecialEffectPhysical","SpecialEffectLife","LTO"
 ]
 FIRST_PROD_ID, LAST_PROD_ID = 13, 56
-feature_dim = len(feature_cols)
-# +1 because token IDs go up to e.g. 59
-feature_array = np.zeros((60, feature_dim), dtype=np.float32)
-
+feature_array = np.zeros((60, len(feature_cols)), dtype=np.float32)
 for _, row in df.iterrows():
-    token_id = int(row["NewProductIndex6"])  # as in your original code
-    if FIRST_PROD_ID <= token_id <= LAST_PROD_ID:
-        feature_array[token_id] = row[feature_cols].values.astype(np.float32)
-
-feature_tensor = torch.from_numpy(feature_array)  # (60, feature_dim)
+    tid = int(row["NewProductIndex6"])
+    if FIRST_PROD_ID <= tid <= LAST_PROD_ID:
+        feature_array[tid] = row[feature_cols].values.astype(np.float32)
+feature_tensor = torch.from_numpy(feature_array)
 
 # -----------------  model builders  ------------------------------
 def _parse_hidden_size(name, default=128):
@@ -119,10 +111,8 @@ def build_feature_transformer(_=None):
     from model4_decoderonly_feature_git import build_transformer
     return build_transformer(
         vocab_size_src=60, vocab_size_tgt=60,
-        max_seq_len=SEQ_LEN_AI,
-        d_model=64, d_ff=64,
-        n_layers=4, n_heads=4,
-        dropout=0.1, kernel_type="relu",
+        max_seq_len=SEQ_LEN_AI, d_model=64, d_ff=64,
+        n_layers=4, n_heads=4, dropout=0.1, kernel_type="relu",
         feature_tensor=feature_tensor,
         special_token_ids=[]
     )
@@ -131,10 +121,8 @@ def build_index_transformer(_=None):
     from model4_decoderonly_feature_git import build_transformer
     return build_transformer(
         vocab_size_src=60, vocab_size_tgt=60,
-        max_seq_len=SEQ_LEN_AI,
-        d_model=64, d_ff=64,
-        n_layers=6, n_heads=8,
-        dropout=0.1, kernel_type="relu",
+        max_seq_len=SEQ_LEN_AI, d_model=64, d_ff=64,
+        n_layers=6, n_heads=8, dropout=0.1, kernel_type="relu",
         feature_tensor=feature_tensor,
         special_token_ids=[]
     )
@@ -155,7 +143,7 @@ def harvest(model, loader, tag):
             X   = batch["aggregate_input"].to(device)
             lab = batch["label"].to(device)
             logits = model(X)
-            probs  = torch.softmax(logits, dim=-1)[:, :, 1]
+            probs  = torch.softmax(logits, dim=-1)[:,:,1]
             scores.append(probs.cpu()); labels.append(lab.cpu())
     y_score = torch.cat(scores).view(-1).numpy()
     y_true  = torch.cat(labels).view(-1).numpy()
@@ -163,21 +151,28 @@ def harvest(model, loader, tag):
     np.save(f"{tag}_val_labels.npy", y_true)
     auprc = average_precision_score(y_true, y_score)
     print(f"{tag}: AUPRC={auprc:.4f}")
-    return auprc
 
-# -----------------  loop over checkpoints  -----------------------
+# -----------------  main loop  -----------------------
 for pt in LOCALDIR.glob("*.pt"):
     key = next((k for k in BUILDERS if k in pt.name.lower()), None)
     if key is None:
-        print(f"⚠️ cannot map {pt.name} → builder; skipping")
+        print(f"⚠️ skipping {pt.name}; no builder match")
         continue
 
     print(f"\n▶ loading {pt.name} as {key}")
+    # load full pickle (weights_only=False) so we can extract our state_dict
+    chk = torch.load(pt, map_location=device, weights_only=False)
+    # extract the dict we saved in training
+    sd  = chk.get("model_state_dict", chk)
+    # if DeepSpeed wrapped it under 'module', unwrap
+    if isinstance(sd, dict) and "module" in sd:
+        sd = sd["module"]
+    # rebuild and load
     net = BUILDERS[key](pt.name).to(device)
-    net.load_state_dict(torch.load(pt, map_location=device))
+    net.load_state_dict(sd)
     harvest(net, val_loader, key)
 
-# -----------------  upload .npy back to S3  ----------------------
+# -----------------  upload results  ----------------------
 for npy in Path(".").glob("*_val_*.npy"):
     key_out = f"{PREFIX}{npy.name}"
     print(f"↑ uploading {npy} → s3://{BUCKET}/{key_out}")
