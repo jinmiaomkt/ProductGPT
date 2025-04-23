@@ -31,41 +31,61 @@ for key in ckpts:
         print(f"✓ already have {dest}")
 
 # -----------------  dataset / dataloader  -------------------------
-# import your existing helpers exactly as you used in training
+from torch.utils.data import random_split, DataLoader
 from dataset4_decoderonly import TransformerDataset, load_json_dataset
 from tokenizers import Tokenizer, models, pre_tokenizers     # for tokenisers
 
-def build_tokenizer_src():
-    # same fixed-vocab builder you pasted earlier
+RAW_JSON = "/home/ec2-user/data/clean_list_int_wide4_simple6_IndexBasedTrain.json"
+SEQ_LEN_AI  = 15          # ← keep in sync with training
+SEQ_LEN_TGT = 1
+NUM_HEADS   = 4
+AI_RATE     = 15
+BATCH_SIZE  = 256
+SEED        = 33          # deterministic split
+
+# --- tokenisers (fixed vocab, same as training) -------------------
+def build_tokenizer_fixed():
     tok = Tokenizer(models.WordLevel(unk_token="[UNK]"))
     tok.pre_tokenizer = pre_tokenizers.Whitespace()
     vocab = {str(i): i for i in range(60)}
-    vocab["[PAD]"] = 0;  vocab["[SOS]"] = 10;  vocab["[EOS]"] = 11;  vocab["[UNK]"] = 12
+    vocab.update({"[PAD]": 0, "[SOS]": 10, "[EOS]": 11, "[UNK]": 12})
     tok.model = models.WordLevel(vocab=vocab, unk_token="[UNK]")
     return tok
 
-tokenizer_ai  = build_tokenizer_src()
-tokenizer_tgt = build_tokenizer_src()
+tokenizer_ai  = build_tokenizer_fixed()
+tokenizer_tgt = build_tokenizer_fixed()
 
-CFG = dict(               # **keep in sync with training**
-    filepath      = "/home/ec2-user/data/your_val_split.json",  # ← edit
-    seq_len_ai    = 15,      # -- as in training
-    seq_len_tgt   = 1,
-    num_heads     = 4,
-    ai_rate       = 15,
-    batch_size    = 256,
+# --- load & split -------------------------------------------------
+full_data = load_json_dataset(RAW_JSON)
+
+train_size = int(0.8 * len(full_data))
+val_size   = int(0.1 * len(full_data))
+test_size  = len(full_data) - train_size - val_size
+
+torch.manual_seed(SEED)                       # reproduce the same split
+train_data, val_data, test_data = random_split(
+    full_data, [train_size, val_size, test_size],
+    generator=torch.Generator().manual_seed(SEED)
 )
 
-val_data = load_json_dataset(CFG["filepath"])
-val_ds   = TransformerDataset(
-    val_data, tokenizer_ai, tokenizer_tgt,
-    CFG["seq_len_ai"], CFG["seq_len_tgt"],
-    CFG["num_heads"], CFG["ai_rate"]
+val_ds = TransformerDataset(
+    val_data,
+    tokenizer_ai,
+    tokenizer_tgt,
+    SEQ_LEN_AI,
+    SEQ_LEN_TGT,
+    NUM_HEADS,
+    AI_RATE
 )
-val_loader = torch.utils.data.DataLoader(
-    val_ds, batch_size=CFG["batch_size"], shuffle=False,
-    num_workers=4, pin_memory=True
+
+val_loader = DataLoader(
+    val_ds,
+    batch_size=BATCH_SIZE,
+    shuffle=False,
+    num_workers=4,
+    pin_memory=True
 )
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
