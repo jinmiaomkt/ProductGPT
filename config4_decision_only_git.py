@@ -57,7 +57,7 @@ def get_weights_file_path(config, epoch: str) -> str:
     # e.g. "ProductGPT_weights" 
     model_folder = f"{config['model_folder']}"
 
-    unique_id = f"dmodel{config['d_model']}_ff{config['d_ff']}_N{config['N']}_heads{config['num_heads']}_weight{config['weight']}"
+    unique_id = f"dmodel{config['d_model']}_ff{config['d_ff']}_N{config['N']}_heads{config['num_heads']}_lr{config['lr']}_weight{config['weight']}"
     basename = f"DecisionOnly_{unique_id}"
     model_filename = f"{basename}.pt"
     
@@ -74,7 +74,7 @@ def latest_weights_file_path(config) -> str:
     """
     model_folder = f"{config['model_folder']}"
     
-    unique_id = f"dmodel{config['d_model']}_ff{config['d_ff']}_N{config['N']}_heads{config['num_heads']}_weight{config['weight']}"
+    unique_id = f"dmodel{config['d_model']}_ff{config['d_ff']}_N{config['N']}_heads{config['num_heads']}_ lr{config['lr']}_weight{config['weight']}"
     basename = f"DecisionOnly_{unique_id}"
     model_filename = f"{basename}.pt"
 
