@@ -30,6 +30,16 @@ from tokenizers import Tokenizer, models, pre_tokenizers, trainers
 from tokenizers.models import WordLevel
 from config4_decision_only_git import get_config, get_weights_file_path, latest_weights_file_path
 
+from google.cloud import storage
+
+def upload_to_gcs(local_path: str, bucket_name: str, destination_blob_name: str):
+    """Uploads a local file to GCS bucket."""
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(destination_blob_name)
+    blob.upload_from_filename(local_path)
+    print(f"Uploaded {local_path} to gs://{bucket_name}/{destination_blob_name}")
+
 ##############################################################################
 # Tokenizer-building functions
 ##############################################################################
@@ -381,6 +391,13 @@ def train_model(config):
                 'optimizer_state_dict': model_engine.optimizer.state_dict(),
                 'global_step': global_step
             }, best_checkpoint_path)
+
+            # Upload best checkpoint to GCS
+            gcs_bucket_name = config['gcp_bucket']  # <-- your bucket
+            destination_blob = f"checkpoints/{Path(best_checkpoint_path).name}"  
+            # upload inside 'checkpoints/' folder
+            upload_to_gcs(best_checkpoint_path, gcs_bucket_name, destination_blob)
+
             print(f"  [*] New best val_loss={val_loss:.4f}, saved => {best_checkpoint_path}")
         else:
             epochs_no_improve += 1

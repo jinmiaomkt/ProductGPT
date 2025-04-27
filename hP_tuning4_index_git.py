@@ -8,19 +8,28 @@ import os
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-import boto3
+# import boto3
 import torch
 
 from config4_index_git import get_config
 from train4_decoderonly_git import train_model
 
+from google.cloud import storage
+
+def upload_to_gcs(local_path: str, bucket_name: str, destination_blob_name: str):
+    """Uploads a file to GCS bucket."""
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(destination_blob_name)
+    blob.upload_from_filename(local_path)
+    print(f"Uploaded {local_path} to gs://{bucket_name}/{destination_blob_name}")
+
 # hyperparameter ranges
 d_model_values     = [32, 64, 128]
 d_ff_values        = [32, 64, 128]
 N_values           = [4, 6, 8]
-num_heads_values   = [4, 6, 8]
-lr_values          = [1e-4, 1e-5, 1e-6]
-weight_values      = [4, 8]
+num_heads_values   = [4, 8]
+weight_values      = [2, 4, 8]
 
 # precompute the grid
 HP_GRID = list(itertools.product(
@@ -28,15 +37,15 @@ HP_GRID = list(itertools.product(
     d_ff_values,
     N_values,
     num_heads_values,
-    lr_values,
+#     lr_values,
     weight_values
 ))
 
 # Initialize S3 client
-s3 = boto3.client("s3")
+# s3 = boto3.client("s3")
 
-def upload_to_s3(local_path: str, bucket: str, key: str):
-    s3.upload_file(local_path, bucket, key)
+# def upload_to_s3(local_path: str, bucket: str, key: str):
+#    s3.upload_file(local_path, bucket, key)
 
 def run_one_experiment(params):
     d_model, d_ff, N, num_heads, lr, weight = params
@@ -87,14 +96,17 @@ def run_one_experiment(params):
         }, f, indent=2)
 
     # 6) Upload checkpoint + metrics to S3 and clean up
-    bucket = config["s3_bucket"]
-
+    # bucket = config["s3_bucket"]
+    gcs_bucket = config["gcp_bucket"]  # <- your bucket name
+    
     ckpt = results["best_checkpoint_path"]
     if ckpt and Path(ckpt).exists():
-        upload_to_s3(ckpt, bucket, f"checkpoints/{Path(ckpt).name}")
+        # upload_to_s3(ckpt, bucket, f"checkpoints/{Path(ckpt).name}")
+        upload_to_gcs(ckpt, gcs_bucket, f"checkpoints/{Path(ckpt).name}")
         os.remove(ckpt)
 
-    upload_to_s3(metrics_file, bucket, f"metrics/{metrics_file}")
+    # upload_to_s3(metrics_file, bucket, f"metrics/{metrics_file}")
+    upload_to_gcs(metrics_file, gcs_bucket, f"metrics/{metrics_file}")
     os.remove(metrics_file)
 
     return unique_id
