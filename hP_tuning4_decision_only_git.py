@@ -17,11 +17,21 @@ import os
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-import boto3
+# import boto3
 import torch
 
 from config4_decision_only_git import get_config
 from train4_decision_only_git import train_model
+
+from google.cloud import storage
+
+def upload_to_gcs(local_path: str, bucket_name: str, destination_blob_name: str):
+    """Uploads a file to GCS bucket."""
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(destination_blob_name)
+    blob.upload_from_filename(local_path)
+    print(f"Uploaded {local_path} to gs://{bucket_name}/{destination_blob_name}")
 
 # hyper‐parameter grids
 d_model_values    = [32, 64, 128, 256]
@@ -32,10 +42,10 @@ lr_values         = [1e-3, 1e-4, 1e-5, 1e-6]
 weight_values     = [2, 4, 8, 16]
 
 # S3 client
-s3 = boto3.client("s3")
+# s3 = boto3.client("s3")
 
-def upload_to_s3(local_path: str, bucket: str, key: str):
-    s3.upload_file(local_path, bucket, key)
+# def upload_to_s3(local_path: str, bucket: str, key: str):
+#     s3.upload_file(local_path, bucket, key)
 
 def run_one_experiment(params):
     """
@@ -81,13 +91,16 @@ def run_one_experiment(params):
 
     # 6) Upload checkpoint + metrics to S3
     bucket = config["s3_bucket"]
+
     ckpt = final_metrics["best_checkpoint_path"]
     if ckpt and Path(ckpt).exists():
-        upload_to_s3(ckpt, bucket, f"checkpoints/{Path(ckpt).name}")
+        # upload_to_s3(ckpt, bucket, f"checkpoints/{Path(ckpt).name}")
+        upload_to_gcs(ckpt, bucket, f"checkpoints/{Path(ckpt).name}")
         os.remove(ckpt)
 
     if Path(metrics_file).exists():
-        upload_to_s3(metrics_file, bucket, f"metrics/{metrics_file}")
+        # upload_to_s3(metrics_file, bucket, f"metrics/{metrics_file}")
+        upload_to_gcs(metrics_file, bucket, f"metrics/{metrics_file}")
         os.remove(metrics_file)
 
     return unique_id
