@@ -3,7 +3,7 @@ from pathlib import Path
 def get_config():
     return {
         # Data
-        "filepath": "/home/ec2-user/data/clean_list_int_wide4_simple6_IndexBasedTrain.json",
+        "filepath": "/home/jxm190071/data/clean_list_int_wide4_simple6_IndexBasedTrain.json",
         "vocab_size_src": 68,
         "vocab_size_tgt": 18,
         "vocab_size_lto": 68,
@@ -36,7 +36,7 @@ def get_config():
 
         # Logging and paths
         # "datasource": "ProductGPT",
-        "model_folder": "/home/ec2-user/output",
+        "model_folder": "/home/jxm190071/output",
         "model_basename": "MyProductGPT_",
         # "preload": "latest",
         "preload": None,
@@ -44,6 +44,7 @@ def get_config():
         "experiment_name": "runs/tmodel", 
 
         "s3_bucket": "productgptbucket",  # <- replace with your real bucket name
+        "gcp_bucket": "productgptbucket",  # <- replace with your real bucket name
         "s3_prefix": "my_runs",            # optional folder name in bucket
     }
 
