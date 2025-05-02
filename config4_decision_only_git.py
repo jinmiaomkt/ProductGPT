@@ -3,7 +3,7 @@ from pathlib import Path
 def get_config():
     return {
         # Data
-        "filepath": "/home/jxm190071/data/clean_list_int_wide4_simple6_FeatureBasedTrain.json",
+        "filepath": "/home/e2-user/data/clean_list_int_wide4_simple6_FeatureBasedTrain.json",
         "vocab_size_src": 68,
         "vocab_size_tgt": 18,
         "vocab_size_lto": 68,
@@ -35,7 +35,7 @@ def get_config():
 
         # Logging and paths
         # "datasource": "ProductGPT",
-        "model_folder": "/home/jxm190071/output",
+        "model_folder": "/home/ec2-user/output",
         "model_basename": "DecisionOnly_",
         # "preload": "latest",
         "preload": None,
