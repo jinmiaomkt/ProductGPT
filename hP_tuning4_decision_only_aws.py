@@ -36,10 +36,10 @@ from train4_decision_only_aws import train_model
 # hyper‐parameter grids
 d_model_values    = [32, 64, 128, 256]
 d_ff_values       = [32, 64, 128, 256]
-N_values          = [2, 4, 6, 8]
-num_heads_values  = [2, 4, 8, 16]
-lr_values         = [1e-3, 1e-4, 1e-5, 1e-6]
-weight_values     = [2, 4, 8, 16]
+N_values          = [2, 4, 6]
+num_heads_values  = [2, 4, 8]
+lr_values         = [1e-4, 1e-5, 1e-6]
+weight_values     = [2, 4, 8]
 
 # S3 client
 s3 = boto3.client("s3")
