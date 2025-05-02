@@ -21,7 +21,7 @@ import boto3
 import torch
 
 from config4_decision_only_git import get_config
-from train4_decision_only_git import train_model
+from train4_decision_only_aws import train_model
 
 # from google.cloud import storage
 
