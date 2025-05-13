@@ -13,7 +13,7 @@ import pandas as pd
 # ------------------------------------------------------------------
 # 1.  Folder with your result files
 # ------------------------------------------------------------------
-ROOT = Path("/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/TuningResult/IndexBasedFull")
+ROOT = Path("/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/TuningResult/DecisionOnly")
 
 # ------------------------------------------------------------------
 # 2.  Map short tokens → canonical column names
