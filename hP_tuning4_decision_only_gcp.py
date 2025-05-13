@@ -34,12 +34,12 @@ def upload_to_gcs(local_path: str, bucket_name: str, destination_blob_name: str)
     print(f"Uploaded {local_path} to gs://{bucket_name}/{destination_blob_name}")
 
 # hyper‐parameter grids
-d_model_values    = [32, 64, 128, 256]
-d_ff_values       = [32, 64, 128, 256]
-N_values          = [2, 4, 6, 8]
-num_heads_values  = [2, 4, 8, 16]
-lr_values         = [1e-3, 1e-4, 1e-5, 1e-6]
-weight_values     = [2, 4, 8, 16]
+d_model_values    = [64, 128]
+d_ff_values       = [128, 256]
+N_values          = [6, 8]
+num_heads_values  = [2, 4, 8]
+lr_values         = [1e-4]
+weight_values     = [2, 4]
 
 # S3 client
 # s3 = boto3.client("s3")
