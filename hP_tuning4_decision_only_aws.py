@@ -34,6 +34,7 @@ from train4_decision_only_aws import train_model
 #     print(f"Uploaded {local_path} to gs://{bucket_name}/{destination_blob_name}")
 
 # hyper‐parameter grids
+seq_len_ai_values = [32, 64, 128, 256]
 d_model_values = [256, 512]
 d_ff_values = [128, 256, 512]
 N_values = [6, 8, 10]
@@ -53,11 +54,12 @@ def run_one_experiment(params):
     writes out metrics JSON and uploads checkpoint+metrics to S3.
     Returns unique_id for logging.
     """
-    d_model, d_ff, N, num_heads, lr, weight = params
+    seq_len_ai, d_model, d_ff, N, num_heads, lr, weight = params
 
     # 1) Build config
     config = get_config()
     config.update({
+        "seq_len_ai": seq_len_ai,
         "d_model":    d_model,
         "d_ff":       d_ff,
         "N":          N,
@@ -67,7 +69,7 @@ def run_one_experiment(params):
     })
 
     # 2) Unique basename / id
-    unique_id = f"dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_lr{lr}_weight{weight}"
+    unique_id = f"ctx_window{seq_len_ai}_dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_lr{lr}_weight{weight}"
     config["model_basename"] = f"DecisionOnly_{unique_id}"
 
     # 3) (Optional) pin each process to a different GPU if you have >1 GPU
@@ -107,6 +109,7 @@ def run_one_experiment(params):
 
 def hyperparam_sweep_parallel(max_workers=max_workers):
     combos = itertools.product(
+        seq_len_ai_values,
         d_model_values,
         d_ff_values,
         N_values,

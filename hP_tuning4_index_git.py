@@ -25,6 +25,7 @@ def upload_to_gcs(local_path: str, bucket_name: str, destination_blob_name: str)
     print(f"Uploaded {local_path} to gs://{bucket_name}/{destination_blob_name}")
 
 # hyperparameter ranges
+ctx_window_values  = [480, 960, 1920, 3840]
 d_model_values     = [32, 64, 128]
 d_ff_values        = [32, 64, 128]
 N_values           = [4, 6, 8]
@@ -33,6 +34,7 @@ weight_values      = [2, 4, 8]
 
 # precompute the grid
 HP_GRID = list(itertools.product(
+    ctx_window_values,
     d_model_values,
     d_ff_values,
     N_values,
@@ -48,11 +50,12 @@ HP_GRID = list(itertools.product(
 #    s3.upload_file(local_path, bucket, key)
 
 def run_one_experiment(params):
-    d_model, d_ff, N, num_heads, lr, weight = params
+    ctx_window, d_model, d_ff, N, num_heads, lr, weight = params
 
     # 1) Build config
     config = get_config()
     config.update({
+        'ctx_window': ctx_window_values,
         'd_model':    d_model,
         'd_ff':       d_ff,
         'N':          N,
@@ -61,9 +64,10 @@ def run_one_experiment(params):
         'weight':     weight,
     })
 
+    ctx_window = ctx_window / 15
     # 2) Unique identifier
     unique_id = (
-        f"dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}"
+        f"ctx_window{ctx_window}_dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}"
         f"_lr{lr}_weight{weight}"
     )
     config['model_basename'] = f"MyProductGPT_{unique_id}"
@@ -80,6 +84,7 @@ def run_one_experiment(params):
     metrics_file = f"IndexBased_FullProductGPT_{unique_id}.json"
     with open(metrics_file, 'w') as f:
         json.dump({
+            "ctx_window": ctx_window,
             "d_model":   d_model,
             "d_ff":      d_ff,
             "N":         N,
