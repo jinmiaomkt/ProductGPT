@@ -262,7 +262,7 @@ def evaluate(loader, engine, device, loss_fn, step, pad_id, tok):
 # ─────────────────────────── 7 ─ train ────────────────────────────────────
 def train(cfg):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    tr_dl, va_dl, te_dl, tok = get_dataloaders(cfg)
+    tr_dl, va_dl, te_dl = get_dataloaders(cfg)
     pad = tok.token_to_id("[PAD]")
 
     model = get_model(cfg).to(device)
