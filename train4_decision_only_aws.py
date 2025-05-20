@@ -260,7 +260,7 @@ def evaluate(loader, engine, device, loss_fn, step, pad_id, tok):
             _subset_metrics(P,L,PR,m_tr))
 
 # ─────────────────────────── 7 ─ train ────────────────────────────────────
-def train(cfg):
+def train_model(cfg):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     tr_dl, va_dl, te_dl, tok = get_dataloaders(cfg)
     pad = tok.token_to_id("[PAD]")
