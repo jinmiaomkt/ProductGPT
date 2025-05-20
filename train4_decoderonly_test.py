@@ -49,12 +49,24 @@ def build_tokenizer_tgt():
 
 # ---------------------------------------------------------------------------
 # Pair‑wise revenue loss -----------------------------------------------------
-# ---------------------------------------------------------------------------
+# -------------------- loss class ------------------------------------------
 class PairwiseRevenueLoss(nn.Module):
-    def __init__(self, revenue, ignore_index=0):
+    def __init__(self, revenue, vocab_size, ignore_index=0):
+        """
+        revenue     : list/1-D tensor of *base* revenues (index == token-id)
+        vocab_size  : full number of classes produced by the model
+        """
         super().__init__()
+        # pad with zeros if the list is shorter than vocab
+        if len(revenue) < vocab_size:
+            revenue = revenue + [0.] * (vocab_size - len(revenue))
         rev = torch.tensor(revenue, dtype=torch.float32)
-        self.register_buffer("penalty", -torch.abs(rev[:, None] - rev[None, :]))
+
+        # penalty(i,j) = –|R_i – R_j|
+        self.register_buffer(
+            "penalty",
+            -torch.abs(rev[:, None] - rev[None, :])      # shape V × V
+        )
         self.ignore_index = ignore_index
     def forward(self, logits, targets):
         B, T, V = logits.shape
@@ -181,7 +193,12 @@ def train_model(cfg):
     tr_dl, va_dl, te_dl, tok = get_dataloaders(cfg)
 
     model = get_model(cfg).to(device)
-    loss_fn = PairwiseRevenueLoss([0,1,10,1,10,1,10,1,10,0], ignore_index=tok.token_to_id('[PAD]')).to(device)
+    loss_fn = PairwiseRevenueLoss(
+                revenue=[0,1,10,1,10,1,10,1,10,0],      # base list
+                vocab_size=cfg['vocab_size_tgt'],        # <- NEW
+                ignore_index=tok.token_to_id('[PAD]')
+            ).to(device)
+
 
     tot_steps = cfg['num_epochs']*len(tr_dl)
 
