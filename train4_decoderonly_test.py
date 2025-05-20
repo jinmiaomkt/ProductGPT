@@ -95,8 +95,8 @@ def get_dataloaders(cfg):
 
     tok_tgt = build_tokenizer_tgt(); tok_ai = build_tokenizer_tgt()
     Path(cfg['model_folder']).mkdir(parents=True, exist_ok=True)
-    tok_tgt.save(Path(cfg['model_folder'])/"tokenizer_tgt.json")
-    tok_ai.save(Path(cfg['model_folder'])/"tokenizer_ai.json")
+    tok_tgt.save(str(Path(cfg['model_folder']) / "tokenizer_tgt.json"))
+    tok_ai.save(str(Path(cfg['model_folder']) / "tokenizer_ai.json"))
 
     def ds(split):
         return TransformerDataset(split, tok_ai, tok_tgt, cfg['seq_len_ai'], cfg['seq_len_tgt'], cfg['num_heads'], cfg['ai_rate'], pad_token=0)
