@@ -3,7 +3,7 @@ from pathlib import Path
 def get_config():
     return {
         # Data
-        "filepath": "/home/jxm190071/data/clean_list_int_wide4_simple6_IndexBasedTrain.json",
+        "filepath": "/home/ec2-user/data/clean_list_int_wide4_simple6_IndexBasedTrain.json",
         "vocab_size_src": 68,
         "vocab_size_tgt": 18,
         "vocab_size_lto": 68,
