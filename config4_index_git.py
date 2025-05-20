@@ -36,7 +36,7 @@ def get_config():
 
         # Logging and paths
         # "datasource": "ProductGPT",
-        "model_folder": "/home/jxm190071/output",
+        "model_folder": "/home/ec2-user/output",
         "model_basename": "MyProductGPT_",
         # "preload": "latest",
         "preload": None,
