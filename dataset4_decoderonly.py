@@ -1,56 +1,84 @@
+# dataset4_decoderonly.py
+# ————————————————————————————————————————————————————————————
+#  * Keeps only the **last ctx_window tokens** of AggregateInput.
+#  * Left-pads so chronology is preserved after trimming.
+#  * `seq_len_tgt` can be ≠  ctx_window // ai_rate; we still enforce it.
+# ————————————————————————————————————————————————————————————
 import json
 import torch
-from torch.utils.data import Dataset, DataLoader
-from tokenizers import Tokenizer, models, pre_tokenizers, trainers
+from torch.utils.data import Dataset
+from tokenizers import Tokenizer
 
-# Load JSON dataset
-def load_json_dataset(filepath):
-    with open(filepath, 'r') as f:
+# ─────────────────────────── util ───────────────────────────
+def load_json_dataset(filepath: str):
+    with open(filepath, "r") as f:
         return json.load(f)
 
-# Transformer Dataset
+# ─────────────────────────── dataset ────────────────────────
 class TransformerDataset(Dataset):
-    def __init__(self, data, tokenizer_ai, tokenizer_tgt, seq_len_ai, seq_len_tgt, num_heads, ai_rate, pad_token=0, sos_token=10):
-        self.data = data
-        self.tokenizer_ai = tokenizer_ai
-        self.tokenizer_tgt = tokenizer_tgt
-        self.seq_len_ai = seq_len_ai
-        self.seq_len_tgt = seq_len_tgt
-        self.ai_rate = ai_rate
-        self.pad_token = torch.tensor([pad_token], dtype=torch.int64)
-        self.sos_token = torch.tensor([sos_token], dtype=torch.int64)
-        # self.eos_token = torch.tensor([eos_token], dtype=torch.int64)
-            
+    def __init__(self,
+                 data,
+                 tokenizer_ai:  Tokenizer,
+                 tokenizer_tgt: Tokenizer,
+                 seq_len_ai:  int,
+                 seq_len_tgt: int,
+                 num_heads:   int,
+                 ai_rate:     int,
+                 pad_token:   int = 0,
+                 sos_token:   int = 10):
+        """
+        Parameters
+        ----------
+        seq_len_ai   : max tokens fed into the model (ctx_window).
+        seq_len_tgt  : max decision tokens kept as label.
+        ai_rate      : distance between decision tokens in AggregateInput.
+        """
+        self.data           = data
+        self.tk_ai          = tokenizer_ai
+        self.tk_tgt         = tokenizer_tgt
+        self.seq_len_ai     = seq_len_ai
+        self.seq_len_tgt    = seq_len_tgt
+        self.ai_rate        = ai_rate
+        self.pad_token_id   = pad_token
+        self.sos_token_id   = sos_token
+
+    # ————————————————————————————————————————————————
     def __len__(self):
         return len(self.data)
 
+    # ————————————————————————————————————————————————
     def __getitem__(self, idx):
-        data_item = self.data[idx]
+        item = self.data[idx]
 
-        ai_text = " ".join(map(str, data_item["AggregateInput"])) if isinstance(data_item["AggregateInput"], list) else str(data_item["AggregateInput"])
-        tgt_text = " ".join(map(str, data_item["Decision"])) if isinstance(data_item["Decision"], list) else str(data_item["Decision"])
+        # ---------- tokenise ----------
+        ai_tokens = self.tk_ai.encode(
+            " ".join(map(str, item["AggregateInput"]))
+            if isinstance(item["AggregateInput"], list)
+            else str(item["AggregateInput"])
+        ).ids
 
-        aggregate_input_tokens = self.tokenizer_ai.encode(ai_text).ids[:self.seq_len_ai]
-        tgt_input_tokens = self.tokenizer_tgt.encode(tgt_text).ids[:self.seq_len_tgt]
+        tgt_tokens = self.tk_tgt.encode(
+            " ".join(map(str, item["Decision"]))
+            if isinstance(item["Decision"], list)
+            else str(item["Decision"])
+        ).ids
 
-        ai_pad = max(0, self.seq_len_ai - len(aggregate_input_tokens))
-        tgt_pad = max(0, self.seq_len_tgt - len(tgt_input_tokens))
-        
-        # Encoder input with [SOS], [EOS], and padding
-        aggregate_input = torch.cat([
-            # self.sos_token,
-            torch.tensor(aggregate_input_tokens, dtype=torch.int64),
-            # self.eos_token,
-            torch.tensor([self.pad_token] * ai_pad, dtype=torch.int64)
-        ])
+        # ---------- trim to ctx_window ----------
+        if len(ai_tokens) > self.seq_len_ai:
+            ai_tokens = ai_tokens[-self.seq_len_ai:]
 
-        # Label with [EOS] and padding
-        label = torch.cat([
-            torch.tensor(tgt_input_tokens, dtype=torch.int64),
-            torch.tensor([self.pad_token] * tgt_pad, dtype=torch.int64)
-        ])
+        if len(tgt_tokens) > self.seq_len_tgt:
+            tgt_tokens = tgt_tokens[-self.seq_len_tgt:]
 
-        return {
-            "aggregate_input": aggregate_input,
-            "label": label
-        }
+        # ---------- left-pad ----------
+        pad_ai  = self.seq_len_ai  - len(ai_tokens)
+        pad_tgt = self.seq_len_tgt - len(tgt_tokens)
+
+        aggregate_input = torch.tensor(
+            [self.pad_token_id] * pad_ai + ai_tokens, dtype=torch.int64)
+
+        label = torch.tensor(
+            [self.pad_token_id] * pad_tgt + tgt_tokens, dtype=torch.int64)
+
+        return {"aggregate_input": aggregate_input,
+                "label":           label}
