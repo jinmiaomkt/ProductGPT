@@ -14,14 +14,6 @@ import torch
 from config4_index_git import get_config
 from train4_decoderonly_git import train_model
 
-def upload_to_gcs(local_path: str, bucket_name: str, destination_blob_name: str):
-    """Uploads a file to GCS bucket."""
-    storage_client = storage.Client()
-    bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob(destination_blob_name)
-    blob.upload_from_filename(local_path)
-    print(f"Uploaded {local_path} to gs://{bucket_name}/{destination_blob_name}")
-
 # hyperparameter ranges
 ctx_window_values  = [480, 960, 1920, 3840]
 d_model_values     = [32, 64, 128]
@@ -49,7 +41,7 @@ HP_GRID = list(itertools.product(
 #    s3.upload_file(local_path, bucket, key)
 
 def run_one_experiment(params):
-    ctx_window, d_model, d_ff, N, num_heads, lr, weight = params
+    ctx_window, d_model, d_ff, N, num_heads, lr, weight, ai_rate = params
 
     # 1) Build config
     config = get_config()
@@ -61,6 +53,7 @@ def run_one_experiment(params):
         'num_heads':  num_heads,
         'lr':         lr,
         'weight':     weight,
+        'ai_rate':    ai_rate
     })
 
     ctx_window = ctx_window / 15
