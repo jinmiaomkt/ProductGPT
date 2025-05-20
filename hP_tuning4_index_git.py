@@ -41,27 +41,24 @@ HP_GRID = list(itertools.product(
 #    s3.upload_file(local_path, bucket, key)
 
 def run_one_experiment(params):
-    ctx_window, d_model, d_ff, N, num_heads, lr, weight, ai_rate = params
+    ctx_window, d_model, d_ff, N, num_heads, lr, weight = params   # ← 7 vars
 
-    # 1) Build config
     config = get_config()
     config.update({
-        'ctx_window': ctx_window_values,
+        'ctx_window': ctx_window,          # scalar, not list
         'd_model':    d_model,
         'd_ff':       d_ff,
         'N':          N,
         'num_heads':  num_heads,
         'lr':         lr,
         'weight':     weight,
-        'ai_rate':    ai_rate
+        'ai_rate':    15                  # keep constant, or read from cfg
     })
 
-    ctx_window = ctx_window / 15
-    # 2) Unique identifier
-    unique_id = (
-        f"ctx_window{ctx_window}_dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}"
-        f"_lr{lr}_weight{weight}"
-    )
+    ai_rate = config['ai_rate']
+    ctx_decisions = ctx_window // ai_rate       # integer division
+    unique_id = (f"ctx{ctx_decisions}_dmodel{d_model}_ff{d_ff}_N{N}_"
+                 f"heads{num_heads}_lr{lr}_weight{weight}")
     config['model_basename'] = f"MyProductGPT_{unique_id}"
 
     # 3) Pin to a GPU if available
