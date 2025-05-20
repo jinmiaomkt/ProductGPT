@@ -263,9 +263,12 @@ def evaluate(loader, engine, device, loss_fn, step, pad_id, tok):
 def train_model(cfg):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    unique_id = (f"ctx_window{cfg['ctx_window']/cfg['ai_rate']}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}_"
-                 f"heads{cfg['num_heads']}_lr{cfg['lr']}_weight{cfg['weight']}")
-    
+    # derive run-name from the real context window (= seq_len_ai)
+    ctx_tokens   = cfg['seq_len_ai']
+    slots_in_win = ctx_tokens // cfg['ai_rate']     # integer
+
+    unique_id = (f"ctx{slots_in_win}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}_"
+                f"heads{cfg['num_heads']}_lr{cfg['lr']}_weight{cfg['weight']}")
 
     tr_dl, va_dl, te_dl, tok = get_dataloaders(cfg)
     pad = tok.token_to_id("[PAD]")
