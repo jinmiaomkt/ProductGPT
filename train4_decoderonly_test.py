@@ -184,7 +184,9 @@ def train_model(cfg):
     loss_fn = PairwiseRevenueLoss([0,1,10,1,10,1,10,1,10,0], ignore_index=tok.token_to_id('[PAD]')).to(device)
 
     tot_steps = cfg['num_epochs']*len(tr_dl)
+
     ds_cfg = {"train_micro_batch_size_per_gpu": cfg['batch_size'],
+              "zero_allow_untested_optimizer": True,       # <-- put it back
               "optimizer": {"type": "Lamb", "params": {"lr": cfg['lr'], "eps": cfg['eps'], "weight_decay": cfg['weight_decay']}},
               "lr_scheduler": {"type": "WarmupDecayLR", "params": {"warmup_min_lr": cfg['min_lr'], "warmup_max_lr": cfg['lr'], "warmup_num_steps": cfg['warmup_steps'], "total_num_steps": tot_steps, "decay_style": "cosine"}},
               "fp16": {"enabled": False}, "zero_optimization": {"stage": 1}}
