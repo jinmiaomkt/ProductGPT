@@ -1,15 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-train_decision_model_mask_transition.py  ── v3
-================================================
-Adds JSON/return metadata (with subset metrics) the user requested on 2025‑05‑20.
-
-New section at the end of `train_model()`:
-• collects **main / STOP‑cur / afterSTOP / transition** hits, F1, AUPRC & confusion
-  for *both* validation and test splits;
-• writes them to `<best‑checkpoint>.json` alongside loss & PPL;
-• returns the same structure.
-Everything else is unchanged from v2.
+train_decision_model_mask_transition.py  ── v6 (full script)
+================================================================
+* Complete, self‑contained training script (no truncation).
+* Classic printout for val/test plus subset metrics.
+* Writes rich JSON alongside best checkpoint.
 """
 import os, json, logging, warnings
 from pathlib import Path
@@ -26,51 +21,43 @@ import deepspeed
 from pytorch_lamb import Lamb
 
 from model4_decoderonly import build_transformer
-from dataset4_decoderonly import TransformerDataset, load_json_dataset
+from dataset4_decision_only import TransformerDataset, load_json_dataset
 from tokenizers import Tokenizer, models, pre_tokenizers
-from config4_index_git import get_config, get_weights_file_path
+from config4_decision_only_git import get_config, get_weights_file_path
 
+# ---------------------------------------------------------------------------
+# ENV / LOGGING -------------------------------------------------------------
 # ---------------------------------------------------------------------------
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 warnings.filterwarnings("ignore")
 logging.getLogger("deepspeed").setLevel(logging.ERROR)
 
 # ---------------------------------------------------------------------------
-# Tokeniser -----------------------------------------------------------------
+# 1.  Tokeniser -------------------------------------------------------------
 # ---------------------------------------------------------------------------
 
 def build_tokenizer_tgt():
     tok = Tokenizer(models.WordLevel(unk_token="[UNK]"))
     tok.pre_tokenizer = pre_tokenizers.Whitespace()
-    vocab = {"[PAD]": 0, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5,
-             "6": 6, "7": 7, "8": 8, "9": 9, "[SOS]": 10, "[UNK]": 12}
+    vocab = {"[PAD]": 0, "1": 1, "2": 2, "3": 3, "4": 4,
+             "5": 5,  "6": 6, "7": 7, "8": 8, "9": 9,
+             "[SOS]": 10, "[UNK]": 12}
     tok.model = models.WordLevel(vocab=vocab, unk_token="[UNK]")
     return tok
 
 # ---------------------------------------------------------------------------
-# Pair‑wise revenue loss -----------------------------------------------------
-# -------------------- loss class ------------------------------------------
+# 2.  Pair‑wise revenue loss -------------------------------------------------
+# ---------------------------------------------------------------------------
 class PairwiseRevenueLoss(nn.Module):
     def __init__(self, revenue, vocab_size, ignore_index=0):
-        """
-        revenue     : list/1-D tensor of *base* revenues (index == token-id)
-        vocab_size  : full number of classes produced by the model
-        """
         super().__init__()
-        # pad with zeros if the list is shorter than vocab
         if len(revenue) < vocab_size:
             revenue = revenue + [0.] * (vocab_size - len(revenue))
         rev = torch.tensor(revenue, dtype=torch.float32)
-
-        # penalty(i,j) = –|R_i – R_j|
-        self.register_buffer(
-            "penalty",
-            -torch.abs(rev[:, None] - rev[None, :])      # shape V × V
-        )
+        self.register_buffer("penalty", -torch.abs(rev[:, None] - rev[None, :]))
         self.ignore_index = ignore_index
     def forward(self, logits, targets):
-        B, T, V = logits.shape
-        probs = F.softmax(logits.view(-1, V), dim=-1)
+        probs = F.softmax(logits.view(-1, logits.size(-1)), dim=-1)
         tgt   = targets.view(-1)
         mask  = tgt != self.ignore_index
         if mask.sum() == 0:
@@ -79,11 +66,11 @@ class PairwiseRevenueLoss(nn.Module):
         return (-exp_gap).mean()
 
 # ---------------------------------------------------------------------------
-# Helpers -------------------------------------------------------------------
+# 3.  Helper functions -------------------------------------------------------
 # ---------------------------------------------------------------------------
 
 def transition_mask(labels: torch.Tensor):
-    prev = F.pad(labels, (1, 0), value=-1)[:, :-1]
+    prev = F.pad(labels, (1,0), value=-1)[:,:-1]
     return labels != prev
 
 def calculate_perplexity(logits, targets, pad_token=0):
@@ -96,34 +83,42 @@ def calculate_perplexity(logits, targets, pad_token=0):
     return torch.exp(nll).item()
 
 # ---------------------------------------------------------------------------
-# Data loaders --------------------------------------------------------------
+# 4.  Data loaders -----------------------------------------------------------
 # ---------------------------------------------------------------------------
 
 def get_dataloaders(cfg):
-    raw = load_json_dataset(cfg['filepath']); n = len(raw)
-    tr, va = int(.8*n), int(.1*n)
+    raw = load_json_dataset(cfg['filepath'])
+    n = len(raw); tr, va = int(.8*n), int(.1*n)
     torch.manual_seed(33)
     train, val, test = random_split(raw, [tr, va, n-tr-va], generator=torch.Generator().manual_seed(33))
 
     tok_tgt = build_tokenizer_tgt(); tok_ai = build_tokenizer_tgt()
     Path(cfg['model_folder']).mkdir(parents=True, exist_ok=True)
-    tok_tgt.save(str(Path(cfg['model_folder']) / "tokenizer_tgt.json"))
-    tok_ai.save(str(Path(cfg['model_folder']) / "tokenizer_ai.json"))
+    tok_tgt.save(str(Path(cfg['model_folder'])/"tokenizer_tgt.json"))
+    tok_ai .save(str(Path(cfg['model_folder'])/"tokenizer_ai.json"))
 
-    def ds(split):
-        return TransformerDataset(split, tok_ai, tok_tgt, cfg['seq_len_ai'], cfg['seq_len_tgt'], cfg['num_heads'], cfg['ai_rate'], pad_token=0)
-    loader = lambda d, s: DataLoader(d, batch_size=cfg['batch_size'], shuffle=s)
-    return loader(ds(train), True), loader(ds(val), False), loader(ds(test), False), tok_tgt
+    make_ds = lambda split: TransformerDataset(split, tok_ai, tok_tgt,
+                                               cfg['seq_len_ai'], cfg['seq_len_tgt'],
+                                               cfg['num_heads'], cfg['ai_rate'], pad_token=0)
+    ld = lambda d, s: DataLoader(d, batch_size=cfg['batch_size'], shuffle=s)
+    return ld(make_ds(train), True), ld(make_ds(val), False), ld(make_ds(test), False), tok_tgt
 
 # ---------------------------------------------------------------------------
-# Model ---------------------------------------------------------------------
+# 5.  Model builder ----------------------------------------------------------
 # ---------------------------------------------------------------------------
 
 def get_model(cfg):
-    return build_transformer(cfg['vocab_size_tgt'], cfg['seq_len_ai'], cfg['d_model'], cfg['N'], cfg['num_heads'], cfg['d_ff'], cfg['dropout'])
+    return build_transformer(
+        vocab_size  = cfg['vocab_size_tgt'],
+        d_model     = cfg['d_model'],
+        n_layers    = cfg['N'],
+        n_heads     = cfg['num_heads'],
+        d_ff        = cfg['d_ff'],
+        max_seq_len = cfg['seq_len_ai'],
+        dropout     = cfg['dropout'])
 
 # ---------------------------------------------------------------------------
-# Evaluation ----------------------------------------------------------------
+# 6.  Evaluation routine -----------------------------------------------------
 # ---------------------------------------------------------------------------
 
 def _subset_metrics(pred, lbl, probs, mask, classes=np.arange(1,10)):
@@ -141,16 +136,14 @@ def _subset_metrics(pred, lbl, probs, mask, classes=np.arange(1,10)):
     return {"hit": hit, "f1": f1, "auprc": auprc, "conf": conf}
 
 
-def evaluate(loader, engine, device, loss_fn, stepsize, ignore_index, tok):
+def evaluate(loader, engine, device, loss_fn, stepsize, pad_id, tok):
     if len(loader) == 0:
         nan = float('nan'); return nan, nan, {}, {}, {}, {}
 
-    pad, sos, unk = (tok.token_to_id(t) for t in ('[PAD]', '[SOS]', '[UNK]'))
-    special = {pad, sos, unk}
-
+    special = {pad_id, tok.token_to_id('[SOS]'), tok.token_to_id('[UNK]')}
     tot_loss = tot_ppl = 0.0
     P, L, PR = [], [], []
-    m_st, m_pst, m_tr = [], [], []
+    m_stop, m_prevstop, m_trans = [], [], []
 
     engine.eval()
     with torch.no_grad():
@@ -159,10 +152,9 @@ def evaluate(loader, engine, device, loss_fn, stepsize, ignore_index, tok):
             logits = engine(x)
             pos = torch.arange(stepsize-1, logits.size(1), stepsize, device=device)
             log_dec = logits[:, pos, :]
-
-            y_eval = y.clone(); y_eval[transition_mask(y)] = ignore_index
-            loss = loss_fn(log_dec, y_eval); tot_loss += loss.item()
-            tot_ppl += calculate_perplexity(log_dec, y_eval, pad_token=pad)
+            y_eval = y.clone(); y_eval[transition_mask(y)] = pad_id
+            loss = loss_fn(log_dec, y_eval)
+            tot_loss += loss.item(); tot_ppl += calculate_perplexity(log_dec, y_eval, pad_token=pad_id)
 
             probs = F.softmax(log_dec, dim=-1).view(-1, log_dec.size(-1)).cpu().numpy()
             pred  = probs.argmax(axis=1)
@@ -170,19 +162,19 @@ def evaluate(loader, engine, device, loss_fn, stepsize, ignore_index, tok):
             valid = ~np.isin(lbl, list(special))
 
             P.append(pred[valid]); L.append(lbl[valid]); PR.append(probs[valid])
-            m_st .append((y == 9).view(-1).cpu().numpy()[valid])
-            m_pst.append((F.pad(y,(1,0),value=-1)[:,:-1] == 9).view(-1).cpu().numpy()[valid])
-            m_tr .append(transition_mask(y).view(-1).cpu().numpy()[valid])
+            m_stop     .append((y == 9).view(-1).cpu().numpy()[valid])
+            m_prevstop .append((F.pad(y,(1,0),value=-1)[:,:-1] == 9).view(-1).cpu().numpy()[valid])
+            m_trans    .append(transition_mask(y).view(-1).cpu().numpy()[valid])
 
     P, L, PR = np.concatenate(P), np.concatenate(L), np.concatenate(PR)
-    m_st, m_pst, m_tr = map(np.concatenate, (m_st, m_pst, m_tr))
-    main_mask = ~m_tr
+    m_stop, m_prevstop, m_trans = map(np.concatenate, (m_stop, m_prevstop, m_trans))
+    main_mask = ~m_trans
 
     return (tot_loss/len(loader), tot_ppl/len(loader),
             _subset_metrics(P, L, PR, main_mask),
-            _subset_metrics(P, L, PR, m_st),
-            _subset_metrics(P, L, PR, m_pst),
-            _subset_metrics(P, L, PR, m_tr))
+            _subset_metrics(P, L, PR, m_stop),
+            _subset_metrics(P, L, PR, m_prevstop),
+            _subset_metrics(P, L, PR, m_trans))
 
 # ---------------------------------------------------------------------------
 # Training ------------------------------------------------------------------
