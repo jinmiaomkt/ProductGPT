@@ -351,5 +351,5 @@ def train_model(cfg):
 # ─────────────────────────── 8 ─ main ─────────────────────────────────────
 if __name__ == "__main__":
     cfg = get_config()
-    res = train(cfg)
+    res = train_model(cfg)
     print("\nSaved →", res["best_checkpoint_path"])
