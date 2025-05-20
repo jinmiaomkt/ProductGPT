@@ -34,12 +34,12 @@ from train4_decision_only_aws import train_model
 #     print(f"Uploaded {local_path} to gs://{bucket_name}/{destination_blob_name}")
 
 # hyper‐parameter grids
-d_model_values    = [64, 128]
-d_ff_values       = [128, 256]
-N_values          = [6, 8]
-num_heads_values  = [4, 8, 16]
-lr_values         = [1e-4]
-weight_values     = [1, 2, 4]
+d_model_values = [256, 512]
+d_ff_values = [128, 256, 512]
+N_values = [6, 8, 10]
+num_heads_values = [8, 16, 32]
+lr_values = [1e-4]
+weight_values = [1, 2, 4]
 
 # S3 client
 s3 = boto3.client("s3")
