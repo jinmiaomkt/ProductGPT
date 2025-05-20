@@ -180,7 +180,7 @@ def train(cfg):
                                          "warmup_num_steps":cfg['warmup_steps'],
                                          "total_num_steps":steps_total,
                                          "decay_style":"cosine"}},
-              "fp16":{"enabled":False},
+              "fp16":{"enabled":True},
               "zero_optimization":{"stage":1}}
     engine,_,_,_ = deepspeed.initialize(model=model,
                                         model_parameters=model.parameters(),
