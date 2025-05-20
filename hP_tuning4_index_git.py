@@ -14,8 +14,6 @@ import torch
 from config4_index_git import get_config
 from train4_decoderonly_git import train_model
 
-from google.cloud import storage
-
 def upload_to_gcs(local_path: str, bucket_name: str, destination_blob_name: str):
     """Uploads a file to GCS bucket."""
     storage_client = storage.Client()
