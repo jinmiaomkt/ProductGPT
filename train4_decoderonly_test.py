@@ -108,7 +108,7 @@ def get_dataloaders(cfg):
 # ---------------------------------------------------------------------------
 
 def get_model(cfg):
-    return build_transformer(cfg['vocab_size_tgt'], cfg['d_model'], cfg['N'], cfg['num_heads'], cfg['d_ff'], cfg['dropout'], cfg['seq_len_ai'])
+    return build_transformer(cfg['vocab_size_tgt'], cfg['d_model'], cfg['N'], cfg['num_heads'], cfg['d_ff'], cfg['seq_len_ai'], cfg['dropout'])
 
 # ---------------------------------------------------------------------------
 # Evaluation ----------------------------------------------------------------
