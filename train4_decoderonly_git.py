@@ -160,6 +160,10 @@ def evaluate(loader, engine, device, loss_fn, step, pad_id, tok):
 # ─────────────────────────── 7 ─ train ────────────────────────────────────
 def train_model(cfg):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    unique_id = (f"ctx_window{cfg['ctx_window']/cfg['ai_rate']}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}_"
+                 f"heads{cfg['num_heads']}_lr{cfg['lr']}_weight{cfg['weight']}")
+    
     tr_dl, va_dl, te_dl, tok = get_loaders(cfg)
     pad = tok.token_to_id("[PAD]")
 
@@ -209,7 +213,8 @@ def train_model(cfg):
 
         if best is None or v_loss<best:
             best=v_loss; pat=0
-            ckpt=get_weights_file_path(cfg,'best')
+            # ckpt=get_weights_file_path(cfg,'best')
+            ckpt = str(Path(cfg["model_folder"]) / f"ProductGPT_{unique_id}.pt")
             engine.save_checkpoint(str(Path(ckpt).parent),tag='best')
             print("  [*] checkpoint saved")
         else:
@@ -219,6 +224,21 @@ def train_model(cfg):
 
     # --- test -------------------------------------------------------------
     engine.load_checkpoint(str(Path(ckpt).parent),tag='best')
+
+    # after engine.save_checkpoint(...)
+    best_dir   = Path(cfg["model_folder"]) / "best"
+    main_pt    = best_dir / "mp_rank_00_model_states.pt"
+    pretty_pt = Path(cfg["model_folder"]) / f"ProductGPT_{unique_id}.pt"
+
+    if main_pt.exists():          # keep only the model-state file
+        main_pt.replace(pretty_pt)      # moves & renames
+        for f in best_dir.glob("*optim_states.pt"):
+            f.unlink()                  # optional: remove giant optimizer file
+        best_dir.rmdir()                # delete the now-empty 'best/' folder
+
+    best_checkpoint_path = str(pretty_pt)
+    print(f"  [*] checkpoint saved → {best_checkpoint_path}")
+
     t_loss,t_ppl,t_main,t_stop,t_after,t_tr = evaluate(
         te_dl,engine,device,loss_fn,cfg['ai_rate'],pad,tok)
     print("\n** TEST ** Loss={:.4f}  PPL={:.4f}".format(t_loss,t_ppl))
@@ -249,5 +269,5 @@ def train_model(cfg):
 # ─────────────────────────── 8 ─ main ─────────────────────────────────────
 if __name__ == "__main__":
     cfg = get_config()
-    res = train(cfg)
+    res = train_model(cfg)
     print("\nSaved →", res["best_checkpoint_path"])
