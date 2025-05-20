@@ -28,6 +28,7 @@ d_model_values     = [32, 64, 128]
 d_ff_values        = [32, 64, 128]
 N_values           = [4, 6, 8]
 num_heads_values   = [4, 8]
+lr_values = [1e-4]
 weight_values      = [2, 4, 8]
 
 # precompute the grid
@@ -37,7 +38,7 @@ HP_GRID = list(itertools.product(
     d_ff_values,
     N_values,
     num_heads_values,
-#     lr_values,
+    lr_values,
     weight_values
 ))
 
