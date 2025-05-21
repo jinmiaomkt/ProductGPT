@@ -6,7 +6,7 @@
 #   • Same checkpoint + JSON metadata format as before
 # -------------------------------------------------------------------------
 
-import os, json, warnings, logging, numpy as np
+import os, json, warnings, logging, numpy as np, boto3, botocore
 from pathlib import Path
 from typing import Dict, Any
 
@@ -111,7 +111,22 @@ def _json_safe(o: Any):
     if isinstance(o, (list, tuple)): return [_json_safe(v) for v in o]
     return o
 
+# --- S3 helpers -------------------------------------------------
+def _s3_client():
+    try: return boto3.client("s3")
+    except botocore.exceptions.BotoCoreError: return None
 
+def _upload(local: Path, bucket: str, key: str, s3) -> bool:
+    if s3 is None or not local.exists():
+        return False
+    try:
+        s3.upload_file(str(local), bucket, key)
+        print(f"[S3] {local.name}  →  s3://{bucket}/{key}")
+        return True
+    except botocore.exceptions.BotoCoreError as e:
+        print(f"[S3-ERR] {e}")
+        return False
+    
 # ══════════════════════ 4.  DATA LOADERS ════════════════════════════════
 def _make_loaders(cfg):
     raw = load_json_dataset(cfg["filepath"])
@@ -218,6 +233,14 @@ def train_model(cfg):
     ckpt_path = Path(cfg["model_folder"]) / f"FullProductGPT_{uid}.pt"
     json_path = ckpt_path.with_suffix(".json")
 
+    s3      = _s3_client()
+    bucket  = cfg["s3_bucket"]
+    ck_key  = f"DecisionOnly/checkpoints/{ckpt_path.name}"
+    js_key  = f"DecisionOnly/metrics/{ckpt_path.name}"
+    print(f"[INFO] artefacts will be saved to\n"
+          f"  • s3://{bucket}/{ck_key}\n"
+          f"  • s3://{bucket}/{js_key}\n")
+    
     tr, va, te, tok_tgt = _make_loaders(cfg)
     pad_id = tok_tgt.token_to_id("[PAD]")
 
@@ -283,6 +306,12 @@ def train_model(cfg):
                 "val_after_stop": v_after, "val_transition": v_tr
             }), indent=2))
             print(f"  [*] new best saved → {ckpt_path.name}")
+
+            if _upload(ckpt_path, bucket, ck_key, s3):
+                ckpt_path.unlink(missing_ok=True)
+            if _upload(ckpt_path, bucket, js_key, s3):
+                ckpt_path.unlink(missing_ok=True)
+
         else:
             patience += 1
             if patience >= cfg["patience"]:
