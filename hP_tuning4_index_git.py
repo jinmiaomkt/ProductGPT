@@ -72,6 +72,7 @@ def run_one_experiment(params):
     cfg.update({
         "ctx_window": ctx_window,
         "seq_len_ai": ctx_window,       # keeps model & dataset in sync
+        "seq_len_tgt": ctx_window // 15,
         "d_model":    d_model,
         "d_ff":       d_ff,
         "N":          N,
