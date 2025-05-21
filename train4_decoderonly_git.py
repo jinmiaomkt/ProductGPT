@@ -215,7 +215,7 @@ def train_model(cfg):
     slots = cfg["seq_len_ai"] // cfg["ai_rate"]
     uid   = (f"ctx{slots}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}_"
              f"heads{cfg['num_heads']}_lr{cfg['lr']}_weight{cfg['weight']}")
-    ckpt_path = Path(cfg["model_folder"]) / f"DecisionOnly_{uid}.pt"
+    ckpt_path = Path(cfg["model_folder"]) / f"FullProductGPT_{uid}.pt"
     json_path = ckpt_path.with_suffix(".json")
 
     tr, va, te, tok_tgt = _make_loaders(cfg)

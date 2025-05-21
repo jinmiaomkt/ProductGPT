@@ -71,16 +71,17 @@ def run_one(params):
 
     # ---------- S3 uploads ---------------------------------------------
     s3      = get_s3()
-    bucket  = cfg["s3_bucket"]; prefix = cfg.get("s3_prefix","").rstrip("/")
-    if prefix: prefix += "/"
+    bucket  = cfg["s3_bucket"]
+    # prefix = cfg.get("s3_prefix","").rstrip("/")
+    # if prefix: prefix += "/"
 
     ckpt = Path(res["best_checkpoint_path"])
     if ckpt.exists() and s3_put(ckpt, bucket,
-        f"{prefix}FullProductGPT/checkpoints/{ckpt.name}", s3):
+        f"FullProductGPT/checkpoints/{ckpt.name}", s3):
         ckpt.unlink()
 
     if s3_put(json_path, bucket,
-              f"{prefix}FullProductGPT/metrics/{json_path.name}", s3):
+              f"FullProductGPT/metrics/{json_path.name}", s3):
         json_path.unlink()
 
     return uid
