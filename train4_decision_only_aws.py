@@ -50,25 +50,41 @@ def build_tokenizer_tgt():
 
 # ─── LOSS ──────────────────────────────────────────────────────────────────
 class PairwiseRevenueLoss(nn.Module):
-    """L = –E[ |R_true – R_pred| ]  (maximise revenue)."""
     def __init__(self, revenue, vocab_size, ignore_index=0):
         super().__init__()
         if len(revenue) < vocab_size:
             revenue = revenue + [0.] * (vocab_size - len(revenue))
         rev = torch.tensor(revenue, dtype=torch.float32)
-        # penalty[i,j] = –|R_i – R_j|
-        self.register_buffer("penalty", -torch.abs(rev[:, None] - rev[None, :]))
+        self.register_buffer("penalty",
+                             -torch.abs(rev[:, None] - rev[None, :]))  # (V,V)
         self.ignore_index = ignore_index
 
     def forward(self, logits, targets):
-        probs = F.softmax(logits.view(-1, logits.size(-1)), dim=-1)
-        tgt   = targets.view(-1)
-        mask  = tgt != self.ignore_index
-        if mask.sum() == 0:
-            return logits.new_tensor(0.0)
-        exp_gap = (probs[mask] * self.penalty[tgt[mask]]).sum(dim=-1)
-        return (-exp_gap).mean()
+        """
+        logits:  (B, T, V)   raw scores
+        targets: (B, T)      int labels
+        """
+        # -----------------------------------------------------------------
+        # 1. flatten
+        B, T, V = logits.shape
+        probs = torch.softmax(logits.reshape(-1, V), dim=-1)
+        tgt   = targets.reshape(-1)
 
+        # -----------------------------------------------------------------
+        # 2. mask "ignore_index"
+        keep = (tgt != self.ignore_index)
+        if keep.sum() == 0:
+            # nothing to optimise for this mini-batch
+            return logits.new_tensor(0.0)
+
+        # -----------------------------------------------------------------
+        # 3. bring buffer to the same device as logits (robust!)
+        pen = self.penalty.to(probs.device)   # <── magic line
+
+        # gather & expectation
+        exp_gap = (probs[keep] * pen[tgt[keep]]).sum(dim=-1)
+        return (-exp_gap).mean()
+    
 # ─── HELPERS ───────────────────────────────────────────────────────────────
 def transition_mask(lbl: torch.Tensor):
     prev = F.pad(lbl, (1, 0), value=-1)[:, :-1]
