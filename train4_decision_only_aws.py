@@ -158,44 +158,79 @@ def _build_model(cfg):
                              cfg["d_ff"], cfg["dropout"])
 
 # ═════════════════ evaluation ═══════════════════════════════════
+# ───────── evaluation on three requested subsets ─────────
 def _evaluate(loader, eng, dev, loss_fn, step, pad, tok):
+    """
+    Returns:
+        loss, ppl,
+        metrics_cur_stop, metrics_prev_stop, metrics_transition
+    """
+
     if not len(loader):
-        nan = float("nan"); return nan, nan, {}, {}, {}
-    special = {pad, tok.token_to_id("[SOS]"), tok.token_to_id("[UNK]")}
+        nan = float("nan")
+        return nan, nan, {}, {}, {}
+
+    special = {pad,
+               tok.token_to_id("[SOS]"),
+               tok.token_to_id("[UNK]")}
 
     tloss = tppl = 0.0
     P, L, PR = [], [], []
-    m_stop, m_tr = [], []
+    m_cur_stop, m_prev_stop, m_transition = [], [], []
 
     eng.eval()
     with torch.no_grad():
         for b in loader:
             x, y = b["aggregate_input"].to(dev), b["label"].to(dev)
-            pos  = torch.arange(step-1, x.size(1), step, device=dev)
-            g    = eng(x)[:, pos, :]              # (B, N, V)
-            tgt  = y[:, pos].clone()
-            tgt[_transition_mask(y)[:, pos]] = pad
 
-            tloss += loss_fn(g, tgt).item()
-            tppl  += _ppl(g, tgt, pad)
+            # decision positions (every <step> tokens, index = step-1)
+            pos  = torch.arange(step - 1, x.size(1), step, device=dev)
 
-            pr  = F.softmax(g, dim=-1).view(-1, g.size(-1)).cpu().numpy()
-            pd  = pr.argmax(1)
-            lb  = tgt.view(-1).cpu().numpy()      # already sliced
-            keep = ~np.isin(lb, list(special))
+            # logits & labels *only* at decision points
+            g    = eng(x)[:, pos, :]            # (B, N, V)
+            tgt  = y[:, pos].clone()            # (B, N)
 
-            P.append(pd[keep]); L.append(lb[keep]); PR.append(pr[keep])
-            m_stop.append((tgt == 9).view(-1).cpu().numpy()[keep])
-            m_tr  .append(_transition_mask(y)[:, pos].view(-1).cpu().numpy()[keep])
+            # mask transition tokens in the loss
+            tgt_masked = tgt.clone()
+            tgt_masked[_transition_mask(y)[:, pos]] = pad
 
-    P, L, PR = map(np.concatenate, (P, L, PR))
-    m_stop, m_tr = map(np.concatenate, (m_stop, m_tr))
-    main_mask = ~m_tr
+            tloss += loss_fn(g, tgt_masked).item()
+            tppl  += _ppl(g, tgt_masked, pad)
 
+            # ──────── build per-token boolean masks ─────────
+            cur_stop_mask   = (tgt == 9)                       # current == 9
+            # previous decision token (shift by one block)
+            prev_tok        = F.pad(tgt, (1, 0), value=-1)[:, :-1]
+            prev_stop_mask  = (prev_tok == 9)
+            trans_mask      = _transition_mask(y)[:, pos]      # current ≠ prev
+
+            # ──────── flatten & filter special tokens ───────
+            prob = F.softmax(g, dim=-1).view(-1, g.size(-1)).cpu().numpy()
+            pred = prob.argmax(1)
+            lbl  = tgt.view(-1).cpu().numpy()
+
+            keep = ~np.isin(lbl, list(special))
+
+            P .append(pred[keep])
+            L .append(lbl [keep])
+            PR.append(prob[keep])
+
+            flat = lambda m: m.view(-1).cpu().numpy()[keep]
+            m_cur_stop  .append(flat(cur_stop_mask))
+            m_prev_stop .append(flat(prev_stop_mask))
+            m_transition.append(flat(trans_mask))
+
+    # ───────── concat everything ─────────
+    P, L, PR          = map(np.concatenate, (P, L, PR))
+    m_cur_stop        = np.concatenate(m_cur_stop)
+    m_prev_stop       = np.concatenate(m_prev_stop)
+    m_transition      = np.concatenate(m_transition)
+
+    # only three subsets requested
     return (tloss/len(loader), tppl/len(loader),
-            _subset(P, L, PR, main_mask),
-            _subset(P, L, PR, m_stop),
-            _subset(P, L, PR, m_tr))
+            _subset(P, L, PR, m_cur_stop),
+            _subset(P, L, PR, m_prev_stop),
+            _subset(P, L, PR, m_transition))
 
 # ═════════════════ training loop ════════════════════════════════
 def train_model(cfg):
