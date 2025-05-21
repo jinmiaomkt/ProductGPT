@@ -30,12 +30,19 @@ from model4_decoderonly     import build_transformer
 from dataset4_decoderonly   import TransformerDataset, load_json_dataset
 from tokenizers             import Tokenizer, models, pre_tokenizers
 
-# ═════════════════════════════════ tokenisers ════════════════════════════
-def _build_tok_base(vocab_extra: Dict[str,int]) -> Tokenizer:
+# --- tokeniser helpers ----------------------------------------------------
+def _build_tok_base(vocab_extra: Dict[str, int]) -> Tokenizer:
     tok = Tokenizer(models.WordLevel(unk_token="[UNK]"))
     tok.pre_tokenizer = pre_tokenizers.Whitespace()
-    vocab = {"[PAD]": 0, **{str(i): i for i in range(1,10)},
-             "[SOS]": 10, "[UNK]": 12}
+
+    # ➊  — add 11 back as [EOS] —
+    vocab = {
+        "[PAD]": 0,
+        **{str(i): i for i in range(1, 10)},   # 1..9
+        "[SOS]": 10,
+        "[EOS]": 11,                           # ← restore
+        "[UNK]": 12,
+    }
     vocab.update(vocab_extra)
     tok.model = models.WordLevel(vocab=vocab, unk_token="[UNK]")
     return tok
