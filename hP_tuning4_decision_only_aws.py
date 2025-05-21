@@ -86,6 +86,7 @@ def run_one_experiment(params):
     config = get_config()
     config.update({
         "seq_len_ai": seq_len_ai,
+        "seq_len_tgt": seq_len_ai,     #  ← add this line
         "d_model":    d_model,
         "d_ff":       d_ff,
         "N":          N,
@@ -135,7 +136,7 @@ def run_one_experiment(params):
         if ok:
             Path(metrics_file).unlink()
         # os.remove(metrics_file)
-        
+
     return unique_id
 
 def hyperparam_sweep_parallel(max_workers=max_workers):
