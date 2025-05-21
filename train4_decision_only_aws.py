@@ -159,78 +159,76 @@ def _build_model(cfg):
 
 # ═════════════════ evaluation ═══════════════════════════════════
 # ───────── evaluation on three requested subsets ─────────
+# ───────────────────────── evaluation (adds "all" and after-STOP) ──────────────────────
 def _evaluate(loader, eng, dev, loss_fn, step, pad, tok):
     """
     Returns:
         loss, ppl,
-        metrics_cur_stop, metrics_prev_stop, metrics_transition
+        metrics_all, metrics_cur_stop, metrics_after_stop, metrics_transition
     """
-
-    if not len(loader):
+    if len(loader) == 0:
         nan = float("nan")
-        return nan, nan, {}, {}, {}
+        empty = {"hit": nan, "f1": nan, "auprc": nan}
+        return nan, nan, empty, empty, empty, empty
 
-    special = {pad,
-               tok.token_to_id("[SOS]"),
-               tok.token_to_id("[UNK]")}
+    special = {pad, tok.token_to_id("[SOS]"), tok.token_to_id("[UNK]")}
 
     tloss = tppl = 0.0
     P, L, PR = [], [], []
-    m_cur_stop, m_prev_stop, m_transition = [], [], []
+    cur_stop_mask_all   = []
+    after_stop_mask_all = []
+    transition_mask_all = []
 
     eng.eval()
     with torch.no_grad():
-        for b in loader:
-            x, y = b["aggregate_input"].to(dev), b["label"].to(dev)
+        for batch in loader:
+            x = batch["aggregate_input"].to(dev)
+            y = batch["label"].to(dev)
 
-            # decision positions (every <step> tokens, index = step-1)
-            pos  = torch.arange(step - 1, x.size(1), step, device=dev)
+            pos = torch.arange(step - 1, x.size(1), step, device=dev)
 
-            # logits & labels *only* at decision points
-            g    = eng(x)[:, pos, :]            # (B, N, V)
-            tgt  = y[:, pos].clone()            # (B, N)
+            logits = eng(x)[:, pos, :]              # (B, N, V)
+            tgt    = y[:, pos].clone()              # (B, N)
 
-            # mask transition tokens in the loss
+            # mask transitions for the loss only
             tgt_masked = tgt.clone()
             tgt_masked[_transition_mask(y)[:, pos]] = pad
 
-            tloss += loss_fn(g, tgt_masked).item()
-            tppl  += _ppl(g, tgt_masked, pad)
+            tloss += loss_fn(logits, tgt_masked).item()
+            tppl  += _ppl(logits, tgt_masked, pad)
 
-            # ──────── build per-token boolean masks ─────────
-            cur_stop_mask   = (tgt == 9)                       # current == 9
-            # previous decision token (shift by one block)
-            prev_tok        = F.pad(tgt, (1, 0), value=-1)[:, :-1]
-            prev_stop_mask  = (prev_tok == 9)
-            trans_mask      = _transition_mask(y)[:, pos]      # current ≠ prev
-
-            # ──────── flatten & filter special tokens ───────
-            prob = F.softmax(g, dim=-1).view(-1, g.size(-1)).cpu().numpy()
+            # ─── flatten predictions & labels (after skipping specials) ───
+            prob = F.softmax(logits, dim=-1).view(-1, logits.size(-1)).cpu().numpy()
             pred = prob.argmax(1)
             lbl  = tgt.view(-1).cpu().numpy()
 
-            keep = ~np.isin(lbl, list(special))
-
+            keep = ~np.isin(lbl, list(special))      # drop [PAD] [SOS] [UNK]
             P .append(pred[keep])
             L .append(lbl [keep])
             PR.append(prob[keep])
 
+            # derived masks
             flat = lambda m: m.view(-1).cpu().numpy()[keep]
-            m_cur_stop  .append(flat(cur_stop_mask))
-            m_prev_stop .append(flat(prev_stop_mask))
-            m_transition.append(flat(trans_mask))
+            cur_stop_mask_all   .append(flat(tgt == 9))
+            transition_mask_all .append(flat(_transition_mask(y)[:, pos]))
+            prev_tok = F.pad(tgt, (1, 0), value=-1)[:, :-1]
+            after_stop_mask_all .append(flat(prev_tok == 9))
 
-    # ───────── concat everything ─────────
-    P, L, PR          = map(np.concatenate, (P, L, PR))
-    m_cur_stop        = np.concatenate(m_cur_stop)
-    m_prev_stop       = np.concatenate(m_prev_stop)
-    m_transition      = np.concatenate(m_transition)
+    # concat everything
+    P = np.concatenate(P)
+    L = np.concatenate(L)
+    PR = np.concatenate(PR)
+    cur_stop_mask    = np.concatenate(cur_stop_mask_all)
+    after_stop_mask  = np.concatenate(after_stop_mask_all)
+    transition_mask  = np.concatenate(transition_mask_all)
 
-    # only three subsets requested
-    return (tloss/len(loader), tppl/len(loader),
-            _subset(P, L, PR, m_cur_stop),
-            _subset(P, L, PR, m_prev_stop),
-            _subset(P, L, PR, m_transition))
+    all_mask = np.ones_like(P, dtype=bool)
+
+    return (tloss / len(loader), tppl / len(loader),
+            _subset(P, L, PR, all_mask),
+            _subset(P, L, PR, cur_stop_mask),
+            _subset(P, L, PR, after_stop_mask),
+            _subset(P, L, PR, transition_mask))
 
 # ═════════════════ training loop ════════════════════════════════
 def train_model(cfg):
