@@ -162,10 +162,19 @@ def _evaluate(loader, eng, dev, loss_fn, step, pad, tok):
             x = b["aggregate_input"].to(dev)
             y = b["label"].to(dev)
 
-            pos = torch.arange(step-1, x.size(1), step, device=dev)
+            # pos = torch.arange(step-1, x.size(1), step, device=dev)
 
-            logits = eng(x)[:, pos, :]        # (B,N,V)
-            tgt    = y[:, pos].clone()        # (B,N)
+            # logits = eng(x)[:, pos, :]        # (B,N,V)
+            # tgt    = y[:, pos].clone()        # (B,N)
+
+            # number of decision slots that actually exist in the label tensor
+            n_slots   = y.size(1)                          # (= seq_len_tgt)
+            pos_input = torch.arange(step-1, step*n_slots, step, device=dev)
+
+            # slice model output at those positions …
+            logits = eng(x)[:, pos_input, :]               # (B, n_slots, V)
+            # … and align labels 1-to-1
+            tgt    = y                                     # already (B, n_slots)
 
             mask_tr = transition_mask(y)[:, pos]
             tgt[mask_tr] = pad                # mask transitions for loss
@@ -238,11 +247,14 @@ def train_model(cfg):
             x = b["aggregate_input"].to(dev)
             y = b["label"].to(dev)
 
-            pos    = torch.arange(cfg["ai_rate"]-1, x.size(1),
-                                  cfg["ai_rate"], device=dev)
-            logits = eng(x)[:, pos, :]            # (B,N,V)
+            # pos    = torch.arange(cfg["ai_rate"]-1, x.size(1), cfg["ai_rate"], device=dev)
+            # logits = eng(x)[:, pos, :]            # (B,N,V)
+            # tgt = y[:, pos].clone()
 
-            tgt = y[:, pos].clone()
+            n_slots = y.size(1)
+            pos     = torch.arange(cfg["ai_rate"]-1, cfg["ai_rate"]*n_slots, cfg["ai_rate"], device=dev)
+            logits  = eng(x)[:, pos, :]          # (B, n_slots, V)
+            tgt     = y                          # (B, n_slots)   <-- no fancy indexing
             tgt[transition_mask(y)[:, pos]] = pad_id
 
             loss = loss_fn(logits, tgt)
