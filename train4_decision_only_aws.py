@@ -1,34 +1,33 @@
 # train4_decision_only_aws.py
-# ===================================================================
-# Decision-Only trainer (quiet)  ◇  PairwiseRevenueLoss objective
-# -------------------------------------------------------------------
-# • DeepSpeed ZeRO-1 + FusedLAMB, all DS chatter muted
-# • Validation metrics reported on three subsets:
-#       ① main (non-transition tokens)
-#       ② STOP (current slot == 9)
-#       ③ transition (token != previous token)
-# • Whenever val-loss improves:
-#       – DecisionOnly_<uid>.pt   ➜  s3://<bucket>/DecisionOnly/checkpoints/
-#       – DecisionOnly_<uid>.json ➜  s3://<bucket>/DecisionOnly/metrics/
-#   Local copies are removed after a successful upload.
-# • First console lines show the exact S3 targets.
-# ===================================================================
+# ================================================================
+# Decision-Only trainer (quiet) – PairwiseRevenueLoss objective
+# ---------------------------------------------------------------
+# • DeepSpeed ZeRO-1 + FusedLAMB   (all DS chatter muted)
+# • Validation metrics on three subsets:
+#     ① main        – non-transition positions
+#     ② STOP        – positions whose *current* token is 9
+#     ③ transition  – token ≠ previous token
+# • On each val-improvement we save
+#       DecisionOnly_<uid>.pt   →  s3://<bucket>/DecisionOnly/checkpoints/
+#       DecisionOnly_<uid>.json →  s3://<bucket>/DecisionOnly/metrics/
+#   and delete the local copies after a successful upload.
+# ================================================================
 
-# ───────────────────── env & logging hygiene ────────────────────────
+# ──────────────── environment & logging hygiene ─────────────────
 import os, warnings, logging, json, numpy as np, boto3, botocore
 from pathlib import Path
-
-os.environ["TF_CPP_MIN_LOG_LEVEL"]  = "3"
-os.environ["DEEPSPEED_LOG_LEVEL"]   = "error"
-os.environ["DS_DISABLE_LOGS"]       = "1"
-
+os.environ.update({
+    "TF_CPP_MIN_LOG_LEVEL": "3",
+    "DEEPSPEED_LOG_LEVEL" : "error",
+    "DS_DISABLE_LOGS"     : "1",
+})
 warnings.filterwarnings("ignore")
 logging.getLogger().setLevel(logging.ERROR)
 for n in ("deepspeed", "torch_checkpoint_engine", "engine"):
     logging.getLogger(n).setLevel(logging.ERROR)
     logging.getLogger(n).propagate = False
 
-# ───────────────────── std / 3rd-party imports ──────────────────────
+# ──────────────── std / 3rd-party imports ───────────────────────
 import torch, torch.nn as nn, torch.nn.functional as F
 from torch.utils.data import DataLoader, random_split
 from sklearn.metrics import (confusion_matrix, accuracy_score, f1_score,
@@ -36,14 +35,15 @@ from sklearn.metrics import (confusion_matrix, accuracy_score, f1_score,
 from sklearn.preprocessing import label_binarize
 from tqdm import tqdm
 import deepspeed
-from pytorch_lamb import Lamb
+from pytorch_lamb import Lamb                           # optimiser core
 
 from model4_decoderonly     import build_transformer
 from dataset4_decision_only import TransformerDataset, load_json_dataset
 from tokenizers             import Tokenizer, models, pre_tokenizers
 from config4_decision_only_git import get_config
 
-# ───────────────────── tokenizer (fixed vocab) ──────────────────────
+# ═════════════════ helper blocks ════════════════════════════════
+# --- tokenizer --------------------------------------------------
 def _build_tok():
     t = Tokenizer(models.WordLevel(unk_token="[UNK]"))
     t.pre_tokenizer = pre_tokenizers.Whitespace()
@@ -53,38 +53,39 @@ def _build_tok():
         unk_token="[UNK]")
     return t
 
-# ───────────────────── Pair-wise revenue loss ───────────────────────
+# --- loss -------------------------------------------------------
 class PairwiseRevenueLoss(nn.Module):
+    """ -E|R_i – R_j|  (negative expected revenue gap) """
     def __init__(self, revenue, vocab_size, ignore_index=0):
         super().__init__()
         if len(revenue) < vocab_size:
             revenue = revenue + [0.] * (vocab_size - len(revenue))
-        rev = torch.tensor(revenue, dtype=torch.float32)
+        rev = torch.as_tensor(revenue, dtype=torch.float32)
         self.register_buffer("penalty",
                              -torch.abs(rev[:, None] - rev[None, :]))
         self.ignore = ignore_index
 
-    def forward(self, logits, targets):
-        B, T, V = logits.shape
+    def forward(self, logits, tgt):
+        B, N, V = logits.shape          # logits already sliced to decisions
         probs = F.softmax(logits.view(-1, V), dim=-1)
-        tgt   = targets.view(-1)
+        tgt   = tgt.view(-1)
         keep  = tgt != self.ignore
         if keep.sum() == 0:
             return logits.new_tensor(0.0)
         pen = self.penalty.to(probs)
         return -(probs[keep] * pen[tgt[keep]]).sum(dim=-1).mean()
 
-# ───────────────────── misc helpers ─────────────────────────────────
-def _transition_mask(y):
-    return y != F.pad(y, (1, 0), value=-1)[:, :-1]
+# --- tiny utils -------------------------------------------------
+def _transition_mask(lbl: torch.Tensor):
+    return lbl != F.pad(lbl, (1, 0), value=-1)[:, :-1]
 
 def _ppl(logits, tgt, pad=0):
-    lp = F.log_softmax(logits, dim=-1)
-    lp2d, t = lp.view(-1, lp.size(-1)), tgt.view(-1)
-    keep = t != pad
-    if keep.sum() == 0:
+    lp  = F.log_softmax(logits, dim=-1)
+    lp2 = lp.view(-1, lp.size(-1)); t = tgt.view(-1)
+    m   = t != pad
+    if m.sum() == 0:
         return float("nan")
-    return torch.exp(F.nll_loss(lp2d[keep], t[keep], reduction="mean")).item()
+    return torch.exp(F.nll_loss(lp2[m], t[m], reduction="mean")).item()
 
 def _subset(pred, lbl, probs, mask, cls=np.arange(1, 10)):
     if mask.sum() == 0:
@@ -99,21 +100,21 @@ def _subset(pred, lbl, probs, mask, cls=np.arange(1, 10)):
         au = np.nan
     return {"hit": hit, "f1": f1, "auprc": au}
 
-def _json_safe(obj):
+def _json_safe(o):
     import numpy as _np, torch as _th
-    if isinstance(obj, (_th.Tensor, _th.nn.Parameter)):
-        return obj.detach().cpu().tolist()
-    if isinstance(obj, _np.ndarray):
-        return obj.tolist()
-    if isinstance(obj, (_np.generic,)):
-        return obj.item()
-    if isinstance(obj, dict):
-        return {k: _json_safe(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_json_safe(v) for v in obj]
-    return obj
+    if isinstance(o, (_th.Tensor, _th.nn.Parameter)):
+        return o.detach().cpu().tolist()
+    if isinstance(o, _np.ndarray):
+        return o.tolist()
+    if isinstance(o, (_np.generic,)):
+        return o.item()
+    if isinstance(o, dict):
+        return {k: _json_safe(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_json_safe(v) for v in o]
+    return o
 
-# ───────────────────── S3 helpers ────────────────────────────────────
+# --- S3 helpers -------------------------------------------------
 def _s3_client():
     try: return boto3.client("s3")
     except botocore.exceptions.BotoCoreError: return None
@@ -129,17 +130,17 @@ def _upload(local: Path, bucket: str, key: str, s3) -> bool:
         print(f"[S3-ERR] {e}")
         return False
 
-# ───────────────────── dataloaders ───────────────────────────────────
+# ═════════════════ data & model ═════════════════════════════════
 def _make_loaders(cfg):
-    data = load_json_dataset(cfg["filepath"])
-    n = len(data); tr, va = int(.8*n), int(.1*n)
-    s = torch.Generator().manual_seed(33)
-    tr_ds, va_ds, te_ds = random_split(data, [tr, va, n-tr-va], generator=s)
+    raw = load_json_dataset(cfg["filepath"])
+    n   = len(raw); tr, va = int(.8*n), int(.1*n)
+    gen = torch.Generator().manual_seed(33)
+    tr_ds, va_ds, te_ds = random_split(raw, [tr, va, n-tr-va], generator=gen)
 
     tok_ai = tok_tgt = _build_tok()
     out = Path(cfg["model_folder"]); out.mkdir(parents=True, exist_ok=True)
-    tok_ai .save(str(out/"tokenizer_ai.json"))
-    tok_tgt.save(str(out/"tokenizer_tgt.json"))
+    tok_ai .save(str(out / "tokenizer_ai.json"))
+    tok_tgt.save(str(out / "tokenizer_tgt.json"))
 
     def mk(split):
         return TransformerDataset(split, tok_ai, tok_tgt,
@@ -151,54 +152,56 @@ def _make_loaders(cfg):
             loader(mk(te_ds), False),
             tok_tgt)
 
-# ───────────────────── model factory ─────────────────────────────────
 def _build_model(cfg):
     return build_transformer(cfg["vocab_size_tgt"], cfg["seq_len_ai"],
                              cfg["d_model"], cfg["N"], cfg["num_heads"],
                              cfg["d_ff"], cfg["dropout"])
 
-# ───────────────────── evaluation (3 subsets) ───────────────────────
+# ═════════════════ evaluation ═══════════════════════════════════
 def _evaluate(loader, eng, dev, loss_fn, step, pad, tok):
     if not len(loader):
         nan = float("nan"); return nan, nan, {}, {}, {}
-    sp = {pad, tok.token_to_id("[SOS]"), tok.token_to_id("[UNK]")}
+    special = {pad, tok.token_to_id("[SOS]"), tok.token_to_id("[UNK]")}
 
     tloss = tppl = 0.0
     P, L, PR = [], [], []
-    m_stop, m_trans = [], []
+    m_stop, m_tr = [], []
 
     eng.eval()
     with torch.no_grad():
         for b in loader:
             x, y = b["aggregate_input"].to(dev), b["label"].to(dev)
-            g = eng(x)[:, torch.arange(step-1, gsize := y.size(1), step, device=dev), :]
+            pos  = torch.arange(step-1, x.size(1), step, device=dev)
+            g    = eng(x)[:, pos, :]              # (B, N, V)
+            tgt  = y[:, pos].clone()
+            tgt[_transition_mask(y)[:, pos]] = pad
 
-            y_eval = y.clone(); y_eval[_transition_mask(y)] = pad
-            tloss += loss_fn(g, y_eval).item()
-            tppl  += _ppl(g, y_eval, pad)
+            tloss += loss_fn(g, tgt).item()
+            tppl  += _ppl(g, tgt, pad)
 
             pr  = F.softmax(g, dim=-1).view(-1, g.size(-1)).cpu().numpy()
-            pd  = pr.argmax(1); lb = y.view(-1).cpu().numpy()
-            keep = ~np.isin(lb, list(sp))
+            pd  = pr.argmax(1)
+            lb  = tgt.view(-1).cpu().numpy()      # already sliced
+            keep = ~np.isin(lb, list(special))
 
             P.append(pd[keep]); L.append(lb[keep]); PR.append(pr[keep])
-            m_stop .append((y == 9).view(-1).cpu().numpy()[keep])
-            m_trans.append(_transition_mask(y).view(-1).cpu().numpy()[keep])
+            m_stop.append((tgt == 9).view(-1).cpu().numpy()[keep])
+            m_tr  .append(_transition_mask(y)[:, pos].view(-1).cpu().numpy()[keep])
 
     P, L, PR = map(np.concatenate, (P, L, PR))
-    m_stop, m_trans = map(np.concatenate, (m_stop, m_trans))
-    main_mask = ~m_trans               # non-transition tokens
+    m_stop, m_tr = map(np.concatenate, (m_stop, m_tr))
+    main_mask = ~m_tr
 
     return (tloss/len(loader), tppl/len(loader),
             _subset(P, L, PR, main_mask),
             _subset(P, L, PR, m_stop),
-            _subset(P, L, PR, m_trans))
+            _subset(P, L, PR, m_tr))
 
-# ───────────────────── training loop ─────────────────────────────────
+# ═════════════════ training loop ════════════════════════════════
 def train_model(cfg):
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # ---------- run-specific ids / paths ------------------------------
+    # ---------- unique run-id & file names -----------------------
     slots = cfg["seq_len_ai"] // cfg["ai_rate"]
     uid   = (f"ctx{slots}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}_"
              f"heads{cfg['num_heads']}_lr{cfg['lr']}_weight{cfg['weight']}")
@@ -209,12 +212,11 @@ def train_model(cfg):
     bucket  = cfg["s3_bucket"]
     ck_key  = f"DecisionOnly/checkpoints/{ckpt_local.name}"
     js_key  = f"DecisionOnly/metrics/{json_local.name}"
-
     print(f"[INFO] artefacts will be saved to\n"
           f"  • s3://{bucket}/{ck_key}\n"
           f"  • s3://{bucket}/{js_key}\n")
 
-    # ---------- data & model ------------------------------------------
+    # ---------- data / model / loss -----------------------------
     tr, va, te, tok = _make_loaders(cfg)
     pad_id = tok.token_to_id("[PAD]")
 
@@ -226,50 +228,48 @@ def train_model(cfg):
         model=model, model_parameters=model.parameters(),
         config={
             "train_micro_batch_size_per_gpu": cfg["batch_size"],
+            "zero_allow_untested_optimizer": True,
             "optimizer": {"type": "Lamb",
                           "params": {"lr": cfg["lr"],
                                      "eps": cfg["eps"],
                                      "weight_decay": cfg["weight_decay"]}},
             "zero_optimization": {"stage": 1},
-            "fp16": {"enabled": False},
-            "zero_allow_untested_optimizer": True})
+            "fp16": {"enabled": False}})
 
-    # ---------- training ---------------------------------------------
+    # ---------- epochs ------------------------------------------
     best, patience = None, 0
     for ep in range(cfg["num_epochs"]):
-        eng.train(); running = 0.0
+        eng.train(); run = 0.0
         for b in tqdm(tr, desc=f"Ep {ep:02d}", leave=False):
             x, y = b["aggregate_input"].to(dev), b["label"].to(dev)
             pos  = torch.arange(cfg["ai_rate"]-1, x.size(1),
                                 cfg["ai_rate"], device=dev)
-            logits = eng(x)[:, pos, :]
-            y_tr = y.clone(); y_tr[_transition_mask(y)] = pad_id
 
-            loss = loss_fn(logits, y_tr)
+            logits = eng(x)[:, pos, :]             # (B, N, V)
+            tgt    = y[:, pos].clone()
+            tgt[_transition_mask(y)[:, pos]] = pad_id
+
+            loss = loss_fn(logits, tgt)
             eng.zero_grad(); eng.backward(loss); eng.step()
-            running += loss.item()
-        print(f"\nTrain loss {running/len(tr):.4f}")
+            run += loss.item()
+        print(f"\nTrain loss {run/len(tr):.4f}")
 
-        v_loss, v_ppl, v_main, v_stop, v_trans = _evaluate(
+        v_loss, v_ppl, v_main, v_stop, v_tr = _evaluate(
             va, eng, dev, loss_fn, cfg["ai_rate"], pad_id, tok)
         print(f"Epoch {ep:02d}  ValLoss={v_loss:.4f}  PPL={v_ppl:.4f}")
-        for tag, d in (("main", v_main),
-                       ("STOP", v_stop),
-                       ("transition", v_trans)):
+        for tag, d in (("main", v_main), ("STOP", v_stop), ("transition", v_tr)):
             print(f"  {tag:<10} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
                   f"AUPRC={d['auprc']:.4f}")
 
-        # ---------- checkpoint on improvement -------------------------
+        # ----- store best ----------------------------------------
         if best is None or v_loss < best:
             best, patience = v_loss, 0
             torch.save({"epoch": ep,
                         "model_state_dict": eng.module.state_dict()}, ckpt_local)
-
             meta = _json_safe({
-                "best_checkpoint_path": ckpt_local.name,   # file name only
+                "best_checkpoint_path": ckpt_local.name,
                 "val_loss": best, "val_ppl": v_ppl,
-                "val_main": v_main, "val_stop": v_stop,
-                "val_transition": v_trans})
+                "val_main": v_main, "val_stop": v_stop, "val_transition": v_tr})
             json_local.write_text(json.dumps(meta, indent=2))
 
             if _upload(ckpt_local, bucket, ck_key, s3):
@@ -281,23 +281,22 @@ def train_model(cfg):
             if patience >= cfg["patience"]:
                 print("Early stopping."); break
 
-    # ---------- test --------------------------------------------------
-    if ckpt_local.exists():                                       # not deleted?
+    # ---------- test --------------------------------------------
+    # (will only run if ckpt wasn't deleted, e.g. during local tests)
+    if ckpt_local.exists():
         state = torch.load(ckpt_local, map_location=dev)
         eng.module.load_state_dict(state["model_state_dict"])
 
-    t_loss, t_ppl, t_main, t_stop, t_trans = _evaluate(
+    t_loss, t_ppl, t_main, t_stop, t_tr = _evaluate(
         te, eng, dev, loss_fn, cfg["ai_rate"], pad_id, tok)
 
     print(f"\n** TEST ** Loss={t_loss:.4f}  PPL={t_ppl:.4f}")
-    for tag, d in (("main", t_main),
-                   ("STOP", t_stop),
-                   ("transition", t_trans)):
+    for tag, d in (("main", t_main), ("STOP", t_stop), ("transition", t_tr)):
         print(f"  {tag:<10} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
               f"AUPRC={d['auprc']:.4f}")
 
     return {"uid": uid, "val_loss": best}
 
-# ───────────────────── CLI entry-point ───────────────────────────────
+# ──────────────── CLI (for quick manual run) ────────────────────
 if __name__ == "__main__":
     train_model(get_config())
