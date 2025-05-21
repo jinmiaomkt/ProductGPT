@@ -42,11 +42,37 @@ num_heads_values = [8, 16, 32]
 lr_values = [1e-4]
 weight_values = [1, 2, 4]
 
-# S3 client
-s3 = boto3.client("s3")
+# # S3 client
+# s3 = boto3.client("s3")
 
-def upload_to_s3(local_path: str, bucket: str, key: str):
-    s3.upload_file(local_path, bucket, key)
+# def upload_to_s3(local_path: str, bucket: str, key: str):
+#     s3.upload_file(local_path, bucket, key)
+
+# ---------- S3 helpers ----------------------------------------------------
+import botocore.exceptions
+
+def get_s3_client():
+    try:
+        return boto3.client("s3")               # region from env or AWS config
+    except botocore.exceptions.BotoCoreError as e:
+        print(f"[WARN] could not create S3 client: {e}")
+        return None
+
+def upload_to_s3(local_path: Path, bucket: str, key: str, s3):
+    """Upload file → s3://bucket/key  – returns True if success."""
+    if s3 is None:
+        print("[WARN] skipping upload; no S3 client")
+        return False
+    try:
+        s3.upload_file(str(local_path), bucket, key)
+        print(f"[S3] uploaded {local_path.name} → s3://{bucket}/{key}")
+        return True
+    except botocore.exceptions.NoCredentialsError:
+        print("[ERROR] no AWS credentials – file not uploaded")
+    except botocore.exceptions.ClientError as e:
+        print(f"[ERROR] S3 upload failed: {e}")
+    return False
+
 
 def run_one_experiment(params):
     """
@@ -92,19 +118,24 @@ def run_one_experiment(params):
         }, f, indent=2)
 
     # 6) Upload checkpoint + metrics to S3
+    s3        = get_s3_client()
     bucket = config["s3_bucket"]
 
     ckpt = final_metrics["best_checkpoint_path"]
     if ckpt and Path(ckpt).exists():
-        upload_to_s3(ckpt, bucket, f"checkpoints/{Path(ckpt).name}")
+        ok = upload_to_s3(ckpt, bucket, f"checkpoints/{Path(ckpt).name}", s3)
         # upload_to_gcs(ckpt, bucket, f"checkpoints/{Path(ckpt).name}")
-        os.remove(ckpt)
+        if ok:
+            ckpt.unlink()
+        # os.remove(ckpt)
 
     if Path(metrics_file).exists():
-        upload_to_s3(metrics_file, bucket, f"metrics/{metrics_file}")
+        ok = upload_to_s3(metrics_file, bucket, f"metrics/{metrics_file}", s3)
         # upload_to_gcs(metrics_file, bucket, f"metrics/{metrics_file}")
-        os.remove(metrics_file)
-
+        if ok:
+            Path(metrics_file).unlink()
+        # os.remove(metrics_file)
+        
     return unique_id
 
 def hyperparam_sweep_parallel(max_workers=max_workers):

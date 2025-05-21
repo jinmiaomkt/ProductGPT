@@ -1,6 +1,10 @@
+# hP_tuning4_index_git.py
+# ---------------------------------------------------------------------------#
+#  Multiprocessing / env setup                                               #
+# ---------------------------------------------------------------------------#
 import multiprocessing as mp
-# 1) Force 'spawn' start method before CUDA or ProcessPoolExecutor is initialized
-mp.set_start_method('spawn', force=True)
+
+mp.set_start_method("spawn", force=True)
 
 import itertools
 import json
@@ -8,22 +12,24 @@ import os
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-# import boto3
+import boto3
+import botocore
 import torch
 
-from config4_index_git import get_config
-from train4_decoderonly_git import train_model
+from config4_index_git      import get_config       # <- your config file
+from train4_decoderonly_git import train_model      # <- your training loop
 
-# hyperparameter ranges
+# ---------------------------------------------------------------------------#
+#  Hyper-parameter grid                                                      #
+# ---------------------------------------------------------------------------#
 ctx_window_values  = [480, 960, 1920, 3840]
 d_model_values     = [32, 64, 128]
 d_ff_values        = [32, 64, 128]
 N_values           = [4, 6, 8]
 num_heads_values   = [4, 8]
-lr_values = [1e-4]
+lr_values          = [1e-4]
 weight_values      = [2, 4, 8]
 
-# precompute the grid
 HP_GRID = list(itertools.product(
     ctx_window_values,
     d_model_values,
@@ -31,100 +37,107 @@ HP_GRID = list(itertools.product(
     N_values,
     num_heads_values,
     lr_values,
-    weight_values
+    weight_values,
 ))
 
-# Initialize S3 client
-# s3 = boto3.client("s3")
+# ---------------------------------------------------------------------------#
+#  S3 helpers                                                                #
+# ---------------------------------------------------------------------------#
+def get_s3_client():
+    try:
+        return boto3.client("s3")
+    except botocore.exceptions.NoCredentialsError:
+        print("[WARN] No AWS credentials – skipping uploads")
+        return None
 
-# def upload_to_s3(local_path: str, bucket: str, key: str):
-#    s3.upload_file(local_path, bucket, key)
+def upload_to_s3(local_path: Path, bucket: str, key: str, s3):
+    if s3 is None:
+        return False
+    try:
+        s3.upload_file(str(local_path), bucket, key)
+        return True
+    except botocore.exceptions.BotoCoreError as e:
+        print(f"[WARN] S3 upload failed: {e}")
+        return False
 
+# ---------------------------------------------------------------------------#
+#  One experiment                                                            #
+# ---------------------------------------------------------------------------#
 def run_one_experiment(params):
-    ctx_window, d_model, d_ff, N, num_heads, lr, weight = params   # ← 7 vars
+    (ctx_window, d_model, d_ff,
+     N, num_heads, lr, weight) = params
 
-    config = get_config()
-    config.update({
-        'ctx_window': ctx_window,          # scalar, not list
-        'd_model':    d_model,
-        'd_ff':       d_ff,
-        'N':          N,
-        'num_heads':  num_heads,
-        'lr':         lr,
-        'weight':     weight,
-        'ai_rate':    15                  # keep constant, or read from cfg
+    # ---------- build per-run config ------------------------------------
+    cfg = get_config()
+    cfg.update({
+        "ctx_window": ctx_window,
+        "seq_len_ai": ctx_window,       # keeps model & dataset in sync
+        "d_model":    d_model,
+        "d_ff":       d_ff,
+        "N":          N,
+        "num_heads":  num_heads,
+        "lr":         lr,
+        "weight":     weight,
+        "ai_rate":    15,
     })
 
-    ai_rate = config['ai_rate']
-    ctx_decisions = ctx_window // ai_rate       # integer division
-    unique_id = (f"ctx{ctx_decisions}_dmodel{d_model}_ff{d_ff}_N{N}_"
-                 f"heads{num_heads}_lr{lr}_weight{weight}")
-    config['model_basename'] = f"MyProductGPT_{unique_id}"
+    slots = ctx_window // cfg["ai_rate"]
+    uid = (f"ctx{slots}_dmodel{d_model}_ff{d_ff}_N{N}_"
+           f"heads{num_heads}_lr{lr}_weight{weight}")
+    stem = f"MyProductGPT_{uid}"
+    cfg["model_basename"] = stem
 
-    # 3) Pin to a GPU if available
+    # ---------- pin GPU --------------------------------------------------
     ngpu = torch.cuda.device_count()
-    if ngpu > 0:
-        os.environ['CUDA_VISIBLE_DEVICES'] = str(hash(unique_id) % ngpu)
+    if ngpu:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(hash(uid) % ngpu)
 
-    # 4) Run training
-    results = train_model(config)
+    # ---------- train ----------------------------------------------------
+    result = train_model(cfg)          # returns dict with best_checkpoint_path
 
-    # 5) Write metrics JSON
-    metrics_file = f"IndexBased_FullProductGPT_{unique_id}.json"
-    with open(metrics_file, 'w') as f:
-        json.dump({
-            "ctx_window": ctx_window,
-            "d_model":   d_model,
-            "d_ff":      d_ff,
-            "N":         N,
-            "num_heads": num_heads,
-            "lr":        lr,
-            "weight":    weight,
-            "val_loss":  results['val_loss'],
-            "val_ppl":   results['val_ppl'],
-            "val_confusion_matrix": results['val_confusion_matrix'],
-            "val_hit_rate":          results['val_hit_rate'],
-            "val_f1_score":          results['val_f1_score'],
-            "val_auprc":             results['val_auprc'],
-            "best_checkpoint_path":  results['best_checkpoint_path']
-        }, f, indent=2)
+    # ---------- write metrics JSON --------------------------------------
+    metrics_file = Path(f"{stem}.json")
+    with metrics_file.open("w") as f:
+        json.dump(result, f, indent=2)
 
-    # 6) Upload checkpoint + metrics to S3 and clean up
-    # bucket = config["s3_bucket"]
-    gcs_bucket = config["gcp_bucket"]  # <- your bucket name
-    
-    ckpt = results["best_checkpoint_path"]
-    if ckpt and Path(ckpt).exists():
-        # upload_to_s3(ckpt, bucket, f"checkpoints/{Path(ckpt).name}")
-        upload_to_gcs(ckpt, gcs_bucket, f"checkpoints/{Path(ckpt).name}")
-        os.remove(ckpt)
+    # ---------- upload to S3 --------------------------------------------
+    s3          = get_s3_client()
+    bucket      = cfg.get("s3_bucket", "")
+    s3_prefix   = cfg.get("s3_prefix", "").rstrip("/")
+    if s3_prefix:
+        s3_prefix += "/"
 
-    # upload_to_s3(metrics_file, bucket, f"metrics/{metrics_file}")
-    upload_to_gcs(metrics_file, gcs_bucket, f"metrics/{metrics_file}")
-    os.remove(metrics_file)
+    # checkpoint
+    ckpt_path = Path(result["best_checkpoint_path"])
+    if ckpt_path.exists():
+        key = f"{s3_prefix}checkpoints/{ckpt_path.name}"
+        if upload_to_s3(ckpt_path, bucket, key, s3):
+            ckpt_path.unlink()
 
-    return unique_id
+    # metrics
+    key = f"{s3_prefix}metrics/{metrics_file.name}"
+    if upload_to_s3(metrics_file, bucket, key, s3):
+        metrics_file.unlink()
 
+    return uid
+
+# ---------------------------------------------------------------------------#
+#  Sweep driver                                                              #
+# ---------------------------------------------------------------------------#
 def hyperparam_sweep_parallel(max_workers=None):
-    # default to one worker per GPU, or CPU cores - 1 if no GPU
     if max_workers is None:
-        if torch.cuda.is_available():
-            max_workers = torch.cuda.device_count()
-        else:
-            max_workers = max(1, mp.cpu_count() - 1)
+        max_workers = torch.cuda.device_count() or max(1, mp.cpu_count() - 1)
 
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(run_one_experiment, params): params
-            for params in HP_GRID
-        }
-        for fut in as_completed(futures):
-            params = futures[fut]
+    with ProcessPoolExecutor(max_workers=max_workers) as exe:
+        futs = {exe.submit(run_one_experiment, hp): hp for hp in HP_GRID}
+        for fut in as_completed(futs):
+            hp = futs[fut]
             try:
-                uid = fut.result()
-                print(f"[Done] {uid}")
+                name = fut.result()
+                print(f"[Done] {name}")
             except Exception as e:
-                print(f"[Error] params={params} -> {e}")
+                print(f"[Error] params={hp} -> {e}")
 
+# ---------------------------------------------------------------------------#
 if __name__ == "__main__":
     hyperparam_sweep_parallel()
