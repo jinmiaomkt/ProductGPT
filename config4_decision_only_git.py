@@ -64,7 +64,7 @@ def get_config():
         # ------------------------------ cloud storage ------------------ #
         "s3_bucket": "productgptbucket",
         "gcp_bucket": "productgptbucket",
-        "s3_prefix": "my_runs",
+        # "s3_prefix": "my_runs",
     }
 
 
