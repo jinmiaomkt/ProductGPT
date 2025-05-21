@@ -1,7 +1,12 @@
 # hp_tuning_decision_only.py
-# ---------------------------------------------------------------------
+# ================================================================
+# Hyper-parameter sweep for Decision-Only model – quiet checkpoint
+# Writes each run’s artefacts to:
+#   s3://<bucket>/<prefix>/DecisionOnly/{checkpoints|metrics}/
+# and prints that folder after each run.
+# ----------------------------------------------------------------
 import multiprocessing as mp
-mp.set_start_method("spawn", force=True)       # always spawn, safe with CUDA
+mp.set_start_method("spawn", force=True)
 
 import itertools, json, os
 from pathlib import Path
@@ -13,8 +18,7 @@ import torch
 from config4_decision_only_git import get_config
 from train4_decision_only_aws  import train_model
 
-
-# ───────────────────────────── hyper-parameter grid ──────────────────────
+# ─── grid ─────────────────────────────────────────────────────────
 seq_len_ai_values = [32, 64, 128, 256]
 d_model_values    = [256, 512]
 d_ff_values       = [128, 256, 512]
@@ -33,7 +37,7 @@ HP_GRID = list(itertools.product(
     weight_values,
 ))
 
-# ───────────────────────────── S3 helpers ────────────────────────────────
+# ─── S3 helpers ───────────────────────────────────────────────────
 def get_s3_client():
     try:
         return boto3.client("s3")
@@ -53,15 +57,14 @@ def upload_to_s3(local: Path, bucket: str, key: str, s3) -> bool:
         print(f"[ERROR] S3 upload failed: {e}")
         return False
 
-# ───────────────────────────── worker fn ─────────────────────────────────
+# ─── worker ───────────────────────────────────────────────────────
 def run_one_experiment(params):
     seq_len_ai, d_model, d_ff, N, num_heads, lr, weight = params
 
-    # 1) build config
     cfg = get_config()
     cfg.update({
         "seq_len_ai": seq_len_ai,
-        "seq_len_tgt": seq_len_ai // cfg["ai_rate"],   # label length matches logits
+        "seq_len_tgt": seq_len_ai // cfg["ai_rate"],     # keep logits/labels aligned
         "d_model":    d_model,
         "d_ff":       d_ff,
         "N":          N,
@@ -74,19 +77,18 @@ def run_one_experiment(params):
            f"heads{num_heads}_lr{lr}_weight{weight}")
     cfg["model_basename"] = f"DecisionOnly_{uid}"
 
-    # pin GPU (round-robin)
     if torch.cuda.device_count():
         os.environ["CUDA_VISIBLE_DEVICES"] = str(hash(uid) % torch.cuda.device_count())
 
-    # 2) train
+    # ── train ──────────────────────────────────────────────────────
     metrics = train_model(cfg)
 
-    # 3) write metrics JSON locally
+    # ── local JSON ────────────────────────────────────────────────
     metrics_path = Path(f"DecisionOnly_{uid}.json")
-    with metrics_path.open("w") as f:
-        json.dump(metrics, f, indent=2)
+    with metrics_path.open("w") as fp:
+        json.dump(metrics, fp, indent=2)
 
-    # 4) upload artefacts
+    # ── upload ────────────────────────────────────────────────────
     s3      = get_s3_client()
     bucket  = cfg["s3_bucket"]
     prefix  = (cfg.get("s3_prefix") or "").rstrip("/")
@@ -100,14 +102,18 @@ def run_one_experiment(params):
         if upload_to_s3(ckpt_path, bucket, key, s3):
             ckpt_path.unlink()
 
-    # metrics JSON
+    # metrics
     key = f"{prefix}DecisionOnly/metrics/{metrics_path.name}"
     if upload_to_s3(metrics_path, bucket, key, s3):
         metrics_path.unlink()
 
+    # ── summary line ──────────────────────────────────────────────
+    folder = f"s3://{bucket}/{prefix}DecisionOnly/"
+    print(f"[S3] {uid}  →  {folder}")
+
     return uid
 
-# ───────────────────────────── sweep driver ──────────────────────────────
+# ─── sweep driver ─────────────────────────────────────────────────
 def hyperparam_sweep_parallel(max_workers=None):
     if max_workers is None:
         max_workers = torch.cuda.device_count() or max(1, mp.cpu_count() - 1)
@@ -117,11 +123,10 @@ def hyperparam_sweep_parallel(max_workers=None):
         for fut in as_completed(futs):
             hp = futs[fut]
             try:
-                name = fut.result()
-                print(f"[Done] {name}")
+                print(f"[Done] {fut.result()}")
             except Exception as e:
                 print(f"[Error] params={hp} -> {e}")
 
-# ───────────────────────────── entry point ───────────────────────────────
+# ─── entry ────────────────────────────────────────────────────────
 if __name__ == "__main__":
     hyperparam_sweep_parallel()
