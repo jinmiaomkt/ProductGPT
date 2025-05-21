@@ -235,8 +235,8 @@ def train_model(cfg):
 
     s3      = _s3_client()
     bucket  = cfg["s3_bucket"]
-    ck_key  = f"DecisionOnly/checkpoints/{ckpt_path.name}"
-    js_key  = f"DecisionOnly/metrics/{ckpt_path.name}"
+    ck_key  = f"FullProductGPT/checkpoints/{ckpt_path.name}"
+    js_key  = f"FullProductGPT/metrics/{ckpt_path.name}"
     print(f"[INFO] artefacts will be saved to\n"
           f"  • s3://{bucket}/{ck_key}\n"
           f"  • s3://{bucket}/{js_key}\n")
