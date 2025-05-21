@@ -8,7 +8,7 @@ from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import torch, boto3, botocore
 from config4_decision_only_git import get_config
-from train4_decision_only_aws  import train_model, json_safe
+from train4_decision_only_aws import train_model, json_safe   # ← ADD import
 
 mp.set_start_method("spawn", force=True)
 GPU = torch.cuda.device_count()
