@@ -53,11 +53,20 @@ def s3_upload(local: Path, bucket: str, key: str, s3) -> bool:
         return False
 
 def json_safe(x):
-    if isinstance(x, np.ndarray):                return x.tolist()
-    if isinstance(x, (np.integer,)):            return int(x)
-    if isinstance(x, (np.floating,)):           return float(x)
-    if isinstance(x, dict):                     return {k: json_safe(v) for k,v in x.items()}
-    if isinstance(x, (list,tuple,set)):         return [json_safe(v) for v in x]
+    """recursively convert numpy / torch objects → JSON-serialisable types"""
+    import torch, numpy as np
+    if isinstance(x, (torch.Tensor, torch.nn.Parameter)):
+        return x.detach().cpu().tolist()
+    if isinstance(x, np.ndarray):
+        return x.tolist()
+    if isinstance(x, (np.integer,)):
+        return int(x)
+    if isinstance(x, (np.floating,)):
+        return float(x)
+    if isinstance(x, dict):
+        return {k: json_safe(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple, set)):
+        return [json_safe(v) for v in x]
     return x
 # ----------------------------------------------------------------------
 
