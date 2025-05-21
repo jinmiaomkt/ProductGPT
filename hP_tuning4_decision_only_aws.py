@@ -1,62 +1,140 @@
-"""
-Parallel sweep for Decision-Only model
-– Each worker spawns its own TRAIN script (see above)
-– Only a one-liner appears per finished combo
-"""
-import multiprocessing as mp, itertools, json, os
+import multiprocessing as mp
+
+# force every new process to be launched with 'spawn'
+mp.set_start_method('spawn', force=True)
+
+import multiprocessing as mp
+import torch
+
+if torch.cuda.is_available():
+    max_workers = torch.cuda.device_count()
+else:
+    max_workers = max(1, mp.cpu_count() - 1)  # leave one core free
+
+import itertools
+import json
+import os
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
-import torch, boto3, botocore
+
+import boto3
+import torch
+
 from config4_decision_only_git import get_config
-from train4_decision_only_aws import train_model, json_safe   # ← ADD import
+from train4_decision_only_git import train_model
 
-mp.set_start_method("spawn", force=True)
-GPU = torch.cuda.device_count()
-WORKERS = GPU or max(1, mp.cpu_count()-1)
+# from google.cloud import storage
 
-grid = itertools.product(
-    [32,64,128,256],            # seq_len_ai
-    [256,512],                  # d_model
-    [128,256,512],              # d_ff
-    [6,8,10],                   # N
-    [8,16,32],                  # heads
-    [1e-4],                     # lr
-    [1,2,4]                     # weight
-)
+# def upload_to_gcs(local_path: str, bucket_name: str, destination_blob_name: str):
+#     """Uploads a file to GCS bucket."""
+#     storage_client = storage.Client()
+#     bucket = storage_client.bucket(bucket_name)
+#     blob = bucket.blob(destination_blob_name)
+#     blob.upload_from_filename(local_path)
+#     print(f"Uploaded {local_path} to gs://{bucket_name}/{destination_blob_name}")
 
-def s3():                                # singleton
-    if not hasattr(s3,"c"):
-        try: s3.c=boto3.client("s3")
-        except botocore.exceptions.BotoCoreError: s3.c=None
-    return s3.c
+# hyper‐parameter grids
+ctx_window_values = [32, 64, 128, 256]
+d_model_values = [256, 512]
+d_ff_values = [128, 256, 512]
+N_values = [6, 8, 10]
+num_heads_values = [8, 16, 32]
+lr_values = [1e-4]
+weight_values = [1, 2, 4]
 
-def run(hp):
-    L,dm,df,N,H,lr,w = hp
-    cfg=get_config(); cfg.update(
-        seq_len_ai=L, seq_len_tgt=L//cfg["ai_rate"],
-        d_model=dm, d_ff=df, N=N, num_heads=H,
-        lr=lr, weight=w)
-    uid=f"ctx{L}_dmodel{dm}_ff{df}_N{N}_heads{H}_lr{lr}_weight{w}"
-    cfg["model_basename"]=f"DecisionOnly_{uid}"
-    if GPU: os.environ["CUDA_VISIBLE_DEVICES"]=str(hash(uid)%GPU)
-    stats=train_model(cfg)
+# S3 client
+s3 = boto3.client("s3")
 
-    # small local JSON for quick check
-    p=Path(f"{uid}.json"); p.write_text(json.dumps(json_safe(stats),indent=2))
-    bkt=cfg["s3_bucket"]; key=f"DecisionOnly/metrics/{p.name}"
-    if (c:=s3()): 
-        try: c.upload_file(str(p),bkt,key); print(f"[S3] {p.name} → s3://{bkt}/{key}")
-        except botocore.exceptions.BotoCoreError: pass
-    p.unlink(missing_ok=True)
-    return uid
+def upload_to_s3(local_path: str, bucket: str, key: str):
+    s3.upload_file(local_path, bucket, key)
 
-def main():
-    with ProcessPoolExecutor(max_workers=WORKERS) as ex:
-        fut={ex.submit(run,h):h for h in grid}
-        for f in as_completed(fut):
-            h=fut[f]
-            try: print("[Done]",f.result())
-            except Exception as e: print(f"[Error] params={h} -> {e}")
+def run_one_experiment(params):
+    """
+    Worker function: unpacks one hyperparam tuple, runs training,
+    writes out metrics JSON and uploads checkpoint+metrics to S3.
+    Returns unique_id for logging.
+    """
+    ctx_window, d_model, d_ff, N, num_heads, lr, weight = params
 
-if __name__=="__main__":
-    main()
+    # 1) Build config
+    config = get_config()
+    config.update({
+        "seq_len_ai": ctx_window,
+        "d_model":    d_model,
+        "d_ff":       d_ff,
+        "N":          N,
+        "num_heads":  num_heads,
+        "lr":         lr,
+        "weight":     weight,
+    })
+
+    # 2) Unique basename / id
+    unique_id = f"ctx_window{ctx_window}_dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_lr{lr}_weight{weight}"
+    config["model_basename"] = f"DecisionOnly_{unique_id}"
+
+    # 3) (Optional) pin each process to a different GPU if you have >1 GPU
+    #    e.g. round‑robin assignment:
+    ngpu = torch.cuda.device_count()
+    if ngpu > 0:
+        this_rank = hash(unique_id) % ngpu
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(this_rank)
+
+    # 4) Train!
+    final_metrics = train_model(config)
+
+    # 5) Dump metrics locally
+    metrics_file = f"DecisionOnly_{unique_id}.json"
+    with open(metrics_file, "w") as f:
+        json.dump({
+            **{k: v for k, v in final_metrics.items() if not isinstance(v, list)},
+            # if you need to store confusion_matrix lists, include them explicitly…
+            "val_confusion_matrix": final_metrics["val_confusion_matrix"],
+        }, f, indent=2)
+
+    # 6) Upload checkpoint + metrics to S3
+    bucket = config["s3_bucket"]
+
+    ckpt = final_metrics["best_checkpoint_path"]
+    if ckpt and Path(ckpt).exists():
+        upload_to_s3(ckpt, bucket, f"DecisionOnly/checkpoints/{Path(ckpt).name}")
+        # upload_to_gcs(ckpt, bucket, f"checkpoints/{Path(ckpt).name}")
+        os.remove(ckpt)
+
+    if Path(metrics_file).exists():
+        upload_to_s3(metrics_file, bucket, f"DecisionOnly/metrics/{metrics_file}")
+        # upload_to_gcs(metrics_file, bucket, f"metrics/{metrics_file}")
+        os.remove(metrics_file)
+
+    return unique_id
+
+def hyperparam_sweep_parallel(max_workers=max_workers):
+    combos = itertools.product(
+        ctx_window_values,
+        d_model_values,
+        d_ff_values,
+        N_values,
+        num_heads_values,
+        lr_values,
+        weight_values
+    )
+
+    with ProcessPoolExecutor(max_workers=max_workers) as exe:
+        # submit all jobs
+        futures = {exe.submit(run_one_experiment, combo): combo for combo in combos}
+
+        # as each finishes, log it
+        for fut in as_completed(futures):
+            combo = futures[fut]
+            try:
+                uid = fut.result()
+                print(f"[Done] {uid}")
+            except Exception as e:
+                print(f"[Error] combo={combo} -> {e}")
+
+# if __name__ == "__main__":
+#     # tune max_workers to however many GPUs (or CPU cores) you have
+#     hyperparam_sweep_parallel(max_workers=4)
+
+if __name__ == "__main__":
+    # launch
+    hyperparam_sweep_parallel(max_workers=max_workers)
