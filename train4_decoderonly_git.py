@@ -1,148 +1,142 @@
-# train4_decoderonly.py  ────────────────────────────────────────────────────
-# Decision-Only trainer
-#   • PairwiseRevenueLoss (revenue-gap)
-#   • Four evaluation subsets at each decision position:
-#       all / STOP-cur / after-STOP / transition
-#   • Keeps original logging, checkpoint & JSON style
-# ───────────────────────────────────────────────────────────────────────────
-
 import os, json, warnings, logging, numpy as np
 from pathlib import Path
-from typing import Dict, Any
+from typing  import Dict, Any
 
-# ─── mute noisy frameworks ────────────────────────────────────────────────
-os.environ["TF_CPP_MIN_LOG_LEVEL"]  = "3"
-logging.getLogger("deepspeed").setLevel(logging.ERROR)
+# ─── silence noisy libraries ────────────────────────────────────────────
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 warnings.filterwarnings("ignore")
+logging.getLogger("deepspeed").setLevel(logging.ERROR)
 
-# ─── 3rd-party ------------------------------------------------------------
+# ─── third-party deps ───────────────────────────────────────────────────
 import torch, torch.nn as nn, torch.nn.functional as F
 from torch.utils.data import DataLoader, random_split
-from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, average_precision_score
+from sklearn.metrics import (accuracy_score, f1_score,
+                             confusion_matrix, average_precision_score)
 from sklearn.preprocessing import label_binarize
 from tqdm import tqdm
 import deepspeed
-from pytorch_lamb import Lamb
+from pytorch_lamb import Lamb                        # optimiser core
 
-# ─── project code ---------------------------------------------------------
-from config4 import get_config, get_weights_file_path, latest_weights_file_path
-from model4_decoderonly     import build_transformer
-from dataset4_decoderonly   import TransformerDataset, load_json_dataset
-from tokenizers             import Tokenizer, models, pre_tokenizers
+# ─── project imports ────────────────────────────────────────────────────
+from config4               import get_config
+from model4_decoderonly    import build_transformer
+from dataset4_decoderonly  import TransformerDataset, load_json_dataset
+from tokenizers            import Tokenizer, models, pre_tokenizers
 
-# --- tokeniser helpers ----------------------------------------------------
-def _build_tok_base(vocab_extra: Dict[str, int]) -> Tokenizer:
+# ════════════════════ 1.  tokenisers ════════════════════════════════════
+def _tok_base(extra: Dict[str, int]) -> Tokenizer:
+    """
+    Creates a WordLevel tokenizer with IDs identical to their string forms.
+    Adds [PAD]=0, decisions 1..9, [SOS]=10, [EOS]=11, [UNK]=12,
+    plus any `extra` you pass in.
+    """
     tok = Tokenizer(models.WordLevel(unk_token="[UNK]"))
     tok.pre_tokenizer = pre_tokenizers.Whitespace()
 
-    # ➊  — add 11 back as [EOS] —
     vocab = {
         "[PAD]": 0,
-        **{str(i): i for i in range(1, 10)},   # 1..9
+        **{str(i): i for i in range(1, 10)},   # 1…9
         "[SOS]": 10,
-        "[EOS]": 11,                           # ← restore
+        "[EOS]": 11,
         "[UNK]": 12,
+        **extra                                # e.g. 13…60 for src
     }
-    vocab.update(vocab_extra)
     tok.model = models.WordLevel(vocab=vocab, unk_token="[UNK]")
     return tok
 
-build_tokenizer_src = lambda: _build_tok_base({str(i): i for i in range(13,61)})
-build_tokenizer_tgt = lambda: _build_tok_base({})
+build_tokenizer_src = lambda: _tok_base({str(i): i for i in range(13, 61)})
+build_tokenizer_tgt = lambda: _tok_base({})      # decisions only
 
-# ═════════════════════════════════ loss ══════════════════════════════════
+# ════════════════════ 2.  revenue-gap loss ══════════════════════════════
 class PairwiseRevenueLoss(nn.Module):
-    def __init__(self, revenue, vocab_size, ignore_index=0):
+    def __init__(self, revenue, vocab_size: int, ignore_index: int = 0):
         super().__init__()
-        if len(revenue) < vocab_size:
+        if len(revenue) < vocab_size:                       # pad if needed
             revenue += [0.] * (vocab_size - len(revenue))
         rev = torch.tensor(revenue, dtype=torch.float32)
         self.register_buffer("penalty",
                              -torch.abs(rev[:, None] - rev[None, :]))  # V×V
-        self.ignore_index = ignore_index
+        self.ignore = ignore_index
 
     def forward(self, logits, targets):
         V = logits.size(-1)
-        probs = F.softmax(logits.view(-1, V), dim=-1)
-        tgt   = targets.view(-1)
-        keep  = tgt != self.ignore_index
+        probs = F.softmax(logits.reshape(-1, V), dim=-1)    # (B*N, V)
+        tgt   = targets.reshape(-1)                         # (B*N,)
+        keep  = tgt != self.ignore
         if keep.sum() == 0:
             return logits.new_tensor(0.0)
-        pen = self.penalty.to(probs)            # correct device
-        gap = (probs[keep] * pen[tgt[keep]]).sum(dim=-1)
-        return (-gap).mean()
+        pen = self.penalty.to(probs)
+        loss = -(probs[keep] * pen[tgt[keep]]).sum(dim=1).mean()
+        return loss
 
-# ═════════════════════════════════ helpers ═══════════════════════════════
-def transition_mask(y: torch.Tensor) -> torch.Tensor:          # (B,T)
-    prev = F.pad(y, (1, 0), value=-1)[:, :-1]
-    return y != prev
+# ════════════════════ 3.  misc helpers ══════════════════════════════════
+def _transition_mask(seq: torch.Tensor) -> torch.Tensor:
+    return seq != F.pad(seq, (1, 0), value=-1)[:, :-1]
 
-def safe_json(obj: Any):
-    """convert ndarray / tensors so json.dump works"""
-    import numpy as _np, torch as _th
-    if isinstance(obj, (_th.Tensor, _th.nn.Parameter)):
-        return obj.detach().cpu().tolist()
-    if isinstance(obj, _np.ndarray):
-        return obj.tolist()
-    if isinstance(obj, (_np.floating, _np.integer)):
-        return obj.item()
-    if isinstance(obj, dict):
-        return {k: safe_json(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [safe_json(x) for x in obj]
-    return obj
-
-def calculate_perplexity(logits, targets, pad_token=0):
+def _perplexity(logits, targets, pad=0):
     logp = F.log_softmax(logits, dim=-1)
     lp2d, tgt = logp.view(-1, logp.size(-1)), targets.view(-1)
-    mask = tgt != pad_token
-    if mask.sum() == 0:
-        return float("nan")
-    nll = F.nll_loss(lp2d[mask], tgt[mask], reduction='mean')
-    return torch.exp(nll).item()
+    m = tgt != pad
+    if m.sum() == 0: return float("nan")
+    return torch.exp(F.nll_loss(lp2d[m], tgt[m], reduction="mean")).item()
 
-def subset_metrics(pred, lbl, probs, mask, classes=np.arange(1,10)):
+def _json_safe(o: Any):
+    import numpy as _np, torch as _th
+    if isinstance(o, (_th.Tensor, _th.nn.Parameter)): return o.cpu().tolist()
+    if isinstance(o, _np.ndarray):  return o.tolist()
+    if isinstance(o, (_np.floating, _np.integer)):   return o.item()
+    if isinstance(o, dict):   return {k: _json_safe(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)): return [_json_safe(v) for v in o]
+    return o
+
+def _subset_metrics(pred, lbl, probs, mask, classes=np.arange(1,10)):
     if mask.sum() == 0:
-        return {"hit": np.nan, "f1": np.nan, "auprc": np.nan, "conf": None}
+        return {"hit": np.nan, "f1": np.nan, "auprc": np.nan}
     p, l, pr = pred[mask], lbl[mask], probs[mask]
     hit = accuracy_score(l, p)
     f1  = f1_score(l, p, average='macro')
     try:
-        y_true = label_binarize(l, classes=classes)
-        auprc  = average_precision_score(y_true, pr[:,1:10], average='macro')
+        auprc = average_precision_score(
+            label_binarize(l, classes=classes), pr[:,1:10], average='macro')
     except ValueError:
         auprc = np.nan
-    conf = confusion_matrix(l, p, labels=np.unique(l))
-    return {"hit": hit, "f1": f1, "auprc": auprc, "conf": conf}
+    return {"hit": hit, "f1": f1, "auprc": auprc}
 
-# ═════════════════════════════════ data ══════════════════════════════════
-def get_dataloaders(cfg):
-    data = load_json_dataset(cfg["filepath"])
-    n     = len(data)
-    tr,va = int(0.8*n), int(0.1*n)
-    tr_ds, va_ds, te_ds = random_split(
-        data, [tr, va, n-tr-va], generator=torch.Generator().manual_seed(33))
+def transition_mask(y: torch.Tensor) -> torch.Tensor:
+    """
+    Identify transitions in the sequence:
+    True where y[t] ≠ y[t-1], False otherwise.
+    """
+    prev = F.pad(y, (1, 0), value=-1)[:, :-1]
+    return y != prev
+
+# ════════════════════ 4.  data loaders ══════════════════════════════════
+def _make_loaders(cfg):
+    raw = load_json_dataset(cfg["filepath"])
+    n = len(raw); tr, va = int(.8*n), int(.1*n)
+    g = torch.Generator().manual_seed(33)
+    tr_ds, va_ds, te_ds = random_split(raw, [tr, va, n-tr-va], generator=g)
 
     tok_ai  = build_tokenizer_src()
     tok_tgt = build_tokenizer_tgt()
 
     out = Path(cfg["model_folder"]); out.mkdir(parents=True, exist_ok=True)
-    tok_ai.save (str(out / "tokenizer_ai.json"))
+    tok_ai .save(str(out / "tokenizer_ai.json"))
     tok_tgt.save(str(out / "tokenizer_tgt.json"))
 
-    mk_ds = lambda split: TransformerDataset(
-        split, tok_ai, tok_tgt,
-        cfg["seq_len_ai"], cfg["seq_len_tgt"],
-        cfg["num_heads"], cfg["ai_rate"], pad_token=0)
+    def mk(split):
+        return TransformerDataset(
+            split, tok_ai, tok_tgt,
+            cfg["seq_len_ai"], cfg["seq_len_tgt"],
+            cfg["num_heads"], cfg["ai_rate"], pad_token=0)
 
-    loader = lambda ds, sh: DataLoader(ds, batch_size=cfg["batch_size"], shuffle=sh)
-    return loader(mk_ds(tr_ds), True), loader(mk_ds(va_ds), False), \
-           loader(mk_ds(te_ds), False), tok_tgt
+    ld = lambda ds, sh: DataLoader(ds, batch_size=cfg["batch_size"], shuffle=sh)
+    return ld(mk(tr_ds), True), ld(mk(va_ds), False), ld(mk(te_ds), False), tok_tgt
 
-# ═════════════════════════════════ model ═════════════════════════════════
-def get_model(cfg):
+# ════════════════════ 5.  model ═════════════════════════════════════════
+def _build_model(cfg):
     return build_transformer(
-        vocab_size  = cfg["vocab_size_src"],
+        vocab_size  = cfg["vocab_size_src"],          # logits over src-vocab
         d_model     = cfg["d_model"],
         n_layers    = cfg["N"],
         n_heads     = cfg["num_heads"],
@@ -150,173 +144,163 @@ def get_model(cfg):
         dropout     = cfg["dropout"],
         max_seq_len = cfg["seq_len_ai"])
 
-# ═════════════════════════════════ evaluation ════════════════════════════
-def evaluate(loader, engine, device, loss_fn, step, pad, tok):
+# ════════════════════ 6.  evaluation ════════════════════════════════════
+def _evaluate(loader, eng, dev, loss_fn, step, pad, tok):
     """
     Returns:
         loss, ppl,
         metrics_all, metrics_stop_cur, metrics_after_stop, metrics_transition
     """
-    if len(loader) == 0:
-        nan=float("nan"); empty={"hit":nan,"f1":nan,"auprc":nan}
-        return nan,nan,empty,empty,empty,empty
+    if not len(loader):
+        nan = float("nan"); empty = {"hit":nan,"f1":nan,"auprc":nan}
+        return nan, nan, empty, empty, empty, empty
 
     special = {pad, tok.token_to_id("[SOS]"), tok.token_to_id("[UNK]")}
 
-    tot_loss = tot_ppl = 0.0
-    P,L,PR   = [], [], []
-    m_stop_cur  = []          # current token == 9
-    m_after_stop= []          # previous decision token == 9
-    m_tr        = []          # transition positions
+    L_loss = L_ppl = 0.0
+    P, L, PR = [], [], []
+    m_stop_cur, m_after_stop, m_tr = [], [], []
 
-    engine.eval()
+    eng.eval()
     with torch.no_grad():
-        for batch in loader:
-            x = batch['aggregate_input'].to(device)
-            y = batch['label'].to(device)
+        for b in loader:
+            x = b["aggregate_input"].to(dev)
+            y = b["label"].to(dev)
 
-            logits = engine(x)
-            pos    = torch.arange(step-1, logits.size(1), step, device=device)
-            logits = logits[:, pos, :]                 # decision positions only
-            tgt    = y[:, pos]                         # labels at decisions
+            pos = torch.arange(step-1, x.size(1), step, device=dev)
+            logits = eng(x)[:, pos, :]          # (B, N, V)
+            tgt    = y[:, pos]                  # (B, N)
 
-            # mask transitions for loss
-            tgt_masked = tgt.clone()
-            tgt_masked[transition_mask(y)[:, pos]] = pad
-            tot_loss += loss_fn(logits, tgt_masked).item()
-            tot_ppl  += calculate_perplexity(logits, tgt_masked, pad)
+            # —— loss on non-transition tokens only
+            tgt_mask = tgt.clone()
+            # tgt_mask[_transition_mask := _transition_mask(y)[:, pos]] = pad
+            mask = transition_mask(y)[:, pos]
+            tgt_mask[mask] = pad
+            L_loss += loss_fn(logits, tgt_mask).item()
+            L_ppl  += _perplexity(logits, tgt_mask, pad)
 
             probs = F.softmax(logits, dim=-1).view(-1, logits.size(-1)).cpu().numpy()
             pred  = probs.argmax(1)
             lbl   = tgt.view(-1).cpu().numpy()
-            valid = ~np.isin(lbl, list(special))
 
-            P.append(pred[valid]); L.append(lbl[valid]); PR.append(probs[valid])
-            flat = lambda m: m.view(-1).cpu().numpy()[valid]
-            m_stop_cur  .append(flat(tgt == 9))
-            prev_tok     = F.pad(tgt, (1,0), value=-1)[:, :-1]
-            m_after_stop.append(flat(prev_tok == 9))
-            m_tr.append(flat(transition_mask(y)[:, pos]))
+            keep = ~np.isin(lbl, list(special))
+            P.append(pred[keep]); L.append(lbl[keep]); PR.append(probs[keep])
 
-    P,L,PR = map(np.concatenate,(P,L,PR))
-    m_stop_cur   = np.concatenate(m_stop_cur)
-    m_after_stop = np.concatenate(m_after_stop)
-    m_tr         = np.concatenate(m_tr)
-    all_mask     = np.ones_like(P, dtype=bool)
+            flat = lambda m: m.view(-1).cpu().numpy()[keep]
+            m_stop_cur   .append(flat(tgt == 9))
+            prev_tok      = F.pad(tgt, (1,0), value=-1)[:, :-1]
+            m_after_stop .append(flat(prev_tok == 9))
+            m_tr          .append(flat(_transition_mask))
 
-    return (tot_loss/len(loader), tot_ppl/len(loader),
-            subset_metrics(P,L,PR, all_mask),
-            subset_metrics(P,L,PR, m_stop_cur),
-            subset_metrics(P,L,PR, m_after_stop),
-            subset_metrics(P,L,PR, m_tr))
+    P, L, PR = map(np.concatenate, (P, L, PR))
+    mask_stop_cur   = np.concatenate(m_stop_cur)
+    mask_after_stop = np.concatenate(m_after_stop)
+    mask_tr         = np.concatenate(m_tr)
+    mask_all        = np.ones_like(P, dtype=bool)
 
-# ═════════════════════════════════ train ═════════════════════════════════
+    return (L_loss/len(loader), L_ppl/len(loader),
+            _subset_metrics(P, L, PR, mask_all),
+            _subset_metrics(P, L, PR, mask_stop_cur),
+            _subset_metrics(P, L, PR, mask_after_stop),
+            _subset_metrics(P, L, PR, mask_tr))
+
+# ════════════════════ 7.  training loop ═════════════════════════════════
 def train_model(cfg):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    # —— unique run-id
     slots = cfg["seq_len_ai"] // cfg["ai_rate"]
     uid   = (f"ctx{slots}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}_"
              f"heads{cfg['num_heads']}_lr{cfg['lr']}_weight{cfg['weight']}")
-    ckpt_path = Path(cfg["model_folder"]) / f"DecisionOnly_{uid}.pt"
-    json_path = ckpt_path.with_suffix(".json")
 
-    # ── data, model, loss ───────────────────────────────────────────────
-    tr_dl, va_dl, te_dl, tok = get_dataloaders(cfg)
+    ckpt = Path(cfg["model_folder"]) / f"DecisionOnly_{uid}.pt"
+    meta = ckpt.with_suffix(".json")
+
+    # —— data / model / loss
+    tr, va, te, tok = _make_loaders(cfg)
     pad_id = tok.token_to_id("[PAD]")
 
-    model = get_model(cfg)
+    model   = _build_model(cfg)
     loss_fn = PairwiseRevenueLoss(
-        revenue=[0,1,10,1,10,1,10,1,10,0],
-        vocab_size=cfg["vocab_size_src"],
+        revenue=[0,1,10,1,10,1,10,1,10,0],   # customise as you like
+        vocab_size=tok.get_vocab_size(),      # ← crash-safe
         ignore_index=pad_id)
 
-    # ── DeepSpeed initialise ────────────────────────────────────────────
-    ds_cfg = {
-        "train_micro_batch_size_per_gpu": cfg["batch_size"],
-        "zero_allow_untested_optimizer": True,
-        "optimizer": {"type": "Lamb",
-                      "params": {"lr": cfg["lr"],
-                                 "eps": cfg["eps"],
-                                 "weight_decay": cfg["weight_decay"]}},
-        "fp16": {"enabled": False},
-        "zero_optimization": {"stage": 1}
-    }
-    engine, _, _, _ = deepspeed.initialize(
-        model=model, model_parameters=model.parameters(), config=ds_cfg)
+    eng, _, _, _ = deepspeed.initialize(
+        model=model, model_parameters=model.parameters(),
+        config={
+            "train_micro_batch_size_per_gpu": cfg["batch_size"],
+            "zero_allow_untested_optimizer": True,
+            "optimizer":{
+                "type":"Lamb",
+                "params":{"lr":cfg["lr"],"eps":cfg["eps"],
+                          "weight_decay":cfg["weight_decay"]}},
+            "zero_optimization":{"stage":1},
+            "fp16":{"enabled":False}})
 
-    best_val = None; patience = 0
+    best, patience = None, 0
     for ep in range(cfg["num_epochs"]):
-        # ── TRAIN ───────────────────────────────────────────────────────
-        engine.train(); running = 0.0
-        for batch in tqdm(tr_dl, desc=f"Ep {ep:02d}", leave=False):
-            x = batch['aggregate_input'].to(device)
-            y = batch['label'].to(device)
+        # —— train
+        eng.train(); run = 0.0
+        for b in tqdm(tr, desc=f"Ep {ep:02d}", leave=False):
+            x = b["aggregate_input"].to(dev)
+            y = b["label"].to(dev)
 
-            pos = torch.arange(cfg["ai_rate"]-1, x.size(1),
-                               cfg["ai_rate"], device=device)
-            logits = engine(x)[:, pos, :]
+            pos     = torch.arange(cfg["ai_rate"]-1, x.size(1),
+                                   cfg["ai_rate"], device=dev)
+            logits  = eng(x)[:, pos, :]
+            tgt     = y.clone()
+            tgt[_transition_mask(y)] = pad_id
 
-            y_tr = y.clone(); y_tr[transition_mask(y)] = pad_id
-            loss = loss_fn(logits, y_tr)
+            loss = loss_fn(logits, tgt[:, pos])
+            eng.zero_grad(); eng.backward(loss); eng.step()
+            run += loss.item()
+        print(f"\nTrain loss {run/len(tr):.4f}")
 
-            engine.zero_grad()
-            engine.backward(loss)
-            engine.step()
-            running += loss.item()
-        print(f"\nTrain loss {running/len(tr_dl):.4f}")
-
-        # ── VALIDATE ────────────────────────────────────────────────────
-        v_loss,v_ppl,v_all,v_stop_cur,v_after_stop,v_tr = evaluate(
-            va_dl, engine, device, loss_fn,
-            cfg["ai_rate"], pad_id, tok)
+        # —— validation
+        v_loss,v_ppl,v_all,v_stop,v_after,v_tr = _evaluate(
+            va, eng, dev, loss_fn, cfg["ai_rate"], pad_id, tok)
 
         print(f"Epoch {ep:02d}  ValLoss={v_loss:.4f}  PPL={v_ppl:.4f}")
-        for tag,d in (("all",v_all),("STOP-cur",v_stop_cur),
-                      ("after-STOP",v_after_stop),("transition",v_tr)):
-            print(f"  {tag:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
+        for tag,d in (("all",v_all),("STOP_cur",v_stop),
+                      ("after_STOP",v_after),("transition",v_tr)):
+            print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
                   f"AUPRC={d['auprc']:.4f}")
 
-        # ── Checkpoint on improvement ───────────────────────────────────
-        if best_val is None or v_loss < best_val:
-            best_val = v_loss; patience = 0
+        # —— checkpoint logic
+        if best is None or v_loss < best:
+            best, patience = v_loss, 0
             torch.save({"epoch": ep,
-                        "model_state_dict": engine.module.state_dict()},
-                       ckpt_path)
+                        "model_state_dict": eng.module.state_dict()}, ckpt)
 
-            meta = safe_json({
-                "best_checkpoint_path": ckpt_path.name,
-                "val_loss": best_val,
-                "val_ppl":  v_ppl,
-                "val_all":          v_all,
-                "val_stop_cur":     v_stop_cur,
-                "val_after_stop":   v_after_stop,
-                "val_transition":   v_tr
-            })
-            json_path.write_text(json.dumps(meta, indent=2))
-            print(f"  [*] new best saved → {ckpt_path.name}")
+            meta.write_text(json.dumps(_json_safe({
+                "best_checkpoint_path": ckpt.name,
+                "val_loss": best, "val_ppl": v_ppl,
+                "val_all": v_all, "val_stop_cur": v_stop,
+                "val_after_stop": v_after, "val_transition": v_tr
+            }), indent=2))
+            print(f"  [*] new best saved → {ckpt.name}")
         else:
             patience += 1
             if patience >= cfg["patience"]:
                 print("Early stopping."); break
 
-    # ── TEST (using the best weights we kept locally) ───────────────────
-    if ckpt_path.exists():
-        state = torch.load(ckpt_path, map_location=device)
-        engine.module.load_state_dict(state["model_state_dict"])
+    # —— test using best weights
+    if ckpt.exists():
+        state = torch.load(ckpt, map_location=dev)
+        eng.module.load_state_dict(state["model_state_dict"])
 
-        t_loss,t_ppl,t_all,t_stop_cur,t_after_stop,t_tr = evaluate(
-            te_dl, engine, device, loss_fn,
-            cfg["ai_rate"], pad_id, tok)
+        t_loss,t_ppl,t_all,t_stop,t_after,t_tr = _evaluate(
+            te, eng, dev, loss_fn, cfg["ai_rate"], pad_id, tok)
 
         print(f"\n** TEST ** Loss={t_loss:.4f}  PPL={t_ppl:.4f}")
-        for tag,d in (("all",t_all),("STOP-cur",t_stop_cur),
-                      ("after-STOP",t_after_stop),("transition",t_tr)):
-            print(f"  {tag:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
+        for tag,d in (("all",t_all),("STOP_cur",t_stop),
+                      ("after_STOP",t_after),("transition",t_tr)):
+            print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
                   f"AUPRC={d['auprc']:.4f}")
 
-    # return stats if another script (e.g. sweep) imports this
-    return {"uid": uid, "val_loss": best_val}
+    return {"uid": uid, "val_loss": best}
 
-# ═════════════════════════════════ CLI entry ═════════════════════════════
+# ════════════════════ 8.  CLI helper ════════════════════════════════════
 if __name__ == "__main__":
     train_model(get_config())
