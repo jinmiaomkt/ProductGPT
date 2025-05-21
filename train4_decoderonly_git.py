@@ -237,6 +237,7 @@ def train_model(cfg):
     bucket  = cfg["s3_bucket"]
     ck_key  = f"FullProductGPT/checkpoints/{ckpt_path.name}"
     js_key  = f"FullProductGPT/metrics/{ckpt_path.name}"
+    
     print(f"[INFO] artefacts will be saved to\n"
           f"  • s3://{bucket}/{ck_key}\n"
           f"  • s3://{bucket}/{js_key}\n")
@@ -309,8 +310,8 @@ def train_model(cfg):
 
             if _upload(ckpt_path, bucket, ck_key, s3):
                 ckpt_path.unlink(missing_ok=True)
-            if _upload(ckpt_path, bucket, js_key, s3):
-                ckpt_path.unlink(missing_ok=True)
+            if _upload(json_path, bucket, js_key, s3):
+                json_path.unlink(missing_ok=True)
 
         else:
             patience += 1
