@@ -287,12 +287,17 @@ def train_model(cfg):
             run += loss.item()
         print(f"\nTrain loss {run/len(tr):.4f}")
 
-        v_loss, v_ppl, v_main, v_stop, v_tr = _evaluate(
+        v_loss, v_ppl, v_all, v_cur_stop, v_after_stop, v_tr = _evaluate(
             va, eng, dev, loss_fn, cfg["ai_rate"], pad_id, tok)
+        
         print(f"Epoch {ep:02d}  ValLoss={v_loss:.4f}  PPL={v_ppl:.4f}")
-        for tag, d in (("main", v_main), ("STOP", v_stop), ("transition", v_tr)):
-            print(f"  {tag:<10} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
-                  f"AUPRC={d['auprc']:.4f}")
+        for tag, d in (
+                ("all",        v_all),
+                ("cur-STOP",   v_cur_stop),
+                ("after-STOP", v_after_stop),
+                ("transition", v_tr)):
+            print(f"  {tag:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
+                f"AUPRC={d['auprc']:.4f}")
 
         # ----- store best ----------------------------------------
         if best is None or v_loss < best:
@@ -302,7 +307,7 @@ def train_model(cfg):
             meta = _json_safe({
                 "best_checkpoint_path": ckpt_local.name,
                 "val_loss": best, "val_ppl": v_ppl,
-                "val_main": v_main, "val_stop": v_stop, "val_transition": v_tr})
+                "val_all": v_all, "val_cur_stop": v_cur_stop, "val_after_stop": v_after_stop, "val_transition": v_tr})
             json_local.write_text(json.dumps(meta, indent=2))
 
             if _upload(ckpt_local, bucket, ck_key, s3):
@@ -320,13 +325,17 @@ def train_model(cfg):
         state = torch.load(ckpt_local, map_location=dev)
         eng.module.load_state_dict(state["model_state_dict"])
 
-    t_loss, t_ppl, t_main, t_stop, t_tr = _evaluate(
+    t_loss, t_ppl, t_all, t_cur_stop, t_after_stop, t_tr = _evaluate(
         te, eng, dev, loss_fn, cfg["ai_rate"], pad_id, tok)
 
-    print(f"\n** TEST ** Loss={t_loss:.4f}  PPL={t_ppl:.4f}")
-    for tag, d in (("main", t_main), ("STOP", t_stop), ("transition", t_tr)):
-        print(f"  {tag:<10} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
-              f"AUPRC={d['auprc']:.4f}")
+    print(f"Epoch {ep:02d}  ValLoss={v_loss:.4f}  PPL={v_ppl:.4f}")
+    for tag, d in (
+            ("all",        t_all),
+            ("cur-STOP",   t_cur_stop),
+            ("after-STOP", t_after_stop),
+            ("transition", t_tr)):
+        print(f"  {tag:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
+            f"AUPRC={d['auprc']:.4f}")
 
     return {"uid": uid, "val_loss": best}
 
