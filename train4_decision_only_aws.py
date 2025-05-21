@@ -210,10 +210,10 @@ def train_model(cfg):
     # S3 setup ----------------------------------------------------------------
     s3        = get_s3_client()
     bucket    = cfg["s3_bucket"]
-    prefix    = (cfg.get("s3_prefix") or "").rstrip("/")
-    if prefix: prefix += "/"
-    ckpt_key  = f"{prefix}DecisionOnly/checkpoints/{ckpt_local.name}"
-    json_key  = f"{prefix}DecisionOnly/metrics/{ckpt_local.with_suffix('.json').name}"
+    # prefix    = (cfg.get("s3_prefix") or "").rstrip("/")
+    # if prefix: prefix += "/"
+    ckpt_key  = f"DecisionOnly/checkpoints/{ckpt_local.name}"
+    json_key  = f"DecisionOnly/metrics/{ckpt_local.with_suffix('.json').name}"
     print(f"[INFO] artefacts will be saved to\n  • s3://{bucket}/{ckpt_key}\n  • s3://{bucket}/{json_key}\n")
 
     # data / model / loss ------------------------------------------------------
