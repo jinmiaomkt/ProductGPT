@@ -122,6 +122,19 @@ def _subset_metrics(pred, lbl, probs, mask, cls=np.arange(1, 10)):
 def _pretty(tag, d):
     print(f"  {tag:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  AUPRC={d['auprc']:.4f}")
 
+def _json_safe(obj):
+    """Convert NumPy scalars / arrays → plain Python for json.dump()."""
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(x) for x in obj]
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    return obj
 # ────────────────────────── dataloaders ──────────────────────────────────
 def get_dataloaders(cfg):
     raw = load_json_dataset(cfg["filepath"])
@@ -290,7 +303,13 @@ def train_model(cfg):
                 "val_after_stop": v_after, "val_transition": v_tr
             }
             json_path = ckpt_local.with_suffix(".json")
-            json_path.write_text(json.dumps(meta, indent=2))
+            # json_path.write_text(json.dumps(meta, indent=2))
+            # --------------- persist JSON ---------------------------------------
+            safe_meta = _json_safe(meta)              # <── NEW
+            with open(json_path, "w") as fp:
+                json.dump(safe_meta, fp, indent=2)    # use the safe version
+            return safe_meta                          # and return it
+
 
             # ---------- upload & delete local copies -------------------
             if upload_to_s3(ckpt_local, bucket, ckpt_key, s3):
