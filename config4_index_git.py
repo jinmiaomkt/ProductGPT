@@ -20,8 +20,8 @@ def _raw_config():
 
         # ---------- context window ----------
         "ctx_window": 960,          # ← edit 64 * 15
-        "seq_len_ai":  None,       # filled in below
-        "seq_len_tgt": None,
+        # "seq_len_ai":  None,       # filled in below
+        # "seq_len_tgt": None,
 
         # ---------- training ----------
         "k": 4096,
@@ -64,13 +64,15 @@ def _raw_config():
     }
 
 # ─────────────────────────── public helper ─────────────────────────
+
 def get_config():
     cfg = _raw_config()
 
     # derive sequence lengths from ctx_window
     cfg["seq_len_ai"]  = cfg["ctx_window"]
     # ensure at least one decision token when ctx_window < ai_rate
-    cfg["seq_len_tgt"] = max(1, cfg["ctx_window"] // cfg["ai_rate"])
+    # cfg["seq_len_tgt"] = 1
+    cfg["seq_len_tgt"] = max(1, cfg["seq_len_ai"] // cfg["ai_rate"])
 
     return cfg
 
