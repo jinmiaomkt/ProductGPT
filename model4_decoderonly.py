@@ -262,7 +262,8 @@ class CausalSelfAttention(nn.Module):
         self.w_o = nn.Linear(d_model, d_model, bias=False)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x):
+    # def forward(self, x):
+    def forward(self, x, k=None, v=None):
         # x : (B, T, d_model)
         B, T, _ = x.size()
         q = self.w_q(x).view(B, T, self.n_heads, self.d_k).transpose(1, 2)  # (B,h,T,d_k)
