@@ -153,9 +153,14 @@ def _make_loaders(cfg):
             tok_tgt)
 
 def _build_model(cfg):
-    return build_transformer(cfg["vocab_size_tgt"], cfg["seq_len_ai"],
-                             cfg["d_model"], cfg["N"], cfg["num_heads"],
-                             cfg["d_ff"], cfg["dropout"])
+    return build_transformer(
+        vocab_size  = cfg["vocab_size_tgt"], 
+        d_model     = cfg["d_model"],
+        n_layers    = cfg["N"],
+        n_heads     = cfg["num_heads"],
+        d_ff        = cfg["d_ff"],
+        dropout     = cfg["dropout"],
+        max_seq_len = cfg["seq_len_ai"])
 
 # ═════════════════ evaluation ═══════════════════════════════════
 # ───────── evaluation on three requested subsets ─────────

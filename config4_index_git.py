@@ -12,7 +12,7 @@ from pathlib import Path
 def _raw_config():
     return {
         # ---------- data ----------
-        "filepath": "/home/ec2-user/data/clean_list_int_wide4_simple6_IndexBasedTrain.json",
+        "filepath": "/home/ec2-user/data/clean_list_int_wide4_simple6_FeatureBasedTrain.json",
         "vocab_size_src": 68,
         "vocab_size_tgt": 18,
         "vocab_size_lto": 68,
@@ -81,11 +81,10 @@ def get_weights_file_path(config, tag: str) -> str:
     folder = Path(config['model_folder'])
     folder.mkdir(parents=True, exist_ok=True)
 
-    uid = (f"dmodel{config['d_model']}_ff{config['d_ff']}_N{config['N']}"
-           f"_heads{config['num_heads']}_gamma{config['gamma']}"
-           f"_lr{config['lr']}_weight{config['weight']}"
-           f"_ctx{config['ctx_window']}")
-    filename = f"IndexBased_FullProductGPT_{uid}_{tag}.pt"
+    uid = (f"ctx{config['ctx_window']}_dmodel{config['d_model']}_ff{config['d_ff']}"
+           f"_N{config['N']}_heads{config['num_heads']}_gamma{config['gamma']}"
+           f"_lr{config['lr']}_weight{config['weight']}")
+    filename = f"FullProductGPT_{uid}_{tag}.pt"
     return str(folder / filename)
 
 def latest_weights_file_path(config) -> str | None:
@@ -93,6 +92,6 @@ def latest_weights_file_path(config) -> str | None:
     if not folder.exists():
         return None
 
-    pattern = f"IndexBased_FullProductGPT_*_ctx{config['ctx_window']}.pt"
+    pattern = f"FullProductGPT_*_ctx{config['ctx_window']}.pt"
     files   = sorted(folder.glob(pattern))
     return str(files[-1]) if files else None
