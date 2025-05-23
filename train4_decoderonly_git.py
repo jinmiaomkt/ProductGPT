@@ -25,7 +25,7 @@ import deepspeed
 from pytorch_lamb import Lamb
 
 # ─────────────────────────── project modules ────────────────────────────
-from config4              import get_config
+from config4_index_git    import get_config
 from model4_decoderonly   import build_transformer
 from dataset4_decoderonly import TransformerDataset, load_json_dataset
 from tokenizers           import Tokenizer, models, pre_tokenizers
@@ -332,8 +332,8 @@ def train_model(cfg):
             print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
                   f"AUPRC={d['auprc']:.4f}")
 
-    return {"uid": uid, "val_loss": best}
-
+    # return {"uid": uid, "val_loss": best}
+    return { "uid": uid, "val_loss": best, "best_checkpoint_path": str(ckpt_path)}
 
 # ══════════════════════ 8.  CLI ENTRY ═══════════════════════════════════
 if __name__ == "__main__":

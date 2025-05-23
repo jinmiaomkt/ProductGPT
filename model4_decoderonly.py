@@ -107,95 +107,95 @@ class ResidualConnection(nn.Module):
 ##############################################################################
 # 7. CausalPerformer (Self-Attention)
 ##############################################################################
-class CausalPerformer(nn.Module):
-    """
-    Your blockwise causal performer from previous code, used for self-attention.
-    """
-    def __init__(self, d_model: int, n_heads: int,
-                 dropout: float=0.1,
-                 kernel_type: str="exp",
-                 block_size_h: int=1,
-                 block_size_w: int=1):
-        super().__init__()
-        self.d_model = d_model
-        self.n_heads = n_heads
-        assert d_model % n_heads == 0, "d_model must be divisible by n_heads"
-        self.d_k = d_model // n_heads
+# class CausalPerformer(nn.Module):
+#     """
+#     Your blockwise causal performer from previous code, used for self-attention.
+#     """
+#     def __init__(self, d_model: int, n_heads: int,
+#                  dropout: float=0.1,
+#                  kernel_type: str="exp",
+#                  block_size_h: int=1,
+#                  block_size_w: int=1):
+#         super().__init__()
+#         self.d_model = d_model
+#         self.n_heads = n_heads
+#         assert d_model % n_heads == 0, "d_model must be divisible by n_heads"
+#         self.d_k = d_model // n_heads
 
-        self.nb_features = max(1, math.ceil(math.log(d_model)))
-        self.kernel_type = kernel_type
+#         self.nb_features = max(1, math.ceil(math.log(d_model)))
+#         self.kernel_type = kernel_type
 
-        self.block_size_h = block_size_h
-        self.block_size_w = block_size_w
+#         self.block_size_h = block_size_h
+#         self.block_size_w = block_size_w
 
-        # Linear projections
-        self.w_q = nn.Linear(d_model, d_model, bias=False)
-        self.w_k = nn.Linear(d_model, d_model, bias=False)
-        self.w_v = nn.Linear(d_model, d_model, bias=False)
-        self.w_o = nn.Linear(d_model, d_model, bias=False)
+#         # Linear projections
+#         self.w_q = nn.Linear(d_model, d_model, bias=False)
+#         self.w_k = nn.Linear(d_model, d_model, bias=False)
+#         self.w_v = nn.Linear(d_model, d_model, bias=False)
+#         self.w_o = nn.Linear(d_model, d_model, bias=False)
 
-        self.dropout = nn.Dropout(dropout)
-        self._create_feature_map()
+#         self.dropout = nn.Dropout(dropout)
+#         self._create_feature_map()
 
-    def _create_feature_map(self):
-        omega = torch.randn(self.nb_features, self.d_k) / math.sqrt(self.d_k)
-        # Typically we don't train omega in Performer random feature approach
-        self.omega = nn.Parameter(omega, requires_grad=False)
+#     def _create_feature_map(self):
+#         omega = torch.randn(self.nb_features, self.d_k) / math.sqrt(self.d_k)
+#         # Typically we don't train omega in Performer random feature approach
+#         self.omega = nn.Parameter(omega, requires_grad=False)
 
-    def _kernel_function(self, x: torch.Tensor):
-        # "exp" or "gelu" kernel
-        if self.kernel_type == "gelu":
-            return gelu_approx(x) + 1e-6
-        elif self.kernel_type == "exp":
-            return torch.exp(-0.5 * (x**2))
-        else:
-            raise ValueError(f"Unsupported kernel type {self.kernel_type}")
+#     def _kernel_function(self, x: torch.Tensor):
+#         # "exp" or "gelu" kernel
+#         if self.kernel_type == "gelu":
+#             return gelu_approx(x) + 1e-6
+#         elif self.kernel_type == "exp":
+#             return torch.exp(-0.5 * (x**2))
+#         else:
+#             raise ValueError(f"Unsupported kernel type {self.kernel_type}")
 
-    def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
-        # q,k,v: (B, seq_len, d_model)
-        B, seq_len_q, _ = q.shape
-        _, seq_len_k, _ = k.shape
+#     def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
+#         # q,k,v: (B, seq_len, d_model)
+#         B, seq_len_q, _ = q.shape
+#         _, seq_len_k, _ = k.shape
 
-        # Project
-        q = self.w_q(q).view(B, seq_len_q, self.n_heads, self.d_k)
-        k = self.w_k(k).view(B, seq_len_k, self.n_heads, self.d_k)
-        v = self.w_v(v).view(B, seq_len_k, self.n_heads, self.d_k)
+#         # Project
+#         q = self.w_q(q).view(B, seq_len_q, self.n_heads, self.d_k)
+#         k = self.w_k(k).view(B, seq_len_k, self.n_heads, self.d_k)
+#         v = self.w_v(v).view(B, seq_len_k, self.n_heads, self.d_k)
 
-        # Apply kernel
-        q_prime = self._kernel_function(q @ self.omega.T)
-        k_prime = self._kernel_function(k @ self.omega.T)
+#         # Apply kernel
+#         q_prime = self._kernel_function(q @ self.omega.T)
+#         k_prime = self._kernel_function(k @ self.omega.T)
 
-        # Normalize along feature dimension
-        q_prime = q_prime / (q_prime.sum(dim=-1, keepdim=True) + 1e-6)
-        k_prime = k_prime / (k_prime.sum(dim=-1, keepdim=True) + 1e-6)
+#         # Normalize along feature dimension
+#         q_prime = q_prime / (q_prime.sum(dim=-1, keepdim=True) + 1e-6)
+#         k_prime = k_prime / (k_prime.sum(dim=-1, keepdim=True) + 1e-6)
 
-        # Compute prefix sums over k dimension
-        K_cum = torch.cumsum(k_prime, dim=1)  # (B, seq_len_k, n_heads, r)
-        KV_cum = torch.cumsum(k_prime.unsqueeze(-1) * v.unsqueeze(-2), dim=1)
+#         # Compute prefix sums over k dimension
+#         K_cum = torch.cumsum(k_prime, dim=1)  # (B, seq_len_k, n_heads, r)
+#         KV_cum = torch.cumsum(k_prime.unsqueeze(-1) * v.unsqueeze(-2), dim=1)
 
-        # Determine block boundaries (causal)
-        # block i => last index is (i+1)*block_size_w - 1
-        q_indices = torch.arange(seq_len_q, device=q.device)
-        q_block_indices = q_indices // self.block_size_h
-        key_indices = (q_block_indices + 1)*self.block_size_w - 1
-        key_indices = key_indices.clamp(max=seq_len_k - 1)
+#         # Determine block boundaries (causal)
+#         # block i => last index is (i+1)*block_size_w - 1
+#         q_indices = torch.arange(seq_len_q, device=q.device)
+#         q_block_indices = q_indices // self.block_size_h
+#         key_indices = (q_block_indices + 1)*self.block_size_w - 1
+#         key_indices = key_indices.clamp(max=seq_len_k - 1)
 
-        # Gather from prefix sums
-        # K_cum_selected => shape (B, seq_len_q, n_heads, r)
-        indices = key_indices.view(1, -1, 1, 1).expand(B, -1, self.n_heads, self.nb_features)
-        K_cum_selected = K_cum.gather(dim=1, index=indices)
+#         # Gather from prefix sums
+#         # K_cum_selected => shape (B, seq_len_q, n_heads, r)
+#         indices = key_indices.view(1, -1, 1, 1).expand(B, -1, self.n_heads, self.nb_features)
+#         K_cum_selected = K_cum.gather(dim=1, index=indices)
 
-        # KV_cum_selected => shape (B, seq_len_q, n_heads, r, d_k)
-        indices_kv = key_indices.view(1, -1, 1, 1, 1).expand(B, -1, self.n_heads, self.nb_features, self.d_k)
-        KV_cum_selected = KV_cum.gather(dim=1, index=indices_kv)
+#         # KV_cum_selected => shape (B, seq_len_q, n_heads, r, d_k)
+#         indices_kv = key_indices.view(1, -1, 1, 1, 1).expand(B, -1, self.n_heads, self.nb_features, self.d_k)
+#         KV_cum_selected = KV_cum.gather(dim=1, index=indices_kv)
 
-        numerator   = torch.sum(q_prime.unsqueeze(-1) * KV_cum_selected, dim=-2)
-        denominator = torch.sum(q_prime * K_cum_selected, dim=-1, keepdim=True)
-        out = numerator / (denominator + 1e-6)
+#         numerator   = torch.sum(q_prime.unsqueeze(-1) * KV_cum_selected, dim=-2)
+#         denominator = torch.sum(q_prime * K_cum_selected, dim=-1, keepdim=True)
+#         out = numerator / (denominator + 1e-6)
 
-        out = out.reshape(B, seq_len_q, self.d_model)
-        out = self.w_o(out)
-        return out
+#         out = out.reshape(B, seq_len_q, self.d_model)
+#         out = self.w_o(out)
+#         return out
 
 # class CausalSelfAttention(nn.Module):
 #     """
@@ -246,12 +246,43 @@ class CausalPerformer(nn.Module):
 #         out = self.w_o(out)
 #         return out
 
+# -------------------------------------------------------------------
+# Simple GPT-style causal self-attention (no Performer)
+# -------------------------------------------------------------------
+class CausalSelfAttention(nn.Module):
+    def __init__(self, d_model: int, n_heads: int, dropout: float = 0.1):
+        super().__init__()
+        assert d_model % n_heads == 0
+        self.n_heads = n_heads
+        self.d_k     = d_model // n_heads
+
+        self.w_q = nn.Linear(d_model, d_model, bias=False)
+        self.w_k = nn.Linear(d_model, d_model, bias=False)
+        self.w_v = nn.Linear(d_model, d_model, bias=False)
+        self.w_o = nn.Linear(d_model, d_model, bias=False)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        # x : (B, T, d_model)
+        B, T, _ = x.size()
+        q = self.w_q(x).view(B, T, self.n_heads, self.d_k).transpose(1, 2)  # (B,h,T,d_k)
+        k = self.w_k(x).view(B, T, self.n_heads, self.d_k).transpose(1, 2)
+        v = self.w_v(x).view(B, T, self.n_heads, self.d_k).transpose(1, 2)
+
+        scores = (q @ k.transpose(-2, -1)) / math.sqrt(self.d_k)            # (B,h,T,T)
+        mask   = torch.tril(torch.ones(T, T, device=x.device, dtype=torch.bool))
+        scores = scores.masked_fill(~mask, float('-inf'))
+
+        attn = self.dropout(torch.softmax(scores, dim=-1))
+        out  = (attn @ v).transpose(1, 2).contiguous().view(B, T, -1)       # (B,T,d_model)
+        return self.w_o(out)
+
 ##############################################################################
 # 8. DecoderBlock (Self-Attn + FeedForward)
 ##############################################################################
 class DecoderBlock(nn.Module):
     def __init__(self, d_model: int,
-                 self_attention_block: CausalPerformer,
+                 self_attention_block: CausalSelfAttention,
                  feed_forward_block: FeedForwardBlock,
                  dropout: float):
         super().__init__()
@@ -321,7 +352,7 @@ class Transformer(nn.Module):
         # Build N decoder blocks
         blocks = []
         for _ in range(n_layers):
-            performer = CausalPerformer(d_model, n_heads, dropout)
+            performer = CausalSelfAttention(d_model, n_heads, dropout)
             ff_block  = FeedForwardBlock(d_model, d_ff, dropout)
             blk = DecoderBlock(d_model, performer, ff_block, dropout)
             blocks.append(blk)

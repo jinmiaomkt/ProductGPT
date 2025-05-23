@@ -14,7 +14,7 @@ from train4_decoderonly_git  import train_model
 import numpy as np
 
 # ---------------- hyper-parameter grid -----------------------------------
-ctx_window_values = [480, 960, 1920, 3840]
+ctx_window_values = [480, 960, 1920]
 d_model_values    = [32, 64, 128]
 d_ff_values       = [32, 64, 128]
 N_values          = [4, 6, 8]
@@ -48,11 +48,19 @@ def free_port():
 def run_one(params):
     ctxW, dm, dff, N, H, lr, wt = params
     cfg = get_config()
-    cfg.update({"ctx_window":ctxW, "seq_len_ai":ctxW,
-                "seq_len_tgt":ctxW//15, "ai_rate":15,
-                "d_model":dm, "d_ff":dff, "N":N,
-                "num_heads":H, "lr":lr, "weight":wt})
-    uid  = (f"ctx{ctxW//15}_dmodel{dm}_ff{dff}_N{N}_heads{H}_lr{lr}_weight{wt}")
+
+    cfg.update({"ctx_window":ctxW, 
+                # "seq_len_ai":ctxW,
+                # "seq_len_tgt":ctxW//15, 
+                # "ai_rate":15,
+                "d_model":dm, 
+                "d_ff":dff, 
+                "N":N,
+                "num_heads":H, 
+                "lr":lr, 
+                "weight":wt})
+    
+    uid  = (f"ctx{ctxW//cfg['ai_rate']}_dmodel{dm}_ff{dff}_N{N}_heads{H}_lr{lr}_weight{wt}")
     stem = f"MyProductGPT_{uid}"
     cfg["model_basename"] = stem
 
@@ -64,10 +72,27 @@ def run_one(params):
     res = train_model(cfg)
 
     # ---------- JSON to disk (NumPy → list) -----------------------------
-    json_path = Path(f"{stem}.json")
-    with json_path.open("w") as fp:
-        json.dump({k:(v.tolist() if isinstance(v,np.ndarray) else v)
-                   for k,v in res.items()}, fp, indent=2)
+    # json_path = Path(f"{stem}.json")
+    # with json_path.open("w") as fp:
+    #     json.dump({k:(v.tolist() if isinstance(v,np.ndarray) else v)
+    #                for k,v in res.items()}, fp, indent=2)
+
+    json_path = Path(res["best_checkpoint_path"]).with_suffix(".json")
+    if not json_path.exists():
+        print(f"[WARN] Expected JSON not found: {json_path}")
+    else:
+        s3 = get_s3()
+        bucket = cfg["s3_bucket"]
+
+        ckpt = Path(res["best_checkpoint_path"])
+        if ckpt.exists() and s3_put(ckpt, bucket,
+            f"FullProductGPT/checkpoints/{ckpt.name}", s3):
+            ckpt.unlink()
+
+        if s3_put(json_path, bucket,
+                f"FullProductGPT/metrics/{json_path.name}", s3):
+            json_path.unlink()
+
 
     # ---------- S3 uploads ---------------------------------------------
     s3      = get_s3()
