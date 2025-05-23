@@ -55,7 +55,6 @@ def _build_tok():
 
 # --- loss -------------------------------------------------------
 class PairwiseRevenueLoss(nn.Module):
-    """ -E|R_i – R_j|  (negative expected revenue gap) """
     def __init__(self, revenue, vocab_size, ignore_index=0):
         super().__init__()
         if len(revenue) < vocab_size:
