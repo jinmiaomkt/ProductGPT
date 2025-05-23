@@ -14,9 +14,9 @@ from train4_decoderonly_git  import train_model
 import numpy as np
 
 # ---------------- hyper-parameter grid -----------------------------------
-ctx_window_values = [480, 960, 1920]
-d_model_values    = [32, 64, 128]
-d_ff_values       = [32, 64, 128]
+ctx_window_values = [120, 240, 480]
+d_model_values    = [32, 64]
+d_ff_values       = [32, 64]
 N_values          = [4, 6, 8]
 num_heads_values  = [4, 8]
 lr_values         = [1e-4]
