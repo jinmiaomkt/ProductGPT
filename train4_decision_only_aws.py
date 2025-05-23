@@ -71,7 +71,7 @@ class PairwiseRevenueLoss(nn.Module):
         tgt   = tgt.view(-1)
         keep  = tgt != self.ignore
         if keep.sum() == 0:
-            return logits.new_tensor(0.0)
+            return logits.sum() * 0.0
         pen = self.penalty.to(probs)
         return -(probs[keep] * pen[tgt[keep]]).sum(dim=-1).mean()
 
@@ -240,7 +240,7 @@ def train_model(cfg):
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # ---------- unique run-id & file names -----------------------
-    slots = cfg["seq_len_ai"] // cfg["ai_rate"]
+    slots = cfg["ctx_window"] // cfg["ai_rate"]
     uid   = (f"ctx{slots}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}_"
              f"heads{cfg['num_heads']}_lr{cfg['lr']}_weight{cfg['weight']}")
     ckpt_local = Path(cfg["model_folder"]) / f"DecisionOnly_{uid}.pt"
