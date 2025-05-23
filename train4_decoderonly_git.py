@@ -227,7 +227,7 @@ def _evaluate(loader, eng, dev, loss_fn, pad, tok, ai_rate):
 def train_model(cfg):
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    slots = cfg["seq_len_ai"] // cfg["ai_rate"]
+    slots = cfg["ctx_window"] // cfg["ai_rate"]
     uid   = (f"ctx{slots}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}_"
              f"heads{cfg['num_heads']}_lr{cfg['lr']}_weight{cfg['weight']}")
     ckpt_path = Path(cfg["model_folder"]) / f"FullProductGPT_{uid}.pt"
