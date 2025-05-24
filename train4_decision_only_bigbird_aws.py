@@ -241,42 +241,66 @@ def train_model(cfg):
     model = _build_model(cfg)
     loss_fn = PairwiseRevenueLoss(
         [0,1,10,1,10,1,10,1,10,0], cfg["vocab_size_tgt"], pad_id)
-
-    # eng, _, _, _ = deepspeed.initialize(
-    #     model=model, model_parameters=model.parameters(),
-    #     config={
-    #         "train_micro_batch_size_per_gpu": cfg["batch_size"],
-    #         "zero_allow_untested_optimizer": True,
-    #         "optimizer": {"type": "Lamb", "params": {
-    #             "lr": cfg["lr"], "weight_decay": cfg["weight_decay"],
-    #             "eps": cfg["eps"]}},
-    #         "zero_optimization": {"stage": 1},
-    #         "fp16": {"enabled": True}})
     
+    ds_cfg = {
+        "train_micro_batch_size_per_gpu": 1,
+        "gradient_accumulation_steps":    4,
+        "zero_allow_untested_optimizer":  True,
 
-    eng, _, _, _ = deepspeed.initialize(
-    model=model,
-    model_parameters=model.parameters(),
-    config={
-        "train_micro_batch_size_per_gpu": 1,          # was 2
-        "gradient_accumulation_steps":    4,          # keep global batch
-        "zero_allow_untested_optimizer": True,
-        "optimizer": {...},
+        "optimizer": {
+            "type": "Lamb",
+            "params": {"lr": cfg["lr"],
+                    "weight_decay": cfg["weight_decay"],
+                    "eps": cfg["eps"]}
+        },
+
         "zero_optimization": {
             "stage": 2,
             "allgather_partitions": True,
             "overlap_comm": True,
             "contiguous_gradients": True
         },
+
         "activation_checkpointing": {
             "partition_activations": True,
             "contiguous_memory_optimization": True
         },
+
         "fp16": {
             "enabled": True,
             "initial_scale_power": 8
         }
-    })
+    }
+
+    eng, *_ = deepspeed.initialize(
+        model=model,
+        model_parameters=model.parameters(),
+        config=ds_cfg         # ← make sure this is the dict above
+    )
+
+    # eng, _, _, _ = deepspeed.initialize(
+    # model=model,
+    # model_parameters=model.parameters(),
+    # config={
+    #     "train_micro_batch_size_per_gpu": 1,          # was 2
+    #     "gradient_accumulation_steps":    4,          # keep global batch
+    #     "zero_allow_untested_optimizer": True,
+    #     "optimizer": {...},
+    #     "zero_optimization": {
+    #         "stage": 2,
+    #         "allgather_partitions": True,
+    #         "overlap_comm": True,
+    #         "contiguous_gradients": True
+    #     },
+    #     "activation_checkpointing": {
+    #         "partition_activations": True,
+    #         "contiguous_memory_optimization": True
+    #     },
+    #     "fp16": {
+    #         "enabled": True,
+    #         "initial_scale_power": 8
+    #     }
+    # })
     
     # scaler = torch.cuda.amp.GradScaler()
     best = patience = None
