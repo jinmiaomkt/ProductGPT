@@ -19,7 +19,7 @@ def _raw_config():
         "vocab_size_ai" : 68,
 
         # ---------- context window ----------
-        "ctx_window": 64,
+        "ctx_window": 32,
         "window_size": None,          # ← edit 64 * 15
         "seq_len_ai":  None,       # filled in below
         "seq_len_tgt": 1024,
