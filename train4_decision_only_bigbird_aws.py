@@ -129,9 +129,19 @@ def _make_loaders(cfg, tokenizer):
         ctx_window=cfg["ctx_window"],
         ai_rate=cfg["ai_rate"])
 
+    # LD = lambda ds, smpl=None: DataLoader(
+    #     ds, batch_size=None if smpl else cfg["batch_size"],
+    #     sampler=smpl, collate_fn=collate, pin_memory=True)
+    
+    # ── replace the LD (= DataLoader) helper in _make_loaders ──────────
     LD = lambda ds, smpl=None: DataLoader(
-        ds, batch_size=None if smpl else cfg["batch_size"],
-        sampler=smpl, collate_fn=collate, pin_memory=True)
+            ds,
+            batch_size=cfg["batch_size"],   # ← always use a batch size
+            sampler=smpl,                   # BucketSampler gives the *order*
+            shuffle=False,                  # no conflict with sampler
+            collate_fn=collate,
+            pin_memory=True)
+
 
     return LD(tr_ds, sampler), LD(va_ds), LD(te_ds)
 
