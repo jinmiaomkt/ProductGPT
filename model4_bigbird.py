@@ -183,7 +183,7 @@ class LocalCausalSelfAttention(nn.Module):
         # BigBirdSelfAttention returns (context, attn_weights); ignore weights.
         context, _ = self.attn(
             hidden_states=x,
-            attention_mask=mask,
+            attention_mask=None,
             output_attentions=False,
         )
         return self.out(self.drop(context))
