@@ -220,6 +220,7 @@ def train_model(cfg):
     ck_key = f"DecisionOnly/checkpoints/{ckpt.name}"
     js_key = f"DecisionOnly/metrics/{meta.name}"
     print(f"[INFO] artefacts →  s3://{bucket}/{ck_key}")
+    print(f"[INFO] artefacts →  s3://{bucket}/{js_key}")
 
     tr, va, te = _make_loaders(cfg, tok)
     model = _build_model(cfg)
@@ -230,6 +231,7 @@ def train_model(cfg):
         model=model, model_parameters=model.parameters(),
         config={
             "train_micro_batch_size_per_gpu": cfg["batch_size"],
+            "zero_allow_untested_optimizer": True,
             "optimizer": {"type": "Lamb", "params": {
                 "lr": cfg["lr"], "weight_decay": cfg["weight_decay"],
                 "eps": cfg["eps"]}},
