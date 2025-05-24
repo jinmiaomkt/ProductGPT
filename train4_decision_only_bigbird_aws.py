@@ -117,8 +117,9 @@ def _make_loaders(cfg, tokenizer):
         return TransformerDataset(ds, tokenizer,
                                   input_key="AggregateInput",
                                   pad_token=0,
-                                  ctx_window=cfg["ctx_window"],
-                                  ai_rate=cfg["ai_rate"])
+                                  #ctx_window=cfg["ctx_window"],
+                                  #ai_rate=cfg["ai_rate"]
+                                  )
 
     tr_ds, va_ds, te_ds = map(wrap, (tr_data, va_data, te_data))
     lengths = [len(x["aggregate_input"]) for x in tr_ds]
@@ -126,8 +127,9 @@ def _make_loaders(cfg, tokenizer):
 
     collate = lambda b: TransformerDataset.collate_fn(
         b, pad_id=0,
-        ctx_window=cfg["ctx_window"],
-        ai_rate=cfg["ai_rate"])
+        # ctx_window=cfg["ctx_window"],
+        # ai_rate=cfg["ai_rate"]
+        )
 
     # LD = lambda ds, smpl=None: DataLoader(
     #     ds, batch_size=None if smpl else cfg["batch_size"],
