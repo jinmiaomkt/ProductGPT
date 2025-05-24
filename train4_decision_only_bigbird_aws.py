@@ -18,7 +18,7 @@ from pytorch_lamb import Lamb
 
 from model4_bigbird import build_transformer
 from dataset4 import TransformerDataset, load_json_dataset
-from config4_decision_only_aws import get_config
+from config4 import get_config
 
 class PairwiseRevenueLoss(nn.Module):
     def __init__(self, revenue, vocab_size, ignore_index=0):
@@ -146,13 +146,15 @@ def _make_loaders(cfg, tokenizer):
     return LD(tr_ds, sampler), LD(va_ds), LD(te_ds)
 
 def _build_model(cfg):
+    cfg["ai_rate"] = 1
     return build_transformer(
         vocab_size=cfg["vocab_size_tgt"],
         max_seq_len=cfg["seq_len_ai"],
         d_model=cfg["d_model"],
         n_layers=cfg["N"],
         n_heads=cfg["num_heads"],
-        window_size=cfg["ctx_window"],
+        window_size=cfg["window_size"],
+        block_size=cfg["block_size"],
         d_ff=cfg["d_ff"],
         dropout=cfg["dropout"]
     )
@@ -220,7 +222,7 @@ def train_model(cfg):
     pad_id = tok.token_to_id("[PAD]")
 
     slots = cfg["ctx_window"] // cfg["ai_rate"]
-    uid = (f"ctx{slots}_d{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}_"
+    uid = (f"ai_rate{cfg['ai_rate']}_ctx{slots}_d{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}_"
            f"h{cfg['num_heads']}_lr{cfg['lr']}_wt{cfg['weight']}")
     ckpt = Path(cfg["model_folder"]) / f"DecisionOnly_{uid}.pt"
     meta = ckpt.with_suffix(".json")
