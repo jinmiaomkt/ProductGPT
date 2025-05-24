@@ -132,20 +132,16 @@ def _make_loaders(cfg, tokenizer):
         # ai_rate=cfg["ai_rate"]
         )
 
-    # LD = lambda ds, smpl=None: DataLoader(
-    #     ds, batch_size=None if smpl else cfg["batch_size"],
-    #     sampler=smpl, collate_fn=collate, pin_memory=True)
-    
-    # ── replace the LD (= DataLoader) helper in _make_loaders ──────────
+    # ───── in _make_loaders() ─────────────────────────────────────
     LD = lambda ds, smpl=None: DataLoader(
             ds,
-            batch_size=cfg["batch_size"],   # ← always use a batch size
-            sampler=smpl,                   # BucketSampler gives the *order*
-            shuffle=False,                  # no conflict with sampler
-            collate=collate,
-            pin_memory=True)
-
-
+            batch_size=cfg["batch_size"],
+            sampler=smpl,
+            shuffle=False,
+            num_workers=os.cpu_count() // 2,   # optional speed-up
+            pin_memory=True,
+            collate_fn=collate           # ← rename this keyword
+    )
     return LD(tr_ds, sampler), LD(va_ds), LD(te_ds)
 
 def _build_model(cfg):
