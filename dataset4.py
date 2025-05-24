@@ -17,9 +17,9 @@ class TransformerDataset(torch.utils.data.Dataset):
         • label_mask – BoolTensor(seq)  True where token ∈ {1,…,9}
     """
     def __init__(self, sessions, tokenizer, *, input_key="AggregateInput",
-                 pad_id=0):
+                 pad_token=0):
         self.tok  = tokenizer
-        self.pad  = pad_id
+        self.pad  = pad_token
         self.items = []
 
         for sess in sessions:
