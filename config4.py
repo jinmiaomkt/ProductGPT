@@ -19,7 +19,7 @@ def _raw_config():
         "vocab_size_ai" : 68,
 
         # ---------- context window ----------
-        "ctx_window": 32,
+        "ctx_window": 16,
         "window_size": None,          # ← edit 64 * 15
         "seq_len_ai":  None,       # filled in below
         "seq_len_tgt": 1024,
@@ -31,12 +31,12 @@ def _raw_config():
         "warmup_steps": 5,
         "lr": 1e-4,
         "min_lr": 1e-6,
-        "d_model": 32,
+        "d_model": 16,
         "N": 2,
         "num_heads": 2,
         "dropout": 0.1,
         "kernel_type": "exp",
-        "d_ff": 32,
+        "d_ff": 16,
         "eval_freq": 40,
 
         # ---------- rates ----------
