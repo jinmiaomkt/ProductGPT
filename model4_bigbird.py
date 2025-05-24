@@ -131,8 +131,8 @@ class LocalCausalSelfAttention(nn.Module):
         d_model: int,
         n_heads: int,
         window_size: int,
+        block_size: int,
         dropout: float = 0.1,
-        block_size: int = 1,
         num_rand_blks: int = 0,
     ):
         super().__init__()
@@ -254,6 +254,7 @@ class Transformer(nn.Module):
                  n_heads: int,
                  d_ff: int, 
                  window_size: int,
+                 block_size: int,
                  dropout: float, 
                  kernel_type="exp"):
         super().__init__()
@@ -264,7 +265,7 @@ class Transformer(nn.Module):
         # Build N decoder blocks
         blocks = []
         for _ in range(n_layers):
-            bigbird = LocalCausalSelfAttention(d_model, n_heads, window_size)
+            bigbird = LocalCausalSelfAttention(d_model, n_heads, window_size, block_size, dropout)
             ff_block  = FeedForwardBlock(d_model, d_ff, dropout)
             blk = DecoderBlock(d_model, bigbird, ff_block, dropout)
             blocks.append(blk)

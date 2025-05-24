@@ -60,6 +60,8 @@ class TransformerDataset(Dataset):
 
         max_ctx_len = ctx_window * ai_rate
         max_len = min(max_ctx_len, max(x.size(0) for x in ctxs))
+
+        
         padded = torch.full((len(ctxs), max_len), pad_id, dtype=torch.long)
 
         for i, x in enumerate(ctxs):
