@@ -277,7 +277,9 @@ def train_model(cfg):
 
             eng.backward(loss)                 # DeepSpeed scales & back-props
             eng.step()                         # optimizer + zero
-            eng.zero_grad(set_to_none=True)
+            # eng.zero_grad(set_to_none=True)
+            eng.zero_grad()          # ← no kwargs
+
             running += loss.item()
 
             # with torch.cuda.amp.autocast():
