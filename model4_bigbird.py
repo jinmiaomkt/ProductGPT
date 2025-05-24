@@ -207,7 +207,7 @@ class DecoderBlock(nn.Module):
         # 1) Self-attn
         # x = self.residual_attn(x, self.self_attention_block)
         x = self.residual_attn(x, lambda x_norm:
-            self.self_attention_block(x_norm, x_norm, x_norm))
+            self.self_attention_block(x_norm))
         # 2) Feed-forward
         x = self.residual_ff(x, self.feed_forward_block)
         return x
