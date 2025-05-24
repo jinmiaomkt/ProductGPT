@@ -126,7 +126,7 @@ def _make_loaders(cfg, tokenizer):
     lengths = [len(sample[0]) for sample in tr_ds] 
     sampler = BucketSampler(lengths, cfg["batch_size"])
 
-    collate = lambda b: TransformerDataset.collate_fn(
+    collate = lambda b: TransformerDataset.collate(
         b, pad_id=0,
         # ctx_window=cfg["ctx_window"],
         # ai_rate=cfg["ai_rate"]
