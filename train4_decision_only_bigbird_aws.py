@@ -252,45 +252,35 @@ def train_model(cfg):
                 "eps": cfg["eps"]}},
             "zero_optimization": {"stage": 1},
             "fp16": {"enabled": True}})
+    
     # scaler = torch.cuda.amp.GradScaler()
-
     best = patience = None
     for ep in range(cfg["num_epochs"]):
         eng.train(); running = 0.0
-        for b in tqdm(tr, desc=f"Ep {ep:02d}", leave=False):
-            x = b["aggregate_input"].to(dev, non_blocking=True)
-            y = b["label"].to(dev)
-            # pos = torch.arange(cfg["ai_rate"]-1, x.size(1), cfg["ai_rate"], device=dev)
+        for tokens, dec_mask in tqdm(tr, desc=f"Ep {ep:02d}", leave=False):
+            tokens   = tokens.to(dev, non_blocking=True)        # (B,L)
+            dec_mask = dec_mask.to(dev, non_blocking=True)      # (B,L)
 
-            logits = eng(x)[:, -1, :]                # (B, V)
-            tgt    = y.view(-1)                      # (B,)
-            # ---------------------------------------------------------
+            # --------------- forward -------------------------------------
+            all_logits = eng(tokens)                            # (B,L,V)
 
-            # adjust downstream shapes once:
-            # prob = F.softmax(logits, -1).cpu().numpy()     # (B, V)
-            prob = F.softmax(logits, -1).detach().cpu().numpy()   # (B, V)
-            # pred = prob.argmax(1)                           # (B,)
-            # lbl  = tgt.cpu().numpy()                        # (B,)
+            pos = torch.arange(cfg["ai_rate"]-1, tokens.size(1),
+                            cfg["ai_rate"], device=dev)      # (N_pos,)
+            logits = all_logits[:, pos, :]                      # (B,N,V)
+            tgt    = tokens[:, pos]                             # (B,N)
 
-            # loss
-            loss = loss_fn(logits.unsqueeze(1), tgt.unsqueeze(1))   # keep Pairwise API
+            valid  = dec_mask[:, pos]                           # (B,N) bool
+            tgt_masked = tgt.clone()
+            tgt_masked[~valid] = pad_id                         # ignore non-decision slots
 
-            eng.backward(loss)                 # DeepSpeed scales & back-props
-            eng.step()                         # optimizer + zero
-            # eng.zero_grad(set_to_none=True)
-            eng.zero_grad()          # ← no kwargs
+            loss = loss_fn(logits, tgt_masked)
+
+            # --------------- backward & step -----------------------------
+            eng.backward(loss)
+            eng.step()
+            eng.zero_grad()
 
             running += loss.item()
-
-            # with torch.cuda.amp.autocast():
-            #     logits = eng(x)[:, pos, :]
-            #     tgt = y[:, pos].clone()
-            #     tgt[_transition_mask(y)[:, pos]] = pad_id
-            #     loss = loss_fn(logits, tgt)
-
-            # scaler.scale(loss).backward()
-            # scaler.step(eng.optimizer); scaler.update()
-            
         print(f"\nTrain loss {running/len(tr):.4f}")
 
         v_loss, v_ppl, v_all, v_stop, v_after, v_tr = _eval(
