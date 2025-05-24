@@ -122,7 +122,8 @@ def _make_loaders(cfg, tokenizer):
                                   )
 
     tr_ds, va_ds, te_ds = map(wrap, (tr_data, va_data, te_data))
-    lengths = [len(x["aggregate_input"]) for x in tr_ds]
+    # lengths = [len(x["aggregate_input"]) for x in tr_ds]
+    lengths = [len(sample[0]) for sample in tr_ds] 
     sampler = BucketSampler(lengths, cfg["batch_size"])
 
     collate = lambda b: TransformerDataset.collate_fn(
@@ -179,7 +180,8 @@ def _eval(loader, eng, dev, loss_fn, step, pad, tok):
             x = b["aggregate_input"].to(dev, non_blocking=True)
             y = b["label"].to(dev)
 
-            # pos = torch.arange(step - 1, x.size(1), step, device=dev)
+            step = b["ai_rate"].to(dev)
+            pos = torch.arange(step - 1, x.size(1), step, device=dev)
             # logits = eng(x)[:, pos, :]
             # tgt = y[:, pos].clone()
 
@@ -268,6 +270,7 @@ def train_model(cfg):
 
             pos = torch.arange(cfg["ai_rate"]-1, tokens.size(1),
                             cfg["ai_rate"], device=dev)      # (N_pos,)
+            
             logits = all_logits[:, pos, :]                      # (B,N,V)
             tgt    = tokens[:, pos]                             # (B,N)
 
