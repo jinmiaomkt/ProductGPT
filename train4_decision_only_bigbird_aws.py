@@ -244,21 +244,18 @@ def train_model(cfg):
     
     ds_cfg = {
         "train_micro_batch_size_per_gpu": 1,
-        "gradient_accumulation_steps":    4,
-        "zero_allow_untested_optimizer":  True,
+        "gradient_accumulation_steps":    8,
 
-        "optimizer": {
-            "type": "Lamb",
-            "params": {"lr": cfg["lr"],
-                    "weight_decay": cfg["weight_decay"],
-                    "eps": cfg["eps"]}
-        },
+        "optimizer": {"type": "Lamb",
+                    "params": {"lr": cfg["lr"],
+                                "weight_decay": cfg["weight_decay"],
+                                "eps": cfg["eps"]}},
 
         "zero_optimization": {
-            "stage": 2,
-            "allgather_partitions": True,
-            "overlap_comm": True,
-            "contiguous_gradients": True
+            "stage": 3,
+            "offload_param":     {"device": "cpu", "pin_memory": True},
+            "offload_optimizer": {"device": "cpu", "pin_memory": True},
+            "overlap_comm": True
         },
 
         "activation_checkpointing": {
@@ -266,42 +263,13 @@ def train_model(cfg):
             "contiguous_memory_optimization": True
         },
 
-        "fp16": {
-            "enabled": True,
-            "initial_scale_power": 8
-        }
+        "fp16": {"enabled": True, "initial_scale_power": 6}
     }
+    eng, *_ = deepspeed.initialize(model=model,
+                                model_parameters=model.parameters(),
+                                config=ds_cfg)
 
-    eng, *_ = deepspeed.initialize(
-        model=model,
-        model_parameters=model.parameters(),
-        config=ds_cfg         # ← make sure this is the dict above
-    )
 
-    # eng, _, _, _ = deepspeed.initialize(
-    # model=model,
-    # model_parameters=model.parameters(),
-    # config={
-    #     "train_micro_batch_size_per_gpu": 1,          # was 2
-    #     "gradient_accumulation_steps":    4,          # keep global batch
-    #     "zero_allow_untested_optimizer": True,
-    #     "optimizer": {...},
-    #     "zero_optimization": {
-    #         "stage": 2,
-    #         "allgather_partitions": True,
-    #         "overlap_comm": True,
-    #         "contiguous_gradients": True
-    #     },
-    #     "activation_checkpointing": {
-    #         "partition_activations": True,
-    #         "contiguous_memory_optimization": True
-    #     },
-    #     "fp16": {
-    #         "enabled": True,
-    #         "initial_scale_power": 8
-    #     }
-    # })
-    
     # scaler = torch.cuda.amp.GradScaler()
     best = patience = None
     for ep in range(cfg["num_epochs"]):
