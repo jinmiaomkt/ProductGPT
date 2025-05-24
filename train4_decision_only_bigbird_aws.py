@@ -252,7 +252,7 @@ def train_model(cfg):
                 "eps": cfg["eps"]}},
             "zero_optimization": {"stage": 1},
             "fp16": {"enabled": True}})
-    scaler = torch.cuda.amp.GradScaler()
+    # scaler = torch.cuda.amp.GradScaler()
 
     best = patience = None
     for ep in range(cfg["num_epochs"]):
@@ -269,11 +269,16 @@ def train_model(cfg):
             # adjust downstream shapes once:
             # prob = F.softmax(logits, -1).cpu().numpy()     # (B, V)
             prob = F.softmax(logits, -1).detach().cpu().numpy()   # (B, V)
-            pred = prob.argmax(1)                           # (B,)
-            lbl  = tgt.cpu().numpy()                        # (B,)
+            # pred = prob.argmax(1)                           # (B,)
+            # lbl  = tgt.cpu().numpy()                        # (B,)
 
             # loss
             loss = loss_fn(logits.unsqueeze(1), tgt.unsqueeze(1))   # keep Pairwise API
+
+            eng.backward(loss)                 # DeepSpeed scales & back-props
+            eng.step()                         # optimizer + zero
+            eng.zero_grad(set_to_none=True)
+            running += loss.item()
 
             # with torch.cuda.amp.autocast():
             #     logits = eng(x)[:, pos, :]
@@ -281,10 +286,9 @@ def train_model(cfg):
             #     tgt[_transition_mask(y)[:, pos]] = pad_id
             #     loss = loss_fn(logits, tgt)
 
-            scaler.scale(loss).backward()
-            scaler.step(eng.optimizer); scaler.update()
-            eng.zero_grad(set_to_none=True)
-            running += loss.item()
+            # scaler.scale(loss).backward()
+            # scaler.step(eng.optimizer); scaler.update()
+            
         print(f"\nTrain loss {running/len(tr):.4f}")
 
         v_loss, v_ppl, v_all, v_stop, v_after, v_tr = _eval(
