@@ -142,7 +142,7 @@ def _make_loaders(cfg, tokenizer):
             batch_size=cfg["batch_size"],   # ← always use a batch size
             sampler=smpl,                   # BucketSampler gives the *order*
             shuffle=False,                  # no conflict with sampler
-            collate_fn=collate,
+            collate=collate,
             pin_memory=True)
 
 
