@@ -267,7 +267,8 @@ def train_model(cfg):
             # ---------------------------------------------------------
 
             # adjust downstream shapes once:
-            prob = F.softmax(logits, -1).cpu().numpy()     # (B, V)
+            # prob = F.softmax(logits, -1).cpu().numpy()     # (B, V)
+            prob = F.softmax(logits, -1).detach().cpu().numpy()   # (B, V)
             pred = prob.argmax(1)                           # (B,)
             lbl  = tgt.cpu().numpy()                        # (B,)
 
