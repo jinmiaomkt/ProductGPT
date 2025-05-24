@@ -9,7 +9,7 @@
 from pathlib import Path
 
 # ─────────────────────────── core config ───────────────────────────
-def _raw_config():
+def get_config():
     return {
         # ---------- data ----------
         "filepath": "/home/ec2-user/data/clean_list_int_wide4_simple6_FeatureBasedTrain.json",
@@ -19,9 +19,9 @@ def _raw_config():
         "vocab_size_ai" : 68,
 
         # ---------- context window ----------
-        "ctx_window": 960,          # ← edit 64 * 15
-        # "seq_len_ai":  None,       # filled in below
-        # "seq_len_tgt": None,
+        "ctx_window": 64,          
+        "seq_len_ai":  1024,       # filled in below
+        "seq_len_tgt": 1024,
 
         # ---------- training ----------
         "k": 4096,
@@ -41,7 +41,7 @@ def _raw_config():
         # ---------- rates ----------
         "source_rate": 10,
         "lto_rate":    4,
-        "ai_rate":    15,          # decision every 15 tokens in aggregate input
+        "ai_rate":    1,          # decision every 15 tokens in aggregate input
 
         # ---------- optimisation ----------
         "weight_decay": 0.01,
@@ -52,7 +52,7 @@ def _raw_config():
 
         # ---------- logging / paths ----------
         "model_folder":   "/home/ec2-user/output",
-        "model_basename": "MyProductGPT_",
+        "model_basename": "DecisionOnly_",
         "preload": None,               # "latest" or explicit checkpoint
         "tokenizer_file": "tokenizer_{0}.json",
         "experiment_name": "runs/tmodel",
@@ -60,21 +60,21 @@ def _raw_config():
         # ---------- cloud ----------
         "s3_bucket":  "productgptbucket",
         "gcp_bucket": "productgptbucket",
-        "s3_prefix":  "my_runs",
+        # "s3_prefix":  "my_runs",
     }
 
 # ─────────────────────────── public helper ─────────────────────────
 
-def get_config():
-    cfg = _raw_config()
+# def get_config():
+#     cfg = _raw_config()
 
-    # derive sequence lengths from ctx_window
-    cfg["seq_len_ai"]  = cfg["ctx_window"]
-    # ensure at least one decision token when ctx_window < ai_rate
-    # cfg["seq_len_tgt"] = 1
-    cfg["seq_len_tgt"] = max(1, cfg["seq_len_ai"] // cfg["ai_rate"])
+#     # derive sequence lengths from ctx_window
+#     cfg["seq_len_ai"]  = cfg["ctx_window"]
+#     # ensure at least one decision token when ctx_window < ai_rate
+#     # cfg["seq_len_tgt"] = 1
+#     cfg["seq_len_tgt"] = max(1, cfg["seq_len_ai"] // cfg["ai_rate"])
 
-    return cfg
+#     return cfg
 
 # ─────────────────────────── checkpoint helpers ───────────────────
 def get_weights_file_path(config, tag: str) -> str:
@@ -84,7 +84,7 @@ def get_weights_file_path(config, tag: str) -> str:
     uid = (f"ctx{config['ctx_window']}_dmodel{config['d_model']}_ff{config['d_ff']}"
            f"_N{config['N']}_heads{config['num_heads']}_gamma{config['gamma']}"
            f"_lr{config['lr']}_weight{config['weight']}")
-    filename = f"FullProductGPT_{uid}_{tag}.pt"
+    filename = f"DecisionOnly_{uid}_{tag}.pt"
     return str(folder / filename)
 
 def latest_weights_file_path(config) -> str | None:
@@ -92,6 +92,6 @@ def latest_weights_file_path(config) -> str | None:
     if not folder.exists():
         return None
 
-    pattern = f"FullProductGPT_*_ctx{config['ctx_window']}.pt"
+    pattern = f"DecisionOnly_*_ctx{config['ctx_window']}.pt"
     files   = sorted(folder.glob(pattern))
     return str(files[-1]) if files else None

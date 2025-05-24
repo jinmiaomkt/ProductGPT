@@ -20,25 +20,15 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import boto3
 import torch
 
-from config4_decision_only_git import get_config
+from config4_decision_only_aws import get_config
 from train4_decision_only_aws import train_model
 
-# from google.cloud import storage
-
-# def upload_to_gcs(local_path: str, bucket_name: str, destination_blob_name: str):
-#     """Uploads a file to GCS bucket."""
-#     storage_client = storage.Client()
-#     bucket = storage_client.bucket(bucket_name)
-#     blob = bucket.blob(destination_blob_name)
-#     blob.upload_from_filename(local_path)
-#     print(f"Uploaded {local_path} to gs://{bucket_name}/{destination_blob_name}")
-
 # hyper‐parameter grids
-ctx_window_values = [32, 64, 128, 256]
-d_model_values = [256, 512]
-d_ff_values = [128, 256, 512]
-N_values = [6, 8, 10]
-num_heads_values = [8, 16, 32]
+ctx_window_values = [32, 64, 128]
+d_model_values = [64, 128]
+d_ff_values = [64, 128]
+N_values = [6, 8]
+num_heads_values = [4, 8, 16]
 lr_values = [1e-4]
 weight_values = [1, 2, 4]
 
@@ -59,7 +49,7 @@ def run_one_experiment(params):
     # 1) Build config
     config = get_config()
     config.update({
-        "seq_len_ai": ctx_window,
+        "ctx_window": ctx_window,
         "d_model":    d_model,
         "d_ff":       d_ff,
         "N":          N,
