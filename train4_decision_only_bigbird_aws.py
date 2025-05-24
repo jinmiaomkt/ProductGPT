@@ -177,9 +177,12 @@ def _eval(loader, eng, dev, loss_fn, step, pad, tok):
             x = b["aggregate_input"].to(dev, non_blocking=True)
             y = b["label"].to(dev)
 
-            pos = torch.arange(step - 1, x.size(1), step, device=dev)
-            logits = eng(x)[:, pos, :]
-            tgt = y[:, pos].clone()
+            # pos = torch.arange(step - 1, x.size(1), step, device=dev)
+            # logits = eng(x)[:, pos, :]
+            # tgt = y[:, pos].clone()
+
+            logits = eng(x)[:, -1, :]                # (B, V) ← only last position
+            tgt    = y.view(-1)                      # (B,)
 
             tgt_mask = tgt.clone()
             tgt_mask[_transition_mask(y)[:, pos]] = pad
@@ -257,13 +260,25 @@ def train_model(cfg):
         for b in tqdm(tr, desc=f"Ep {ep:02d}", leave=False):
             x = b["aggregate_input"].to(dev, non_blocking=True)
             y = b["label"].to(dev)
-            pos = torch.arange(cfg["ai_rate"]-1, x.size(1), cfg["ai_rate"], device=dev)
+            # pos = torch.arange(cfg["ai_rate"]-1, x.size(1), cfg["ai_rate"], device=dev)
 
-            with torch.cuda.amp.autocast():
-                logits = eng(x)[:, pos, :]
-                tgt = y[:, pos].clone()
-                tgt[_transition_mask(y)[:, pos]] = pad_id
-                loss = loss_fn(logits, tgt)
+            logits = eng(x)[:, -1, :]                # (B, V)
+            tgt    = y.view(-1)                      # (B,)
+            # ---------------------------------------------------------
+
+            # adjust downstream shapes once:
+            prob = F.softmax(logits, -1).cpu().numpy()     # (B, V)
+            pred = prob.argmax(1)                           # (B,)
+            lbl  = tgt.cpu().numpy()                        # (B,)
+
+            # loss
+            loss = loss_fn(logits.unsqueeze(1), tgt.unsqueeze(1))   # keep Pairwise API
+
+            # with torch.cuda.amp.autocast():
+            #     logits = eng(x)[:, pos, :]
+            #     tgt = y[:, pos].clone()
+            #     tgt[_transition_mask(y)[:, pos]] = pad_id
+            #     loss = loss_fn(logits, tgt)
 
             scaler.scale(loss).backward()
             scaler.step(eng.optimizer); scaler.update()
