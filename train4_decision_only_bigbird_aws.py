@@ -128,22 +128,60 @@ def _make_loaders(cfg, tokenizer):
     tr_data, va_data, te_data = random_split(raw, [tr_sz, va_sz, te_sz], generator=g)
 
     # 2. wrap with TransformerDataset --------------------------------------
-    wrap = lambda ds: TransformerDataset(
-        ds,
-        tokenizer,
-        input_key="PreviousDecision",
-        pad_token=0,
-    )
+    # wrap = lambda ds: TransformerDataset(
+    #     ds,
+    #     tokenizer,
+    #     input_key="PreviousDecision",
+    #     pad_token=0,
+    # )
 
-    tr_ds, va_ds, te_ds = map(wrap, (tr_data, va_data, te_data))
+    # 2. build a minimal dataset wrapper -----------------------------------
+    class DecisionDataset(torch.utils.data.Dataset):
+        def __init__(self, sessions):
+            self.items = []
+            for sess in sessions:
+                seq   = sess["PreviousDecision"]
+                label = sess["Decision"]          # <-- TRUE LABEL
+
+                ids = tokenizer.encode(
+                    " ".join(map(str, seq)) if isinstance(seq, list) else str(seq)
+                ).ids
+                self.items.append((torch.tensor(ids, dtype=torch.long), int(label)))
+
+        def __len__(self):
+            return len(self.items)
+
+        def __getitem__(self, idx):
+            return self.items[idx]
+
+    tr_ds, va_ds, te_ds = map(DecisionDataset, (tr_data, va_data, te_data))
 
     # 3. length-aware bucket sampler for train -----------------------------
     lengths = [len(sample[0]) for sample in tr_ds]        # sample[0] is tokens
     sampler = BucketSampler(lengths, cfg["batch_size"])
 
     # 4. collate: left-pad + hard-clip -------------------------------------
+    def collate_fn(batch, *, pad_id=0, max_len=None):
+        tokens_list, labels_list = zip(*batch)
+        L = max(len(t) for t in tokens_list)
+        if max_len is not None and L > max_len:
+            L = max_len
+
+        def left_pad(t):
+            if t.size(0) > L:               # hard-clip (keep most recent)
+                t = t[-L:]
+            pad_len = L - t.size(0)
+            if pad_len:
+                pad = torch.full((pad_len,), pad_id, dtype=torch.long)
+                t = torch.cat((pad, t), dim=0)
+            return t
+
+        tokens_tensor  = torch.stack([left_pad(t) for t in tokens_list])  # (B,L)
+        labels_tensor  = torch.tensor(labels_list, dtype=torch.long)      # (B,)
+        return tokens_tensor, labels_tensor
+    
     collate_fn = partial(
-        TransformerDataset.collate,
+        collate_fn,
         pad_id=0,
         max_len=cfg["seq_len_ai"],      # e.g. 1024
     )
@@ -190,22 +228,25 @@ def _eval(loader, eng, dev, loss_fn, step, pad, tok):
 
     eng.eval()
     with torch.no_grad():
-        for b in loader:
-            x = b["aggregate_input"].to(dev, non_blocking=True)
-            y = b["label"].to(dev)
+        for tokens, _ in loader:
+            # x = b["aggregate_input"].to(dev, non_blocking=True)
+            # y = b["label"].to(dev)
+            tokens = tokens.to(dev, non_blocking=True)
 
-            step = b["ai_rate"].to(dev)
-            pos = torch.arange(step - 1, x.size(1), step, device=dev)
+            # step = b["ai_rate"].to(dev)
+            # pos = torch.arange(step - 1, x.size(1), step, device=dev)
             # logits = eng(x)[:, pos, :]
             # tgt = y[:, pos].clone()
 
-            logits = eng(x)[:, -1, :]                # (B, V) ← only last position
-            tgt    = y.view(-1)                      # (B,)
+            logits = eng(tokens)[:, -1, :]                # (B, V) ← only last position
+            tgt    = tokens[:, -1]                        # (B,)
 
-            tgt_mask = tgt.clone()
-            tgt_mask[_transition_mask(y)[:, pos]] = pad
-            tloss += loss_fn(logits, tgt_mask).item()
-            tppl += _ppl(logits, tgt_mask, pad)
+            # tgt_mask = tgt.clone()
+            # tgt_mask[_transition_mask(y)[:, pos]] = pad
+            # tloss += loss_fn(logits, tgt_mask).item()
+            # tppl += _ppl(logits, tgt_mask, pad)
+            tloss += loss_fn(logits.unsqueeze(1), tgt.unsqueeze(1)).item()
+            tppl  += _ppl(logits, tgt)
 
             prob = F.softmax(logits, -1).view(-1, logits.size(-1)).cpu().numpy()
             pred = prob.argmax(1)
@@ -243,15 +284,15 @@ def train_model(cfg):
     pad_id = tok.token_to_id("[PAD]")
 
     slots = cfg["ctx_window"] // cfg["ai_rate"]
-    uid = (f"ai_rate{cfg['ai_rate']}_ctx{slots}_d{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}_"
+    uid = (f"bigbird_ai_rate{cfg['ai_rate']}_ctx{slots}_d{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}_"
            f"h{cfg['num_heads']}_lr{cfg['lr']}_wt{cfg['weight']}")
     ckpt = Path(cfg["model_folder"]) / f"DecisionOnly_{uid}.pt"
     meta = ckpt.with_suffix(".json")
 
     s3 = _s3()
     bucket = cfg["s3_bucket"]
-    ck_key = f"DecisionOnly/checkpoints/{ckpt.name}"
-    js_key = f"DecisionOnly/metrics/{meta.name}"
+    ck_key = f"DecisionOnly/BigBird/checkpoints/{ckpt.name}"
+    js_key = f"DecisionOnly/BigBird/metrics/{meta.name}"
     print(f"[INFO] artefacts →  s3://{bucket}/{ck_key}")
     print(f"[INFO] artefacts →  s3://{bucket}/{js_key}")
 
