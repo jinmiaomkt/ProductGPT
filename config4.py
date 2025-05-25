@@ -19,7 +19,7 @@ def _raw_config():
         "vocab_size_ai" : 68,
 
         # ---------- context window ----------
-        "ctx_window": 16,
+        "ctx_window": 64,
         "window_size": None,          # ← edit 64 * 15
         "seq_len_ai":  None,       # filled in below
         "seq_len_tgt": 1024,
@@ -32,8 +32,8 @@ def _raw_config():
         "lr": 1e-4,
         "min_lr": 1e-6,
         "d_model": 16,
-        "N": 2,
-        "num_heads": 2,
+        "N": 1,
+        "num_heads": 1,
         "dropout": 0.1,
         "kernel_type": "exp",
         "d_ff": 16,
@@ -42,14 +42,14 @@ def _raw_config():
         # ---------- rates ----------
         "source_rate": 10,
         "lto_rate":    4,
-        "ai_rate":    15,          # decision every 15 tokens in aggregate input
+        "ai_rate":    1,          # decision every 15 tokens in aggregate input
 
         # ---------- optimisation ----------
         "weight_decay": 0.01,
         "patience": 6,
         "gamma": 0,
         "eps": 1e-6,
-        "weight": 10,
+        "weight": 2,
 
         # ---------- logging / paths ----------
         "model_folder":   "/home/ec2-user/output",
