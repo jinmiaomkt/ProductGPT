@@ -109,90 +109,78 @@ class BucketSampler(Sampler):
         return len(self.flat)
 
 def _make_loaders(cfg, tokenizer):
-    """
-    Returns
-    -------
-    tr_loader, va_loader, te_loader : torch.utils.data.DataLoader
-        Each yields (tokens, label_mask) where `tokens` is LongTensor
-        left-padded to a common length and hard-clipped to
-        `cfg["seq_len_ai"]`.
-    """
-    # 1. read JSON and split ------------------------------------------------
     raw   = load_json_dataset(cfg["filepath"])
     n     = len(raw)
-    tr_sz = int(0.8 * n)
-    va_sz = int(0.1 * n)
-    te_sz = n - tr_sz - va_sz
+    tr_sz, va_sz = int(0.8 * n), int(0.1 * n)
+    te_sz       = n - tr_sz - va_sz
 
     g = torch.Generator().manual_seed(33)
-    tr_data, va_data, te_data = random_split(raw, [tr_sz, va_sz, te_sz], generator=g)
+    tr_js, va_js, te_js = random_split(raw, [tr_sz, va_sz, te_sz], generator=g)
 
-    # 2. wrap with TransformerDataset --------------------------------------
-    # wrap = lambda ds: TransformerDataset(
-    #     ds,
-    #     tokenizer,
-    #     input_key="PreviousDecision",
-    #     pad_token=0,
-    # )
-
-    # 2. build a minimal dataset wrapper -----------------------------------
+    # 1 ─ dataset ----------------------------------------------------------
     class DecisionDataset(torch.utils.data.Dataset):
         def __init__(self, sessions):
             self.items = []
             for sess in sessions:
                 seq   = sess["PreviousDecision"]
-                label = sess["Decision"]          # <-- TRUE LABEL
+                label = sess["Decision"]
+
+                # pick ONE scalar label
+                if isinstance(label, list):
+                    label = label[-1]              # <-- use last element
+                label = int(label)
 
                 ids = tokenizer.encode(
                     " ".join(map(str, seq)) if isinstance(seq, list) else str(seq)
                 ).ids
-                self.items.append((torch.tensor(ids, dtype=torch.long), int(label)))
+
+                ids_t   = torch.tensor(ids, dtype=torch.long)
+                mask_t  = torch.tensor([1 <= t <= 9 for t in ids], dtype=torch.bool)
+                label_t = torch.tensor(label, dtype=torch.long)  # (scalar)
+
+                self.items.append((ids_t, mask_t, label_t))
 
         def __len__(self):
             return len(self.items)
 
-        def __getitem__(self, idx):
-            return self.items[idx]
+        def __getitem__(self, i):
+            return self.items[i]
 
-    tr_ds, va_ds, te_ds = map(DecisionDataset, (tr_data, va_data, te_data))
+    tr_ds, va_ds, te_ds = map(DecisionDataset, (tr_js, va_js, te_js))
 
-    # 3. length-aware bucket sampler for train -----------------------------
-    lengths = [len(sample[0]) for sample in tr_ds]        # sample[0] is tokens
+    # 2 ─ length-aware bucket sampler for train ---------------------------
+    lengths = [len(x[0]) for x in tr_ds]              # x[0] is token seq
     sampler = BucketSampler(lengths, cfg["batch_size"])
 
-    # 4. collate: left-pad + hard-clip -------------------------------------
-    def collate_fn(batch, *, pad_id=0, max_len=None):
-        tokens_list, labels_list = zip(*batch)
-        L = max(len(t) for t in tokens_list)
+    # 3 ─ collate (pad + optional hard-clip) -----------------------------
+    def _collate(batch, *, pad_id=0, max_len=None):
+        toks, masks, labels = zip(*batch)
+        L = max(len(t) for t in toks)
         if max_len is not None and L > max_len:
             L = max_len
 
-        def left_pad(t):
-            if t.size(0) > L:               # hard-clip (keep most recent)
+        def lp(t, fill, dtype):
+            if t.size(0) > L:                      # hard-clip right side
                 t = t[-L:]
-            pad_len = L - t.size(0)
-            if pad_len:
-                pad = torch.full((pad_len,), pad_id, dtype=torch.long)
-                t = torch.cat((pad, t), dim=0)
+            pad = L - t.size(0)
+            if pad:
+                t = torch.cat((torch.full((pad,), fill, dtype=dtype), t))
             return t
 
-        tokens_tensor  = torch.stack([left_pad(t) for t in tokens_list])  # (B,L)
-        labels_tensor  = torch.tensor(labels_list, dtype=torch.long)      # (B,)
-        return tokens_tensor, labels_tensor
-    
-    collate_fn = partial(
-        collate_fn,
-        pad_id=0,
-        max_len=cfg["seq_len_ai"],      # e.g. 1024
-    )
+        toks_t  = torch.stack([lp(t, pad_id, torch.long) for t in toks])   # (B,L)
+        masks_t = torch.stack([lp(m, False,  torch.bool) for m in masks])  # (B,L)
+        labs_t  = torch.stack(labels)                                      # (B,)
+        return toks_t, masks_t, labs_t
 
-    # 5. build loaders ------------------------------------------------------
-    def LD(dataset, samp=None):
+    collate_fn = partial(_collate, pad_id=0, max_len=cfg["seq_len_ai"])
+
+    # 4 ─ build loaders ---------------------------------------------------
+    def LD(ds, samp=None):
         return DataLoader(
-            dataset,
+            ds,
             batch_size=cfg["batch_size"],
             sampler=samp,
-            shuffle=(samp is None),     # shuffle val/test, sampler handles train
+            shuffle=(samp is None),
             num_workers=os.cpu_count() // 2,
             pin_memory=True,
             collate_fn=collate_fn,
@@ -365,9 +353,10 @@ def train_model(cfg):
     best = patience = None
     for ep in range(cfg["num_epochs"]):
         eng.train(); running = 0.0
-        for tokens, dec_mask in tqdm(tr, desc=f"Ep {ep:02d}", leave=False):
+        for tokens, dec_mask, labels in tqdm(tr, desc=f"Ep {ep:02d}", leave=False):
             tokens   = tokens.to(dev, non_blocking=True)        # (B,L)
             dec_mask = dec_mask.to(dev, non_blocking=True)      # (B,L)
+            labels   = labels.to(dev)  
 
             # --------------- forward -------------------------------------
             all_logits = eng(tokens)                            # (B,L,V)
@@ -376,10 +365,10 @@ def train_model(cfg):
                             cfg["ai_rate"], device=dev)      # (N_pos,)
             
             logits = all_logits[:, pos, :]                      # (B,N,V)
-            tgt    = tokens[:, pos]                             # (B,N)
+            # tgt    = tokens[:, pos]                             # (B,N)
 
             valid  = dec_mask[:, pos]                           # (B,N) bool
-            tgt_masked = tgt.clone()
+            tgt_masked = labels.clone()
             tgt_masked[~valid] = pad_id                         # ignore non-decision slots
 
             loss = loss_fn(logits, tgt_masked)
