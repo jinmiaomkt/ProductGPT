@@ -1,89 +1,111 @@
-# dataset4.py
+# dataset4.py  ──────────────────────────────────────────────────────────
 import json
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Any
 
 import torch
 from torch.utils.data import Dataset
 from tokenizers import Tokenizer
+import numpy as np
 
 
-# ---------------------------------------------------------------------
-def load_json_dataset(path: str | Path) -> List[Dict]:
+# ----------------------------------------------------------------------
+def load_json_dataset(path: str | Path) -> List[Dict[str, Any]]:
+    """
+    The raw file has ONE big dict whose values are lists.  Re-zip those
+    lists into a list[dict] so every element is a “session”.
+    """
     with open(path, "r") as fp:
-        return json.load(fp)
+        big = json.load(fp)
+
+    keys = list(big.keys())
+    n    = len(big[keys[0]])
+    return [{k: big[k][i] for k in keys} for i in range(n)]
 
 
-# ---------------------------------------------------------------------
+# ----------------------------------------------------------------------
+def _split_tokens(field):
+    """Turn any supported field into a list[int] tokens."""
+    # field may be str, int, list[str], list[int]
+    if isinstance(field, list):
+        # a list with one string, or already ints
+        if len(field) == 1 and isinstance(field[0], str):
+            return [int(t) for t in field[0].split()]
+        return [int(x) for x in field]
+
+    if isinstance(field, str):
+        return [int(t) for t in field.split()]
+
+    if isinstance(field, (int, np.integer)):
+        return [int(field)]
+
+    raise ValueError(f"Unsupported token field type: {type(field)}")
+
+
+def _scalar_label(field):
+    """Return a single int – the last token in `Decision`."""
+    return _split_tokens(field)[-1]
+
+
+# ----------------------------------------------------------------------
 class TransformerDataset(Dataset):
     """
-    One item = one full session.
-
     Returns
     -------
-    tokens : LongTensor(seq_len)
-        Integer token IDs (pad on the LEFT when collated).
-    label_mask : BoolTensor(seq_len)
-        True wherever the token is in {1,…,9}.
+    tokens : LongTensor(seq_len)    – token ids
+    mask   : BoolTensor(seq_len)    – True where 1..9
+    label  : LongTensor()           – scalar Decision
     """
 
     def __init__(
         self,
-        sessions,
+        sessions: List[Dict[str, Any]],
         tokenizer: Tokenizer,
         *,
-        input_key: str = "AggregateInput",
+        input_key: str = "PreviousDecision",
+        label_key: str = "Decision",
         pad_token: int = 0,
     ):
-        self.tok = tokenizer
-        self.pad = pad_token
-        self.items = []
+        self.tok  = tokenizer
+        self.pad  = pad_token
+        self.data = []
 
         for sess in sessions:
-            seq = sess[input_key]
-            text = " ".join(map(str, seq)) if isinstance(seq, list) else str(seq)
-            ids = self.tok.encode(text).ids
+            tokens = _split_tokens(sess[input_key])
+            label  = _scalar_label(sess[label_key])
 
-            ids_tensor = torch.as_tensor(ids, dtype=torch.long)
-            mask_tensor = torch.as_tensor(
-                [1 <= t <= 9 for t in ids], dtype=torch.bool
-            )
-            self.items.append((ids_tensor, mask_tensor))
+            ids   = self.tok.encode(" ".join(map(str, tokens))).ids
+            ids_t = torch.tensor(ids, dtype=torch.long)
+            msk_t = torch.tensor([1 <= t <= 9 for t in ids], dtype=torch.bool)
+            lbl_t = torch.tensor(label, dtype=torch.long)
 
-    # --- standard Dataset API ----------------------------------------
-    def __len__(self):                # noqa: D401
-        return len(self.items)
+            self.data.append((ids_t, msk_t, lbl_t))
+
+    # basic Dataset API -------------------------------------------------
+    def __len__(self):
+        return len(self.data)
 
     def __getitem__(self, idx):
-        return self.items[idx]
+        return self.data[idx]
 
+    # ------------------------------------------------------------------
     @staticmethod
-    def collate(samples, *, pad_id = 0, max_len: int | None = None):
-        """
-        Left-pad to a common length **and** optionally hard-clip the batch
-        to `max_len` tokens (from the *right*, i.e. keep the most recent
-        part of the session).
-        """
-        toks, masks = zip(*samples)
+    def collate(samples, *, pad_id: int = 0, max_len: int | None = None):
+        toks, masks, labels = zip(*samples)
         L = max(len(t) for t in toks)
-
-        if max_len is not None and L > max_len:
-            # we will clip later
+        if max_len and L > max_len:
             L = max_len
 
-        def left_pad(t, value, dtype):
-            if len(t) > L:          # clip (right side kept)
+        def lp(t, fill, dtype):
+            if len(t) > L:              # hard-clip (keep most recent)
                 t = t[-L:]
-            pad_len = L - len(t)
-            if pad_len == 0:
-                return t
-            pad_tensor = torch.full((pad_len,), value, dtype=dtype)
-            return torch.cat([pad_tensor, t], dim = 0)
+            pad = L - len(t)
+            if pad:
+                t = torch.cat((torch.full((pad,), fill, dtype=dtype), t))
+            return t
 
-        batch_tokens = torch.stack(
-            [left_pad(t, pad_id, torch.long) for t in toks]
-        )
-        batch_masks = torch.stack(
-            [left_pad(m, False, torch.bool) for m in masks]
-        )
-        return batch_tokens, batch_masks
+        tok_t = torch.stack([lp(t, pad_id, torch.long) for t in toks])
+        msk_t = torch.stack([lp(m, False, torch.bool) for m in masks])
+        lbl_t = torch.stack(labels)
+
+        return tok_t, msk_t, lbl_t
