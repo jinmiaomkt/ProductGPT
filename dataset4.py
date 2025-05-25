@@ -57,26 +57,33 @@ class TransformerDataset(Dataset):
     def __getitem__(self, idx):
         return self.items[idx]
 
-    # -----------------------------------------------------------------
     @staticmethod
-    def collate(samples, pad_id: int = 0):
-        """Left-pad a batch to the same length and stack."""
+    def collate(samples, *, pad_id=0, max_len=None):
+        """
+        Left-pad to a common length **and** optionally hard-clip the batch
+        to `max_len` tokens (from the *right*, i.e. keep the most recent
+        part of the session).
+        """
+        toks, masks = zip(*samples)
+        L = max(len(t) for t in toks)
 
-        tokens, masks = zip(*samples)
-        max_len = max(t.size(0) for t in tokens)
+        if max_len is not None and L > max_len:
+            # we will clip later
+            L = max_len
 
         def left_pad(t, value, dtype):
-            pad_len = max_len - t.size(0)
+            if len(t) > L:          # clip (right side kept)
+                t = t[-L:]
+            pad_len = L - len(t)
             if pad_len == 0:
                 return t
             pad_tensor = torch.full((pad_len,), value, dtype=dtype)
-            return torch.cat([pad_tensor, t], dim=0)
+            return torch.cat([pad_tensor, t])
 
         batch_tokens = torch.stack(
-            [left_pad(t, pad_id, torch.long) for t in tokens]
-        )  # (B, L)
+            [left_pad(t, pad_id, torch.long) for t in toks]
+        )
         batch_masks = torch.stack(
             [left_pad(m, False, torch.bool) for m in masks]
-        )  # (B, L)
-
+        )
         return batch_tokens, batch_masks
