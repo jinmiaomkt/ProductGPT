@@ -115,7 +115,7 @@ def _make_loaders(cfg, tokenizer):
 
     def wrap(ds):
         return TransformerDataset(ds, tokenizer,
-                                  input_key="PreviousDecisions",
+                                  input_key="PreviousDecision",
                                   pad_token=0,
                                   #ctx_window=cfg["ctx_window"],
                                   #ai_rate=cfg["ai_rate"]
