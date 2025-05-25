@@ -1,4 +1,5 @@
 import os, warnings, logging, json, numpy as np, boto3, botocore
+from functools import partial
 from pathlib import Path
 os.environ.update({
     "TF_CPP_MIN_LOG_LEVEL": "3",
@@ -108,40 +109,57 @@ class BucketSampler(Sampler):
         return len(self.flat)
 
 def _make_loaders(cfg, tokenizer):
-    raw = load_json_dataset(cfg["filepath"])
-    n = len(raw); tr, va = int(.8 * n), int(.1 * n)
-    g = torch.Generator().manual_seed(33)
-    tr_data, va_data, te_data = random_split(raw, [tr, va, n - tr - va], generator=g)
+    """
+    Returns
+    -------
+    tr_loader, va_loader, te_loader : torch.utils.data.DataLoader
+        Each yields (tokens, label_mask) where `tokens` is LongTensor
+        left-padded to a common length and hard-clipped to
+        `cfg["seq_len_ai"]`.
+    """
+    # 1. read JSON and split ------------------------------------------------
+    raw   = load_json_dataset(cfg["filepath"])
+    n     = len(raw)
+    tr_sz = int(0.8 * n)
+    va_sz = int(0.1 * n)
+    te_sz = n - tr_sz - va_sz
 
-    def wrap(ds):
-        return TransformerDataset(ds, tokenizer,
-                                  input_key="PreviousDecision",
-                                  pad_token=0,
-                                  #ctx_window=cfg["ctx_window"],
-                                  #ai_rate=cfg["ai_rate"]
-                                  )
+    g = torch.Generator().manual_seed(33)
+    tr_data, va_data, te_data = random_split(raw, [tr_sz, va_sz, te_sz], generator=g)
+
+    # 2. wrap with TransformerDataset --------------------------------------
+    wrap = lambda ds: TransformerDataset(
+        ds,
+        tokenizer,
+        input_key="PreviousDecision",
+        pad_token=0,
+    )
 
     tr_ds, va_ds, te_ds = map(wrap, (tr_data, va_data, te_data))
-    # lengths = [len(x["aggregate_input"]) for x in tr_ds]
-    lengths = [len(sample[0]) for sample in tr_ds] 
+
+    # 3. length-aware bucket sampler for train -----------------------------
+    lengths = [len(sample[0]) for sample in tr_ds]        # sample[0] is tokens
     sampler = BucketSampler(lengths, cfg["batch_size"])
 
-    collate = lambda b: TransformerDataset.collate(
-        b, pad_id=0,
-        # ctx_window=cfg["ctx_window"],
-        # ai_rate=cfg["ai_rate"]
+    # 4. collate: left-pad + hard-clip -------------------------------------
+    collate_fn = partial(
+        TransformerDataset.collate,
+        pad_id=0,
+        max_len=cfg["seq_len_ai"],      # e.g. 1024
+    )
+
+    # 5. build loaders ------------------------------------------------------
+    def LD(dataset, samp=None):
+        return DataLoader(
+            dataset,
+            batch_size=cfg["batch_size"],
+            sampler=samp,
+            shuffle=(samp is None),     # shuffle val/test, sampler handles train
+            num_workers=os.cpu_count() // 2,
+            pin_memory=True,
+            collate_fn=collate_fn,
         )
 
-    # ───── in _make_loaders() ─────────────────────────────────────
-    LD = lambda ds, smpl=None: DataLoader(
-            ds,
-            batch_size=cfg["batch_size"],
-            sampler=smpl,
-            shuffle=False,
-            num_workers=os.cpu_count() // 2,   # optional speed-up
-            pin_memory=True,
-            collate_fn=collate           # ← rename this keyword
-    )
     return LD(tr_ds, sampler), LD(va_ds), LD(te_ds)
 
 def _build_model(cfg):
