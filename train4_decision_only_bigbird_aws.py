@@ -108,6 +108,19 @@ class BucketSampler(Sampler):
     def __len__(self):
         return len(self.flat)
 
+def _to_scalar_label(raw):
+        """
+        Accept list | int | str("3 3 9")  →  return ONE int (the last token).
+        """
+        if isinstance(raw, list):
+            return int(raw[-1])                # last element of the list
+        if isinstance(raw, (int, np.integer)):
+            return int(raw)                    # already scalar
+        if isinstance(raw, str):
+            return int(raw.strip().split()[-1])  # last token of the string
+        raise ValueError(f"Unsupported label format: {raw!r}")
+    # ------------------------------------------------------------------
+
 def _make_loaders(cfg, tokenizer):
     raw   = load_json_dataset(cfg["filepath"])
     n     = len(raw)
@@ -123,12 +136,12 @@ def _make_loaders(cfg, tokenizer):
             self.items = []
             for sess in sessions:
                 seq   = sess["PreviousDecision"]
-                label = sess["Decision"]
+                label = _to_scalar_label(sess["Decision"])   # <── use helper
 
-                # pick ONE scalar label
-                if isinstance(label, list):
-                    label = label[-1]              # <-- use last element
-                label = int(label)
+                # # pick ONE scalar label
+                # if isinstance(label, list):
+                #     label = label[-1]              # <-- use last element
+                # label = int(label)
 
                 ids = tokenizer.encode(
                     " ".join(map(str, seq)) if isinstance(seq, list) else str(seq)
@@ -350,6 +363,9 @@ def train_model(cfg):
     # })
     
     # scaler = torch.cuda.amp.GradScaler()
+
+    # ------------------------------------------------------------------
+    
     best = patience = None
     for ep in range(cfg["num_epochs"]):
         eng.train(); running = 0.0
