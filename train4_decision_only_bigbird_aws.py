@@ -275,7 +275,7 @@ def train_model(cfg):
     eng, *_ = deepspeed.initialize(
         model=model,
         model_parameters=model.parameters(),
-        config=ds_cfg         # ← make sure this is the dict above
+        config_params=ds_cfg         # ← make sure this is the dict above
     )
 
     # eng, _, _, _ = deepspeed.initialize(
