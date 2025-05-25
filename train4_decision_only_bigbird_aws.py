@@ -229,10 +229,11 @@ def _eval(loader, eng, dev, loss_fn, step, pad, tok):
 
     eng.eval()
     with torch.no_grad():
-        for tokens, _ in loader:
+        for tokens, _, labels in loader:
             # x = b["aggregate_input"].to(dev, non_blocking=True)
             # y = b["label"].to(dev)
             tokens = tokens.to(dev, non_blocking=True)
+            labels = labels.to(dev, non_blocking=True)
 
             # step = b["ai_rate"].to(dev)
             # pos = torch.arange(step - 1, x.size(1), step, device=dev)
@@ -240,26 +241,26 @@ def _eval(loader, eng, dev, loss_fn, step, pad, tok):
             # tgt = y[:, pos].clone()
 
             logits = eng(tokens)[:, -1, :]                # (B, V) ← only last position
-            tgt    = tokens[:, -1]                        # (B,)
+            # tgt    = tokens[:, -1]                        # (B,)
 
             # tgt_mask = tgt.clone()
             # tgt_mask[_transition_mask(y)[:, pos]] = pad
             # tloss += loss_fn(logits, tgt_mask).item()
             # tppl += _ppl(logits, tgt_mask, pad)
-            tloss += loss_fn(logits.unsqueeze(1), tgt.unsqueeze(1)).item()
-            tppl  += _ppl(logits, tgt)
+            tloss += loss_fn(logits.unsqueeze(1), labels.unsqueeze(1)).item()
+            tppl  += _ppl(logits, labels)
 
             prob = F.softmax(logits, -1).view(-1, logits.size(-1)).cpu().numpy()
             pred = prob.argmax(1)
-            lbl = tgt.view(-1).cpu().numpy()
+            lbl = labels.view(-1).cpu().numpy()
 
             keep = ~np.isin(lbl, special)
             P.append(pred[keep]); L.append(lbl[keep]); PR.append(prob[keep])
 
             flat = lambda m: m.view(-1).cpu().numpy()[keep]
-            ms.append(flat(tgt == 9))
-            mt.append(flat(_transition_mask(y)[:, pos]))
-            prev = F.pad(tgt, (1, 0), value=-1)[:, :-1]
+            ms.append(flat(labels == 9))
+            mt.append(flat(_transition_mask(labels)))
+            prev = F.pad(labels, (1, 0), value=-1)[:, :-1]
             ma.append(flat(prev == 9))
 
     P, L, PR = map(np.concatenate, (P, L, PR))
