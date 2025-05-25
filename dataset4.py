@@ -58,7 +58,7 @@ class TransformerDataset(Dataset):
         return self.items[idx]
 
     @staticmethod
-    def collate(samples, *, pad_id=0, max_len=None):
+    def collate(samples, *, pad_id = 0, max_len: int | None = None):
         """
         Left-pad to a common length **and** optionally hard-clip the batch
         to `max_len` tokens (from the *right*, i.e. keep the most recent
@@ -78,7 +78,7 @@ class TransformerDataset(Dataset):
             if pad_len == 0:
                 return t
             pad_tensor = torch.full((pad_len,), value, dtype=dtype)
-            return torch.cat([pad_tensor, t])
+            return torch.cat([pad_tensor, t], dim = 0)
 
         batch_tokens = torch.stack(
             [left_pad(t, pad_id, torch.long) for t in toks]
