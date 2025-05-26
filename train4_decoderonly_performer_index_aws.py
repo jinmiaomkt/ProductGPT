@@ -187,7 +187,7 @@ def _evaluate(loader, eng, dev, loss_fn, pad, tok, ai_rate):
             tgt = b["label"].to(dev)                 # (B, seq_len_tgt)
 
             seq_len = x.size(1)
-            pos = torch.arange(ai_rate,
+            pos = torch.arange(ai_rate -1,
                             seq_len, 
                             ai_rate,
                             device=dev)
