@@ -33,13 +33,21 @@ class TransformerDataset(torch.utils.data.Dataset):
 
     def _pad(self, ids, L):
         return ids[:L] + [self.pad_id] * (L - len(ids))
-
+    
     def __getitem__(self, idx):
-        record = self.data[idx]           # one raw session/user
-        ai_ids  = self.tok_ai.encode(record["PreviousDecision"]).ids
-        tgt_ids = self.tok_tgt.encode(record["Decision"]).ids
+        rec = self.data[idx]
+
+        # ------------- INPUT -----------------
+        src_txt = " ".join(map(str, rec["PreviousDecision"])) \
+                if isinstance(rec["PreviousDecision"], (list, tuple)) else str(rec["PreviousDecision"])
+        ai_ids  = self._pad(self.tok_ai.encode(src_txt).ids,  self.seq_ai)
+
+        # ------------- TARGET ----------------
+        tgt_txt = " ".join(map(str, rec["Decision"])) \
+                if isinstance(rec["Decision"], (list, tuple)) else str(rec["Decision"])
+        tgt_ids = self._pad(self.tok_tgt.encode(tgt_txt).ids, self.seq_tgt)
 
         return {
-            "aggregate_input": torch.tensor(self._pad(ai_ids,  self.seq_ai),  dtype=torch.long),
-            "label":           torch.tensor(self._pad(tgt_ids, self.seq_tgt), dtype=torch.long),
+            "aggregate_input": torch.tensor(ai_ids,  dtype=torch.long),
+            "label":           torch.tensor(tgt_ids, dtype=torch.long),
         }
