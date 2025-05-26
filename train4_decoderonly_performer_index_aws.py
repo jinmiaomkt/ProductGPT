@@ -190,7 +190,7 @@ def _evaluate(loader, eng, dev, loss_fn, pad, tok, ai_rate):
 
             # seq_len = logits.size(1)
             pos = torch.arange(cfg["ai_rate"]-1,
-                            cfg["AggregateInput"], 
+                            cfg["seq_len_ai"], 
                             cfg["ai_rate"],
                             device=dev)
             assert pos.numel() == tgt.size(1), (
@@ -286,7 +286,7 @@ def train_model(cfg):
 
             # seq_len = logits.size(1)
             pos = torch.arange(cfg["ai_rate"]-1,
-                            cfg["AggregateInput"],
+                            cfg["seq_len_ai"],
                             cfg["ai_rate"],
                             device=dev)
             assert pos.numel() == tgt.size(1), (
