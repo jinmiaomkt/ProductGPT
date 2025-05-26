@@ -188,9 +188,9 @@ def _evaluate(loader, eng, dev, loss_fn, pad, tok, ai_rate):
             x   = b["aggregate_input"].to(dev)       # (B, seq_len_ai)
             tgt = b["label"].to(dev)                 # (B, seq_len_tgt)
 
-            seq_len = logits.size(1)
+            # seq_len = logits.size(1)
             pos = torch.arange(cfg["ai_rate"]-1,
-                            seq_len,
+                            cfg["AggregateInput"], 
                             cfg["ai_rate"],
                             device=dev)
             assert pos.numel() == tgt.size(1), (
