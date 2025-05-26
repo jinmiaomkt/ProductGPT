@@ -46,7 +46,7 @@ def free_port():
 
 # ---------------- one experiment -----------------------------------------
 def run_one(params):
-    nbf, nbf, dm, dff, N, H, lr, wt = params
+    nbf, dm, dff, N, H, lr, wt = params
     cfg = get_config()
 
     cfg.update({"nb_features":nbf, 
