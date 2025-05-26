@@ -228,25 +228,17 @@ def _eval(loader, eng, dev, loss_fn, step, pad, tok):
             # y = b["label"].to(dev)
             tokens = tokens.to(dev, non_blocking=True)
             labels = labels.to(dev, non_blocking=True)
-
-            # step = b["ai_rate"].to(dev)
-            # pos = torch.arange(step - 1, x.size(1), step, device=dev)
-            # logits = eng(x)[:, pos, :]
-            # tgt = y[:, pos].clone()
-
-            logits = eng(tokens)[:, -1, :]                # (B, V) ← only last position
-            # tgt    = tokens[:, -1]                        # (B,)
-
-            # tgt_mask = tgt.clone()
-            # tgt_mask[_transition_mask(y)[:, pos]] = pad
-            # tloss += loss_fn(logits, tgt_mask).item()
-            # tppl += _ppl(logits, tgt_mask, pad)
+            logits = eng(tokens)[:, -1, :]                
             tloss += loss_fn(logits, labels).item()
             tppl  += _ppl(logits, labels)
 
             prob = F.softmax(logits, -1).view(-1, logits.size(-1)).cpu().numpy()
             pred = prob.argmax(1)
             lbl = labels.view(-1).cpu().numpy()
+
+            prev_dec = tokens[:, -1].cpu()                 # (B,)
+            flags_transition    = (prev_dec != labels.cpu())          # bool vector
+            # _transition_mask.append(trans.numpy())
 
             keep = ~np.isin(lbl, special)
             P.append(pred[keep]); L.append(lbl[keep]); PR.append(prob[keep])

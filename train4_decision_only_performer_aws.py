@@ -37,10 +37,10 @@ from tqdm import tqdm
 import deepspeed
 from pytorch_lamb import Lamb                           # optimiser core
 
-from model4_decoderonly     import build_transformer
+from model4_decoderonly_index_performer     import build_transformer
 from dataset4_decision_only import TransformerDataset, load_json_dataset
 from tokenizers             import Tokenizer, models, pre_tokenizers
-from config4_decision_only_git import get_config
+from config4 import get_config
 
 # ═════════════════ helper blocks ════════════════════════════════
 # --- tokenizer --------------------------------------------------
@@ -159,7 +159,12 @@ def _build_model(cfg):
         n_heads     = cfg["num_heads"],
         d_ff        = cfg["d_ff"],
         dropout     = cfg["dropout"],
-        max_seq_len = cfg["seq_len_ai"])
+        max_seq_len = cfg["seq_len_ai"],
+        nb_features = cfg["nb_features"], 
+        block_size_h = cfg["ai_rate"],
+        block_size_w = cfg["ai_rate"],
+        kernel_type = cfg["kernel_type"]
+    )
 
 # ═════════════════ evaluation ═══════════════════════════════════
 # ───────── evaluation on three requested subsets ─────────
@@ -239,8 +244,7 @@ def train_model(cfg):
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # ---------- unique run-id & file names -----------------------
-    slots = cfg["ctx_window"] // cfg["ai_rate"]
-    uid   = (f"ctx{slots}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}_"
+    uid   = (f"performer_ctx_window{cfg["ctx_window"]}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}_"
              f"heads{cfg['num_heads']}_lr{cfg['lr']}_weight{cfg['weight']}")
     ckpt_local = Path(cfg["model_folder"]) / f"DecisionOnly_{uid}.pt"
     json_local = ckpt_local.with_suffix(".json")
@@ -345,4 +349,6 @@ def train_model(cfg):
 
 # ──────────────── CLI (for quick manual run) ────────────────────
 if __name__ == "__main__":
-    train_model(get_config())
+    cfg = get_config()
+    cfg["ai_rate"] = 1
+    train_model(cfg)
