@@ -36,7 +36,7 @@ class TransformerDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         record = self.data[idx]           # one raw session/user
-        ai_ids  = self.tok_ai .encode(record["PreviousDecision"]).ids
+        ai_ids  = self.tok_ai.encode(record["PreviousDecision"]).ids
         tgt_ids = self.tok_tgt.encode(record["Decision"]).ids
 
         return {
