@@ -284,9 +284,9 @@ def train_model(cfg):
             x   = b["aggregate_input"].to(dev)
             tgt = b["label"].to(dev)               # (B, n_slots)
 
-            seq_len = logits.size(1)
+            # seq_len = logits.size(1)
             pos = torch.arange(cfg["ai_rate"]-1,
-                            seq_len,
+                            cfg["AggregateInput"],
                             cfg["ai_rate"],
                             device=dev)
             assert pos.numel() == tgt.size(1), (
