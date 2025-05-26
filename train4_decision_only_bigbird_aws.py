@@ -33,7 +33,7 @@ class PairwiseRevenueLoss(nn.Module):
         self.ignore = ignore_index
 
     def forward(self, logits, tgt):
-        B, N, V = logits.shape
+        B, V = logits.shape
         probs = F.softmax(logits.view(-1, V), dim=-1)
         tgt = tgt.view(-1)
         keep = tgt != self.ignore
