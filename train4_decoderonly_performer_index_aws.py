@@ -152,7 +152,6 @@ def _make_loaders(cfg):
             LD(mk(te_ds), False),
             tok_tgt)
 
-
 # ══════════════════════ 5.  MODEL ══════════════════════════════════════
 def _build_model(cfg):
     return build_transformer(
@@ -168,7 +167,6 @@ def _build_model(cfg):
         block_size_w = cfg["ai_rate"],
         kernel_type = cfg["kernel_type"]
 )
-
 
 # ══════════════════════ 6.  EVALUATION ══════════════════════════════════
 def _evaluate(loader, eng, dev, loss_fn, pad, tok, ai_rate):
@@ -188,10 +186,10 @@ def _evaluate(loader, eng, dev, loss_fn, pad, tok, ai_rate):
             x   = b["aggregate_input"].to(dev)       # (B, seq_len_ai)
             tgt = b["label"].to(dev)                 # (B, seq_len_tgt)
 
-            # seq_len = logits.size(1)
-            pos = torch.arange(cfg["ai_rate"]-1,
-                            cfg["seq_len_ai"], 
-                            cfg["ai_rate"],
+            seq_len = x.size(1)
+            pos = torch.arange(ai_rate,
+                            seq_len, 
+                            ai_rate,
                             device=dev)
             assert pos.numel() == tgt.size(1), (
                 f"expected {tgt.size(1)} slots but got {pos.numel()}"
