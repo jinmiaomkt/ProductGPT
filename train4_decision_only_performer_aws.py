@@ -13,7 +13,7 @@
 #   and delete the local copies after a successful upload.
 # ================================================================
 
-# ──────────────── environment & logging hygiene ─────────────────
+# ─────────────── environment & logging hygiene ────────────────
 import os, warnings, logging, json, numpy as np, boto3, botocore
 from pathlib import Path
 os.environ.update({
@@ -27,59 +27,95 @@ for n in ("deepspeed", "torch_checkpoint_engine", "engine"):
     logging.getLogger(n).setLevel(logging.ERROR)
     logging.getLogger(n).propagate = False
 
-# ──────────────── std / 3rd-party imports ───────────────────────
+# ─────────────── std / 3rd‑party imports ──────────────────────
 import torch, torch.nn as nn, torch.nn.functional as F
-from torch.utils.data import DataLoader, random_split
-from sklearn.metrics import (confusion_matrix, accuracy_score, f1_score,
-                             average_precision_score)
+from torch.utils.data import DataLoader, random_split, Subset
+from sklearn.metrics import accuracy_score, f1_score, average_precision_score
 from sklearn.preprocessing import label_binarize
 from tqdm import tqdm
 import deepspeed
-from pytorch_lamb import Lamb                           # optimiser core
+from pytorch_lamb import Lamb
 
-from model4_decoderonly_index_performer     import build_transformer
-from dataset4_decision_only import TransformerDataset, load_json_dataset
-from tokenizers             import Tokenizer, models, pre_tokenizers
-from config4 import get_config
+from model4_decoderonly_index_performer import build_transformer
+from dataset4_decision_only           import TransformerDataset
+from tokenizers                       import Tokenizer, models, pre_tokenizers
+from config4                          import get_config
 
-# ═════════════════ helper blocks ════════════════════════════════
-# --- tokenizer --------------------------------------------------
+# ═══════════════ helper blocks ════════════════════════════════
+# --- tokenizer ------------------------------------------------
+
 def _build_tok():
     t = Tokenizer(models.WordLevel(unk_token="[UNK]"))
     t.pre_tokenizer = pre_tokenizers.Whitespace()
     t.model = models.WordLevel(
         {**{str(i): i for i in range(1, 10)}, "[PAD]": 0,
          "[SOS]": 10, "[UNK]": 12},
-        unk_token="[UNK]")
+        unk_token="[UNK]",
+    )
     return t
 
+# --- lightweight streaming dataset ---------------------------
 class JsonLineDataset(torch.utils.data.Dataset):
-    def __init__(self, path):
-        self.path = path
-        with open(path) as f:
-            self.offsets = [f.tell() for _ in iter(f.readline, '')]
+    """Memory‑efficient reader.
+
+    Each line must contain **one complete JSON object**.  For a legacy file
+    that is a single gigantic JSON list (the old format), call the helper
+    :func:`convert_to_jsonl` once and point *filepath* to the new ``.jsonl``.
+    """
+    def __init__(self, filepath: str | Path):
+        self.filepath = Path(filepath)
+        self.offsets: list[int] = []
+        with self.filepath.open("rb") as f:              # binary keeps exact offsets
+            while True:
+                pos = f.tell()                           # start of current line
+                line = f.readline()
+                if not line:                             # EOF
+                    break
+                if line.strip():                         # skip blank lines
+                    self.offsets.append(pos)
+
+        if not self.offsets:
+            raise ValueError(f"{filepath} appears to be empty or not NDJSON")
 
     def __len__(self):
         return len(self.offsets)
 
-    def __getitem__(self, idx):
-        with open(self.path) as f:
+    def __getitem__(self, idx: int):
+        with self.filepath.open("rb") as f:
             f.seek(self.offsets[idx])
-            return json.loads(f.readline())
+            return json.loads(f.readline().decode("utf‑8"))
 
-# --- loss -------------------------------------------------------
+# --- (optional) converter for legacy list‑style JSON ----------
+
+def convert_to_jsonl(src: str | Path, dst: str | Path | None = None):
+    """Convert an old monolithic *[ {...}, {...}, ... ]* file to newline JSON."""
+    src, dst = Path(src), Path(dst or src).with_suffix(".jsonl")
+    with src.open() as fin, dst.open("w") as fout:
+        data = json.load(fin)  # assumes the file fits once for conversion
+        if isinstance(data, dict):
+            # transpose dict‑of‑lists → list‑of‑dicts
+            keys = list(data)
+            for row in zip(*(data[k] for k in keys)):
+                fout.write(json.dumps(dict(zip(keys, row))) + "\n")
+        elif isinstance(data, list):
+            for obj in data:
+                fout.write(json.dumps(obj) + "\n")
+        else:
+            raise ValueError("Unsupported JSON root to convert → .jsonl")
+    return dst
+
+# --- loss -----------------------------------------------------
 class PairwiseRevenueLoss(nn.Module):
     def __init__(self, revenue, vocab_size, ignore_index=0):
         super().__init__()
         if len(revenue) < vocab_size:
             revenue = revenue + [0.] * (vocab_size - len(revenue))
         rev = torch.as_tensor(revenue, dtype=torch.float32)
-        self.register_buffer("penalty",
-                             -torch.abs(rev[:, None] - rev[None, :]))
+        self.register_buffer("penalty", -torch.abs(rev[:, None] - rev[None, :]))
         self.ignore = ignore_index
 
     def forward(self, logits, tgt):
-        B, N, V = logits.shape          # logits already sliced to decisions
+        V = logits.size(-1)
         probs = F.softmax(logits.view(-1, V), dim=-1)
         tgt   = tgt.view(-1)
         keep  = tgt != self.ignore
