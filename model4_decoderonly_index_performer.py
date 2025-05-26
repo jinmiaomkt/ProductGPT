@@ -408,6 +408,9 @@ def build_transformer(vocab_size: int,
                       n_heads: int,
                       d_ff: int,
                       dropout: float,
+                      nb_features: int,
+                      block_size_h: int,
+                      block_size_w: int,
                       kernel_type: str="exp"):
     
     transformer = Transformer(
@@ -418,7 +421,10 @@ def build_transformer(vocab_size: int,
         n_heads      = n_heads,
         d_ff         = d_ff,
         dropout      = dropout,
-        kernel_type  = kernel_type
+        kernel_type  = kernel_type,
+        nb_features  = nb_features,
+        block_size_h = block_size_h,
+        block_size_w = block_size_w
     )
 
     for p in transformer.parameters():
