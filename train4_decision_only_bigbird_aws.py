@@ -94,24 +94,13 @@ def _upload(local: Path, bucket: str, key: str, s3) -> bool:
         print(f"[S3-ERR] {e}")
         return False
 
-def _safe_scalar(label) -> int:
-    """
-    Return ONE int, the **last** numeric token found.
-    Works for int, str, list[int|str], or str(list).
-    """
-    # unwrap nested lists
+def _safe_scalar(label, default=0) -> int:
     if isinstance(label, list):
-        return _safe_scalar(label[-1])
-
-    # regular integer
+        return _safe_scalar(label[-1], default)
     if isinstance(label, (int, np.integer)):
         return int(label)
-
-    # anything string-like → find all digits
     nums = re.findall(r"\d+", str(label))
-    if not nums:
-        raise ValueError(f"Cannot extract number from {label!r}")
-    return int(nums[-1])          # last token
+    return int(nums[-1]) if nums else int(default)
 
 class BucketSampler(Sampler):
     def __init__(self, lengths, batch_size):
