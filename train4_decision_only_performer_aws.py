@@ -125,13 +125,16 @@ def _make_loaders(cfg):
 
     tok_ai = tok_tgt = _build_tok()
     out = Path(cfg["model_folder"]); out.mkdir(parents=True, exist_ok=True)
-    tok_ai.save(out / "tokenizer_ai.json"); tok_tgt.save(out / "tokenizer_tgt.json")
+    # ✔ cast Path → str to satisfy tokenizer.save()
+    tok_ai.save(str(out / "tokenizer_ai.json"))
+    tok_tgt.save(str(out / "tokenizer_tgt.json"))
 
     def mk(split):
         return TransformerDataset(split, tok_ai, tok_tgt, cfg["seq_len_ai"], cfg["seq_len_tgt"], cfg["num_heads"], cfg["ai_rate"], pad_token=0)
 
     loader = lambda ds, sh: DataLoader(ds, batch_size=cfg["batch_size"], shuffle=sh)
     return loader(mk(tr_ds), True), loader(mk(va_ds), False), loader(mk(te_ds), False), tok_tgt
+
 
 # --- loss -----------------------------------------------------
 class PairwiseRevenueLoss(nn.Module):
