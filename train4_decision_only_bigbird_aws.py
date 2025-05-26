@@ -376,18 +376,15 @@ def train_model(cfg):
 
             # --------------- forward -------------------------------------
             all_logits = eng(tokens)                            # (B,L,V)
-
-            pos = torch.arange(cfg["ai_rate"]-1, tokens.size(1),
-                            cfg["ai_rate"], device=dev)      # (N_pos,)
-            
-            logits = all_logits[:, pos, :]                      # (B,N,V)
+            # pos = torch.arange(cfg["ai_rate"]-1, tokens.size(1), cfg["ai_rate"], device=dev)      # (N_pos,)            
+            logits = all_logits[:, -1, :]                      # (B,N,V)
             # tgt    = tokens[:, pos]                             # (B,N)
 
-            valid  = dec_mask[:, pos]                           # (B,N) bool
-            tgt_masked = labels.clone()
-            tgt_masked[~valid] = pad_id                         # ignore non-decision slots
+            # valid  = dec_mask[:, pos]                           # (B,N) bool
+            # tgt_masked = labels.clone()
+            # tgt_masked[~valid] = pad_id                         # ignore non-decision slots
 
-            loss = loss_fn(logits, tgt_masked)
+            loss = loss_fn(logits, labels)
 
             # --------------- backward & step -----------------------------
             eng.backward(loss)
