@@ -19,6 +19,7 @@ from pytorch_lamb import Lamb
 
 from model4_bigbird import build_transformer
 from dataset4 import TransformerDataset, load_json_dataset
+import re
 from config4 import get_config
 
 class PairwiseRevenueLoss(nn.Module):
@@ -93,6 +94,25 @@ def _upload(local: Path, bucket: str, key: str, s3) -> bool:
         print(f"[S3-ERR] {e}")
         return False
 
+def _safe_scalar(label) -> int:
+    """
+    Return ONE int, the **last** numeric token found.
+    Works for int, str, list[int|str], or str(list).
+    """
+    # unwrap nested lists
+    if isinstance(label, list):
+        return _safe_scalar(label[-1])
+
+    # regular integer
+    if isinstance(label, (int, np.integer)):
+        return int(label)
+
+    # anything string-like → find all digits
+    nums = re.findall(r"\d+", str(label))
+    if not nums:
+        raise ValueError(f"Cannot extract number from {label!r}")
+    return int(nums[-1])          # last token
+
 class BucketSampler(Sampler):
     def __init__(self, lengths, batch_size):
         self.batch = batch_size
@@ -138,7 +158,7 @@ def _make_loaders(cfg, tokenizer):
                 mask_t  = torch.tensor([1 <= t <= 9 for t in ids], dtype=torch.bool)
                 # label_t = torch.tensor(label, dtype=torch.long)  # (scalar)
 
-                label_int = int(str(label).strip())    # <-- robust scalar cast
+                label_int = _safe_scalar(sess["Decision"])    # <-- robust scalar cast
                 label_t   = torch.tensor(label_int, dtype=torch.long)
 
                 self.items.append((ids_t, mask_t, label_t))
