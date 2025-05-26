@@ -20,7 +20,7 @@ def _raw_config():
 
         # ---------- context window ----------
         "ctx_window": 64,
-        "nb_features": 16,
+        "nb_features": 8,
         "window_size": None,          # ← edit 64 * 15
         "seq_len_ai":  None,       # filled in below
         "seq_len_tgt": 1024,
