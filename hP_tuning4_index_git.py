@@ -46,10 +46,10 @@ def free_port():
 
 # ---------------- one experiment -----------------------------------------
 def run_one(params):
-    ctxW, nbf, dm, dff, N, H, lr, wt = params
+    nbf, nbf, dm, dff, N, H, lr, wt = params
     cfg = get_config()
 
-    cfg.update({"ctx_window":ctxW, 
+    cfg.update({"nb_features":nbf, 
                 # "seq_len_ai":ctxW,
                 # "seq_len_tgt":ctxW//15, 
                 # "ai_rate":15,
@@ -61,7 +61,7 @@ def run_one(params):
                 "lr":lr, 
                 "weight":wt})
     
-    uid  = (f"ctx{cfg['ctx_window']}_nbf{cfg['nb_features']}_dmodel{dm}_ff{dff}_N{N}_heads{H}_lr{lr}_weight{wt}")
+    uid  = (f"performer_nb_features{cfg['nb_features']}_dmodel{dm}_ff{dff}_N{N}_heads{H}_lr{lr}_weight{wt}")
     stem = f"MyProductGPT_{uid}"
     cfg["model_basename"] = stem
 
