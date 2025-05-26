@@ -244,7 +244,7 @@ def train_model(cfg):
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # ---------- unique run-id & file names -----------------------
-    uid   = (f"performer_ctx_window{cfg["ctx_window"]}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}_"
+    uid   = (f"performer_nb_features{cfg['nb_features']}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}_"
              f"heads{cfg['num_heads']}_lr{cfg['lr']}_weight{cfg['weight']}")
     ckpt_local = Path(cfg["model_folder"]) / f"DecisionOnly_{uid}.pt"
     json_local = ckpt_local.with_suffix(".json")
