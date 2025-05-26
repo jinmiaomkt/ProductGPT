@@ -53,6 +53,20 @@ def _build_tok():
         unk_token="[UNK]")
     return t
 
+class JsonLineDataset(torch.utils.data.Dataset):
+    def __init__(self, path):
+        self.path = path
+        with open(path) as f:
+            self.offsets = [f.tell() for _ in iter(f.readline, '')]
+
+    def __len__(self):
+        return len(self.offsets)
+
+    def __getitem__(self, idx):
+        with open(self.path) as f:
+            f.seek(self.offsets[idx])
+            return json.loads(f.readline())
+
 # --- loss -------------------------------------------------------
 class PairwiseRevenueLoss(nn.Module):
     def __init__(self, revenue, vocab_size, ignore_index=0):
@@ -131,7 +145,9 @@ def _upload(local: Path, bucket: str, key: str, s3) -> bool:
 
 # ═════════════════ data & model ═════════════════════════════════
 def _make_loaders(cfg):
-    raw = load_json_dataset(cfg["filepath"])
+    # raw = load_json_dataset(cfg["filepath"])
+    raw = JsonLineDataset(cfg["filepath"])
+
     n   = len(raw); tr, va = int(.8*n), int(.1*n)
     gen = torch.Generator().manual_seed(33)
     tr_ds, va_ds, te_ds = random_split(raw, [tr, va, n-tr-va], generator=gen)
@@ -274,8 +290,14 @@ def train_model(cfg):
                           "params": {"lr": cfg["lr"],
                                      "eps": cfg["eps"],
                                      "weight_decay": cfg["weight_decay"]}},
-            "zero_optimization": {"stage": 1},
-            "fp16": {"enabled": False}})
+            # "zero_optimization": {"stage": 1},
+            "zero_optimization": {
+                "stage": 2,
+                "offload_param":     {"device": "cpu"},
+                "offload_optimizer": {"device": "cpu"}
+            },
+            "gradient_accumulation_steps": 2, 
+            "fp16": {"enabled": True}})
 
     # ---------- epochs ------------------------------------------
     best, patience = None, 0
