@@ -188,10 +188,18 @@ def _evaluate(loader, eng, dev, loss_fn, pad, tok, ai_rate):
             x   = b["aggregate_input"].to(dev)       # (B, seq_len_ai)
             tgt = b["label"].to(dev)                 # (B, seq_len_tgt)
 
-            n_slots = tgt.size(1)
-            pos = torch.arange(ai_rate-1,
-                               ai_rate*n_slots,
-                               ai_rate, device=dev)   # len == n_slots
+            seq_len = logits.size(1)
+            pos = torch.arange(cfg["ai_rate"]-1,
+                            seq_len,
+                            cfg["ai_rate"],
+                            device=dev)
+            assert pos.numel() == tgt.size(1), (
+                f"expected {tgt.size(1)} slots but got {pos.numel()}"
+            )
+            # n_slots = tgt.size(1)
+            # pos = torch.arange(ai_rate-1,
+            #                    ai_rate*n_slots,
+            #                    ai_rate, device=dev)   # len == n_slots
             logits = eng(x)[:, pos, :]               # (B, n_slots, V)
 
             # ---- loss: ignore transitions --------------------------------
@@ -276,10 +284,18 @@ def train_model(cfg):
             x   = b["aggregate_input"].to(dev)
             tgt = b["label"].to(dev)               # (B, n_slots)
 
-            n_slots = tgt.size(1)
+            seq_len = logits.size(1)
             pos = torch.arange(cfg["ai_rate"]-1,
-                               cfg["ai_rate"]*n_slots,
-                               cfg["ai_rate"], device=dev)
+                            seq_len,
+                            cfg["ai_rate"],
+                            device=dev)
+            assert pos.numel() == tgt.size(1), (
+                f"expected {tgt.size(1)} slots but got {pos.numel()}"
+            )
+            # n_slots = tgt.size(1)
+            # pos = torch.arange(cfg["ai_rate"]-1,
+            #                    cfg["ai_rate"]*n_slots,
+            #                    cfg["ai_rate"], device=dev)
             logits = eng(x)[:, pos, :]             # (B, n_slots, V)
 
             tgt_train = tgt.clone()
@@ -344,4 +360,5 @@ def train_model(cfg):
 if __name__ == "__main__":
     cfg = get_config()
     cfg["ai_rate"] = 15
+    cfg["seq_len_ai"]  = cfg["ai_rate"] * cfg["seq_len_tgt"]   # = 480
     train_model(cfg)
