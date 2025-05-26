@@ -9,12 +9,13 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import boto3, botocore, torch
 
-from config4_index_git       import get_config
-from train4_decoderonly_git  import train_model
+from config4       import get_config
+from train4_decision_only_performer_aws  import train_model
 import numpy as np
 
 # ---------------- hyper-parameter grid -----------------------------------
-ctx_window_values = [120, 240, 480]
+ctx_window_values = [16, 32]
+nb_features_values = [16, 32]
 d_model_values    = [32, 64]
 d_ff_values       = [32, 64]
 N_values          = [4, 6, 8]
@@ -22,8 +23,8 @@ num_heads_values  = [4, 8]
 lr_values         = [1e-4]
 weight_values     = [2, 4, 8]
 
-HP_GRID = list(itertools.product(ctx_window_values, d_model_values,
-                                 d_ff_values, N_values,
+HP_GRID = list(itertools.product(ctx_window_values, nb_features_values,
+                                 d_model_values, d_ff_values, N_values,
                                  num_heads_values, lr_values, weight_values))
 
 # ---------------- S3 helpers ---------------------------------------------
@@ -46,7 +47,7 @@ def free_port():
 
 # ---------------- one experiment -----------------------------------------
 def run_one(params):
-    ctxW, dm, dff, N, H, lr, wt = params
+    ctxW, nbf, dm, dff, N, H, lr, wt = params
     cfg = get_config()
 
     cfg.update({"ctx_window":ctxW, 
@@ -54,13 +55,14 @@ def run_one(params):
                 # "seq_len_tgt":ctxW//15, 
                 # "ai_rate":15,
                 "d_model":dm, 
+                "nb_features":nbf,
                 "d_ff":dff, 
                 "N":N,
                 "num_heads":H, 
                 "lr":lr, 
                 "weight":wt})
     
-    uid  = (f"ctx{ctxW//cfg['ai_rate']}_dmodel{dm}_ff{dff}_N{N}_heads{H}_lr{lr}_weight{wt}")
+    uid  = (f"ctx{cfg['ctx_window']}_nbf{cfg['nb_features']}_dmodel{dm}_ff{dff}_N{N}_heads{H}_lr{lr}_weight{wt}")
     stem = f"MyProductGPT_{uid}"
     cfg["model_basename"] = stem
 
