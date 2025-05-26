@@ -127,36 +127,31 @@ def _make_loaders(cfg, tokenizer):
     tr_js, va_js, te_js = random_split(raw, [tr_sz, va_sz, te_sz], generator=g)
 
     # 1 ─ dataset ----------------------------------------------------------
-    class DecisionDataset(torch.utils.data.Dataset): 
-        def __init__(self, sessions):
-            self.items = []
-            for sess in sessions:
-                seq   = sess["PreviousDecision"]
-                label = sess["Decision"]   # <── use helper
+    class DecisionDataset(torch.utils.data.Dataset):
+            def __init__(self, sessions):
+                self.items = []
+                for sess in sessions:
+                    seq   = sess["PreviousDecision"]
+                    label = _safe_scalar(sess["Decision"])
 
-                # # pick ONE scalar label
-                # if isinstance(label, list):
-                #     label = label[-1]              # <-- use last element
-                # label = int(label)
+                    ids = tokenizer.encode(
+                        " ".join(map(str, seq)) if isinstance(seq, list) else str(seq)
+                    ).ids
 
-                ids = tokenizer.encode(
-                    " ".join(map(str, seq)) if isinstance(seq, list) else str(seq)
-                ).ids
+                    if len(ids) == 0:                 # ← nothing to learn from
+                        continue                      #   → skip this session
 
-                ids_t   = torch.tensor(ids, dtype=torch.long)
-                mask_t  = torch.tensor([1 <= t <= 9 for t in ids], dtype=torch.bool)
-                # label_t = torch.tensor(label, dtype=torch.long)  # (scalar)
+                    ids_t   = torch.tensor(ids, dtype=torch.long)
+                    mask_t  = torch.tensor([1 <= t <= 9 for t in ids], dtype=torch.bool)
+                    label_t = torch.tensor(label, dtype=torch.long)
 
-                label_int = _safe_scalar(sess["Decision"])    # <-- robust scalar cast
-                label_t   = torch.tensor(label_int, dtype=torch.long)
+                    self.items.append((ids_t, mask_t, label_t))    
 
-                self.items.append((ids_t, mask_t, label_t))
+            def __len__(self):
+                return len(self.items)
 
-        def __len__(self):
-            return len(self.items)
-
-        def __getitem__(self, i):
-            return self.items[i]
+            def __getitem__(self, i):
+                return self.items[i]
 
     tr_ds, va_ds, te_ds = map(DecisionDataset, (tr_js, va_js, te_js))
 
