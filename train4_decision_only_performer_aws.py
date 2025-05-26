@@ -355,28 +355,15 @@ def train_model(cfg):
         config={
             "train_micro_batch_size_per_gpu": cfg["batch_size"],
             "zero_allow_untested_optimizer": True,
-
-            # --- replace optimiser ---
             "optimizer": {
-                "type": "CPUAdam",
-                "params": {
-                    "lr": cfg["lr"],
-                    "weight_decay": cfg["weight_decay"],
-                    "eps": cfg["eps"]
-                }
+                "type": "Lamb",
+                "params": { "lr": cfg["lr"], "eps": cfg["eps"], "weight_decay": cfg["weight_decay"] }
             },
-
-            # --- keep ZeRO-2 param off-load ( OK with CPUAdam ) ---
-            "zero_optimization": {
-                "stage": 2,
-                "offload_param": {"device": "cpu"}
-            },
-
+            "zero_optimization": { "stage": 2 }, 
             "gradient_accumulation_steps": 2,
             "fp16": {"enabled": True}
         }
     )
-
 
     # ---------- epochs ------------------------------------------
     best, patience = None, 0
