@@ -14,7 +14,7 @@ def load_json_dataset(filepath: str) -> List[Dict]:
     with open(filepath, "r") as fp:
         return json.load(fp)
 
-# ───────────────────────── Dataset class ─────────────────────────────────# class TransformerDataset(torch.utils.data.Dataset):
+class TransformerDataset(torch.utils.data.Dataset):
     def __init__(self,
                  subset,
                  tok_ai, tok_tgt,
