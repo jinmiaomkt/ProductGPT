@@ -350,22 +350,33 @@ def train_model(cfg):
                                   cfg["vocab_size_tgt"], pad_id)
 
     eng, _, _, _ = deepspeed.initialize(
-        model=model, model_parameters=model.parameters(),
+        model=model,
+        model_parameters=model.parameters(),
         config={
             "train_micro_batch_size_per_gpu": cfg["batch_size"],
             "zero_allow_untested_optimizer": True,
-            "optimizer": {"type": "Lamb",
-                          "params": {"lr": cfg["lr"],
-                                     "eps": cfg["eps"],
-                                     "weight_decay": cfg["weight_decay"]}},
-            # "zero_optimization": {"stage": 1},
+
+            # --- replace optimiser ---
+            "optimizer": {
+                "type": "CPUAdam",
+                "params": {
+                    "lr": cfg["lr"],
+                    "weight_decay": cfg["weight_decay"],
+                    "eps": cfg["eps"]
+                }
+            },
+
+            # --- keep ZeRO-2 param off-load ( OK with CPUAdam ) ---
             "zero_optimization": {
                 "stage": 2,
-                "offload_param":     {"device": "cpu"},
-                "offload_optimizer": {"device": "cpu"}
+                "offload_param": {"device": "cpu"}
             },
-            "gradient_accumulation_steps": 2, 
-            "fp16": {"enabled": True}})
+
+            "gradient_accumulation_steps": 2,
+            "fp16": {"enabled": True}
+        }
+    )
+
 
     # ---------- epochs ------------------------------------------
     best, patience = None, 0
