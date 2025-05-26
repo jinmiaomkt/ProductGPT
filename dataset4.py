@@ -8,20 +8,21 @@ from torch.utils.data import Dataset
 from tokenizers import Tokenizer
 import numpy as np
 
-
-# ----------------------------------------------------------------------
-def load_json_dataset(path: str | Path) -> List[Dict[str, Any]]:
-    """
-    The raw file has ONE big dict whose values are lists.  Re-zip those
-    lists into a list[dict] so every element is a “session”.
-    """
+def load_json_dataset(path: str | Path) -> List[Dict]:
     with open(path, "r") as fp:
-        big = json.load(fp)
+        data = json.load(fp)
 
-    keys = list(big.keys())
-    n    = len(big[keys[0]])
-    return [{k: big[k][i] for k in keys} for i in range(n)]
+    # case 1: already list of dicts
+    if isinstance(data, list):
+        return data
 
+    # case 2: dict of lists – transpose
+    if isinstance(data, dict):
+        keys = list(data.keys())
+        n    = len(data[keys[0]])
+        return [{k: data[k][i] for k in keys} for i in range(n)]
+
+    raise ValueError(f"Unsupported JSON top-level type: {type(data)}")
 
 # ----------------------------------------------------------------------
 def _split_tokens(field):
@@ -43,20 +44,11 @@ def _split_tokens(field):
 
 
 def _scalar_label(field):
-    """Return a single int – the last token in `Decision`."""
     return _split_tokens(field)[-1]
 
 
 # ----------------------------------------------------------------------
 class TransformerDataset(Dataset):
-    """
-    Returns
-    -------
-    tokens : LongTensor(seq_len)    – token ids
-    mask   : BoolTensor(seq_len)    – True where 1..9
-    label  : LongTensor()           – scalar Decision
-    """
-
     def __init__(
         self,
         sessions: List[Dict[str, Any]],
