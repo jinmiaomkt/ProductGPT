@@ -25,11 +25,10 @@ import deepspeed
 from pytorch_lamb import Lamb
 
 # ─────────────────────────── project modules ────────────────────────────
-from config4_index_git    import get_config
-from model4_decoderonly   import build_transformer
-from dataset4_decoderonly import TransformerDataset, load_json_dataset
+from config4    import get_config
+from model4_decoderonly_index_performer   import build_transformer
+from dataset4_productgpt import TransformerDataset, load_json_dataset
 from tokenizers           import Tokenizer, models, pre_tokenizers
-
 
 # ══════════════════════ 1.  TOKENISERS ══════════════════════════════════
 def _tok_base(extra: Dict[str, int]) -> Tokenizer:
@@ -163,7 +162,12 @@ def _build_model(cfg):
         n_heads     = cfg["num_heads"],
         d_ff        = cfg["d_ff"],
         dropout     = cfg["dropout"],
-        max_seq_len = cfg["seq_len_ai"])
+        max_seq_len = cfg["seq_len_ai"],
+        nb_features = cfg["nb_features"], 
+        block_size_h = cfg["ai_rate"],
+        block_size_w = cfg["ai_rate"],
+        kernel_type = cfg["kernel_type"]
+)
 
 
 # ══════════════════════ 6.  EVALUATION ══════════════════════════════════
@@ -226,9 +230,7 @@ def _evaluate(loader, eng, dev, loss_fn, pad, tok, ai_rate):
 # ══════════════════════ 7.  TRAINING LOOP ═══════════════════════════════
 def train_model(cfg):
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    slots = cfg["ctx_window"] // cfg["ai_rate"]
-    uid   = (f"ctx{slots}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}_"
+    uid   = (f"performer_nb_features{cfg['nb_features']}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}_"
              f"heads{cfg['num_heads']}_lr{cfg['lr']}_weight{cfg['weight']}")
     ckpt_path = Path(cfg["model_folder"]) / f"FullProductGPT_{uid}.pt"
     json_path = ckpt_path.with_suffix(".json")
@@ -261,7 +263,10 @@ def train_model(cfg):
                                    "eps":cfg["eps"],
                                    "weight_decay":cfg["weight_decay"]}},
             "zero_optimization":{"stage":1},
-            "fp16":{"enabled": False}})
+            "gradient_accumulation_steps": 2,
+            "fp16": {"enabled": True}
+        }
+    )
 
     best, patience = None, 0
     for ep in range(cfg["num_epochs"]):
@@ -337,4 +342,6 @@ def train_model(cfg):
 
 # ══════════════════════ 8.  CLI ENTRY ═══════════════════════════════════
 if __name__ == "__main__":
-    train_model(get_config())
+    cfg = get_config()
+    cfg["ai_rate"] = 15
+    train_model(cfg)

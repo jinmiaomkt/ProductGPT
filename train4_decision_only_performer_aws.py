@@ -424,7 +424,7 @@ def train_model(cfg):
     t_loss, t_ppl, t_all, t_cur_stop, t_after_stop, t_tr = _evaluate(
         te, eng, dev, loss_fn, cfg["ai_rate"], pad_id, tok)
 
-    print(f"Epoch {ep:02d}  ValLoss={v_loss:.4f}  PPL={v_ppl:.4f}")
+    print(f"Epoch {ep:02d}  ValLoss={t_loss:.4f}  PPL={t_ppl:.4f}")
     for tag, d in (
             ("all",        t_all),
             ("cur-STOP",   t_cur_stop),
