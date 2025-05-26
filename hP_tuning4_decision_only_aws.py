@@ -21,10 +21,10 @@ import boto3
 import torch
 
 from config4 import get_config
-from train4_decision_only_aws import train_model
+from train4_decision_only_performer_aws import train_model
 
 # hyper‐parameter grids
-ctx_window_values = [32, 64, 128]
+nb_features_values = [16, 32]
 d_model_values = [64, 128]
 d_ff_values = [64, 128]
 N_values = [6, 8]
@@ -44,12 +44,12 @@ def run_one_experiment(params):
     writes out metrics JSON and uploads checkpoint+metrics to S3.
     Returns unique_id for logging.
     """
-    ctx_window, d_model, d_ff, N, num_heads, lr, weight = params
+    nbf, d_model, d_ff, N, num_heads, lr, weight = params
 
     # 1) Build config
     config = get_config()
     config.update({
-        "ctx_window": ctx_window,
+        "nb_features": nbf,
         "d_model":    d_model,
         "d_ff":       d_ff,
         "N":          N,
@@ -59,7 +59,7 @@ def run_one_experiment(params):
     })
 
     # 2) Unique basename / id
-    unique_id = f"performer_ai_rate{config['ai_rate']}_ctx_window{ctx_window}_dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_lr{lr}_weight{weight}"
+    unique_id = f"performer_nb_features{config['nb_features']}_ai_rate{config['ai_rate']}_dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_lr{lr}_weight{weight}"
     config["model_basename"] = f"DecisionOnly_{unique_id}"
 
     # 3) (Optional) pin each process to a different GPU if you have >1 GPU
@@ -99,7 +99,7 @@ def run_one_experiment(params):
 
 def hyperparam_sweep_parallel(max_workers=max_workers):
     combos = itertools.product(
-        ctx_window_values,
+        nb_features_values,
         d_model_values,
         d_ff_values,
         N_values,
