@@ -136,7 +136,10 @@ def _make_loaders(cfg, tokenizer):
 
                 ids_t   = torch.tensor(ids, dtype=torch.long)
                 mask_t  = torch.tensor([1 <= t <= 9 for t in ids], dtype=torch.bool)
-                label_t = torch.tensor(label, dtype=torch.long)  # (scalar)
+                # label_t = torch.tensor(label, dtype=torch.long)  # (scalar)
+
+                label_int = int(str(label).strip())    # <-- robust scalar cast
+                label_t   = torch.tensor(label_int, dtype=torch.long)
 
                 self.items.append((ids_t, mask_t, label_t))
 
