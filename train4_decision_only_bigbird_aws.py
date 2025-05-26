@@ -118,7 +118,7 @@ def _make_loaders(cfg, tokenizer):
     tr_js, va_js, te_js = random_split(raw, [tr_sz, va_sz, te_sz], generator=g)
 
     # 1 ─ dataset ----------------------------------------------------------
-    class DecisionDataset(torch.utils.data.Dataset):
+    class DecisionDataset(torch.utils.data.Dataset): 
         def __init__(self, sessions):
             self.items = []
             for sess in sessions:
