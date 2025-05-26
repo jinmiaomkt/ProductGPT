@@ -16,20 +16,15 @@
 # ─────────────── environment & logging hygiene ────────────────
 import os, warnings, logging, json, numpy as np, boto3, botocore
 from pathlib import Path
-os.environ.update({
-    "TF_CPP_MIN_LOG_LEVEL": "3",
-    "DEEPSPEED_LOG_LEVEL" : "error",
-    "DS_DISABLE_LOGS"     : "1",
-})
+os.environ.update({"TF_CPP_MIN_LOG_LEVEL": "3", "DEEPSPEED_LOG_LEVEL": "error", "DS_DISABLE_LOGS": "1"})
 warnings.filterwarnings("ignore")
 logging.getLogger().setLevel(logging.ERROR)
-for n in ("deepspeed", "torch_checkpoint_engine", "engine"):
-    logging.getLogger(n).setLevel(logging.ERROR)
-    logging.getLogger(n).propagate = False
+for name in ("deepspeed", "torch_checkpoint_engine", "engine"):
+    logging.getLogger(name).setLevel(logging.ERROR)
+    logging.getLogger(name).propagate = False
 
-# ─────────────── std / 3rd‑party imports ──────────────────────
 import torch, torch.nn as nn, torch.nn.functional as F
-from torch.utils.data import DataLoader, random_split, Subset
+from torch.utils.data import DataLoader, random_split
 from sklearn.metrics import accuracy_score, f1_score, average_precision_score
 from sklearn.preprocessing import label_binarize
 from tqdm import tqdm
@@ -37,45 +32,38 @@ import deepspeed
 from pytorch_lamb import Lamb
 
 from model4_decoderonly_index_performer import build_transformer
-from dataset4_decision_only           import TransformerDataset
-from tokenizers                       import Tokenizer, models, pre_tokenizers
-from config4                          import get_config
+from dataset4_decision_only import TransformerDataset
+from tokenizers import Tokenizer, models, pre_tokenizers
+from config4 import get_config
 
-# ═══════════════ helper blocks ════════════════════════════════
-# --- tokenizer ------------------------------------------------
+# ───────────────────── tokenizer ──────────────────────
 
 def _build_tok():
+    """Gap‑free vocabulary (adds token 11 to close the hole)."""
     t = Tokenizer(models.WordLevel(unk_token="[UNK]"))
     t.pre_tokenizer = pre_tokenizers.Whitespace()
-    t.model = models.WordLevel(
-        {**{str(i): i for i in range(1, 10)}, "[PAD]": 0,
-         "[SOS]": 10, "[UNK]": 12},
-        unk_token="[UNK]",
-    )
+    t.model = models.WordLevel({**{str(i): i for i in range(1, 10)}, "[PAD]": 0, "[SOS]": 10, "[MASK]": 11, "[UNK]": 12}, unk_token="[UNK]")
     return t
 
-# --- lightweight streaming dataset ---------------------------
-class JsonLineDataset(torch.utils.data.Dataset):
-    """Memory‑efficient reader.
+# ─────────────── robust streaming dataset ───────────────
 
-    Each line must contain **one complete JSON object**.  For a legacy file
-    that is a single gigantic JSON list (the old format), call the helper
-    :func:`convert_to_jsonl` once and point *filepath* to the new ``.jsonl``.
-    """
+class JsonLineDataset(torch.utils.data.Dataset):
+    """Read newline‑delimited JSON – tolerant of trailing commas & list brackets."""
+
     def __init__(self, filepath: str | Path):
         self.filepath = Path(filepath)
         self.offsets: list[int] = []
-        with self.filepath.open("rb") as f:              # binary keeps exact offsets
+        with self.filepath.open("rb") as f:
             while True:
-                pos = f.tell()                           # start of current line
+                pos = f.tell()
                 line = f.readline()
-                if not line:                             # EOF
+                if not line:
                     break
-                if line.strip():                         # skip blank lines
+                txt = line.strip()
+                if txt.startswith(b"{"):                # only real objects
                     self.offsets.append(pos)
-
         if not self.offsets:
-            raise ValueError(f"{filepath} appears to be empty or not NDJSON")
+            raise ValueError(f"{filepath} appears empty or not NDJSON.")
 
     def __len__(self):
         return len(self.offsets)
@@ -83,26 +71,67 @@ class JsonLineDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx: int):
         with self.filepath.open("rb") as f:
             f.seek(self.offsets[idx])
-            return json.loads(f.readline().decode("utf‑8"))
+            raw = f.readline().decode("utf-8").strip()
+            # strip trailing comma (from old list syntax)
+            if raw.endswith(","):
+                raw = raw[:-1].rstrip()
+            return json.loads(raw)
 
-# --- (optional) converter for legacy list‑style JSON ----------
+# ─────────── helper: convert legacy JSON → NDJSON ───────────
 
 def convert_to_jsonl(src: str | Path, dst: str | Path | None = None):
-    """Convert an old monolithic *[ {...}, {...}, ... ]* file to newline JSON."""
-    src, dst = Path(src), Path(dst or src).with_suffix(".jsonl")
+    """Convert monolithic list/dict JSON to newline JSON."""
+    src = Path(src)
+    dst = Path(dst or src).with_suffix(".jsonl")
+    if dst.exists():
+        return dst
     with src.open() as fin, dst.open("w") as fout:
-        data = json.load(fin)  # assumes the file fits once for conversion
-        if isinstance(data, dict):
-            # transpose dict‑of‑lists → list‑of‑dicts
+        data = json.load(fin)
+        if isinstance(data, list):
+            for obj in data:
+                fout.write(json.dumps(obj) + "\n")
+        elif isinstance(data, dict):
             keys = list(data)
             for row in zip(*(data[k] for k in keys)):
                 fout.write(json.dumps(dict(zip(keys, row))) + "\n")
-        elif isinstance(data, list):
-            for obj in data:
-                fout.write(json.dumps(obj) + "\n")
         else:
-            raise ValueError("Unsupported JSON root to convert → .jsonl")
+            raise ValueError("Unsupported JSON root for conversion")
     return dst
+
+# ───────── ensure dataset is NDJSON ─────────
+
+def _ensure_jsonl(path: str | Path):
+    p = Path(path)
+    if p.suffix == ".jsonl":
+        return p
+    with p.open() as f:
+        first_non_space = ""
+        while first_non_space.isspace() or not first_non_space:
+            first_non_space = f.read(1)
+    # If file starts with '[' it's a list → convert
+    if first_non_space == "[":
+        return convert_to_jsonl(p)
+    return p  # assume already NDJSON
+
+# ─────────────── data loaders ───────────────
+
+def _make_loaders(cfg):
+    filepath = _ensure_jsonl(cfg["filepath"])
+    raw = JsonLineDataset(filepath)
+    n = len(raw)
+    tr, va = int(0.8 * n), int(0.1 * n)
+    gen = torch.Generator().manual_seed(33)
+    tr_ds, va_ds, te_ds = random_split(raw, [tr, va, n - tr - va], generator=gen)
+
+    tok_ai = tok_tgt = _build_tok()
+    out = Path(cfg["model_folder"]); out.mkdir(parents=True, exist_ok=True)
+    tok_ai.save(out / "tokenizer_ai.json"); tok_tgt.save(out / "tokenizer_tgt.json")
+
+    def mk(split):
+        return TransformerDataset(split, tok_ai, tok_tgt, cfg["seq_len_ai"], cfg["seq_len_tgt"], cfg["num_heads"], cfg["ai_rate"], pad_token=0)
+
+    loader = lambda ds, sh: DataLoader(ds, batch_size=cfg["batch_size"], shuffle=sh)
+    return loader(mk(tr_ds), True), loader(mk(va_ds), False), loader(mk(te_ds), False), tok_tgt
 
 # --- loss -----------------------------------------------------
 class PairwiseRevenueLoss(nn.Module):
@@ -180,28 +209,28 @@ def _upload(local: Path, bucket: str, key: str, s3) -> bool:
         return False
 
 # ═════════════════ data & model ═════════════════════════════════
-def _make_loaders(cfg):
-    # raw = load_json_dataset(cfg["filepath"])
-    raw = JsonLineDataset(cfg["filepath"])
+# def _make_loaders(cfg):
+#     # raw = load_json_dataset(cfg["filepath"])
+#     raw = JsonLineDataset(cfg["filepath"])
 
-    n   = len(raw); tr, va = int(.8*n), int(.1*n)
-    gen = torch.Generator().manual_seed(33)
-    tr_ds, va_ds, te_ds = random_split(raw, [tr, va, n-tr-va], generator=gen)
+#     n   = len(raw); tr, va = int(.8*n), int(.1*n)
+#     gen = torch.Generator().manual_seed(33)
+#     tr_ds, va_ds, te_ds = random_split(raw, [tr, va, n-tr-va], generator=gen)
 
-    tok_ai = tok_tgt = _build_tok()
-    out = Path(cfg["model_folder"]); out.mkdir(parents=True, exist_ok=True)
-    tok_ai .save(str(out / "tokenizer_ai.json"))
-    tok_tgt.save(str(out / "tokenizer_tgt.json"))
+#     tok_ai = tok_tgt = _build_tok()
+#     out = Path(cfg["model_folder"]); out.mkdir(parents=True, exist_ok=True)
+#     tok_ai .save(str(out / "tokenizer_ai.json"))
+#     tok_tgt.save(str(out / "tokenizer_tgt.json"))
 
-    def mk(split):
-        return TransformerDataset(split, tok_ai, tok_tgt,
-                                  cfg["seq_len_ai"], cfg["seq_len_tgt"],
-                                  cfg["num_heads"], cfg["ai_rate"], pad_token=0)
-    loader = lambda ds, sh: DataLoader(ds, batch_size=cfg["batch_size"], shuffle=sh)
-    return (loader(mk(tr_ds), True),
-            loader(mk(va_ds), False),
-            loader(mk(te_ds), False),
-            tok_tgt)
+#     def mk(split):
+#         return TransformerDataset(split, tok_ai, tok_tgt,
+#                                   cfg["seq_len_ai"], cfg["seq_len_tgt"],
+#                                   cfg["num_heads"], cfg["ai_rate"], pad_token=0)
+#     loader = lambda ds, sh: DataLoader(ds, batch_size=cfg["batch_size"], shuffle=sh)
+#     return (loader(mk(tr_ds), True),
+#             loader(mk(va_ds), False),
+#             loader(mk(te_ds), False),
+#             tok_tgt)
 
 def _build_model(cfg):
     return build_transformer(
