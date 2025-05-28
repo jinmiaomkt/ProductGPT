@@ -179,9 +179,9 @@ class FocalLoss(nn.Module):
             targets,
             reduction="none",
             weight=weight,
-            weight=self.class_weights,
+            ignore_index=self.ignore_index,
         )
-        
+
         mask = targets != self.ignore_index
         ce = ce[mask]
         pt = torch.exp(-ce)
