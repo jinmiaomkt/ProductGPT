@@ -202,7 +202,7 @@ def _make_loaders(cfg):
 # ══════════════════════ 5.  MODEL ══════════════════════════════════════
 def _build_model(cfg):
     return build_transformer(
-        vocab_size  = cfg["vocab_size_src"],      # logits over *src* vocab
+        vocab_size  = cfg["vocab_size_tgt"],      # logits over *src* vocab
         d_model     = cfg["d_model"],
         n_layers    = cfg["N"],
         n_heads     = cfg["num_heads"],
