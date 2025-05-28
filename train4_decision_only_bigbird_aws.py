@@ -471,6 +471,23 @@ def train_model(cfg):
                    ("after-STOP", t_af), ("transition", t_tr)):
         print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  AUPRC={d['auprc']:.4f}")
 
+    # ---- save & upload TEST metrics ------------------------------------
+    test_meta = ckpt.with_suffix(".test.json")       # e.g. DecisionOnly_…​.test.json
+    test_meta.write_text(json.dumps(_json_safe({
+        "checkpoint_path": ckpt.name,
+        "test_loss":       t_loss,
+        "test_ppl":        t_ppl,
+        "test_all":        t_all,
+        "test_cur_stop":   t_st,
+        "test_after_stop": t_af,
+        "test_transition": t_tr
+    }), indent=2))
+
+    # same key prefix, just drop it into the metrics/ directory
+    test_key = f"DecisionOnly/BigBird/metrics/{test_meta.name}"
+    _upload(test_meta, bucket, test_key, s3)
+    test_meta.unlink(missing_ok=True)
+
     return {"uid": uid, "val_loss": best}
 
 if __name__ == "__main__":
