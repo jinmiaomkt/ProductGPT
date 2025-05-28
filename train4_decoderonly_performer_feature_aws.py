@@ -254,7 +254,8 @@ def _upload(local: Path, bucket: str, key: str, s3) -> bool:
 
 def build_model(cfg: Dict[str, Any], feat_tensor: torch.Tensor) -> nn.Module:
     return build_transformer(
-        vocab_size=cfg["vocab_size_tgt"],
+        vocab_size_tgt=cfg["vocab_size_tgt"],
+        vocab_size_src=cfg["vocab_size_src"],
         max_seq_len=cfg["seq_len_ai"],
         d_model=cfg["d_model"],
         n_layers=cfg["N"],
