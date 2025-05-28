@@ -35,6 +35,7 @@ from model4_decoderonly_index_performer import build_transformer
 from dataset4_decision_only import TransformerDataset
 from tokenizers import Tokenizer, models, pre_tokenizers
 from config4 import get_config
+from typing import Tuple 
 
 # ───────────────────── tokenizer ──────────────────────
 
