@@ -162,17 +162,26 @@ class FocalLoss(nn.Module):
         else:
             self.class_weights = None
 
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:  # noqa: D401
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:  
         B, T, V = logits.shape
         logits = logits.view(-1, V)
         targets = targets.view(-1)
+
+        # ─── make sure the `weight` tensor matches logits’ dtype/device ──
+        weight = None
+        if self.class_weights is not None:
+            weight = self.class_weights.to(
+                dtype=logits.dtype, device=logits.device
+            )
 
         ce = F.cross_entropy(
             logits,
             targets,
             reduction="none",
+            weight=weight,
             weight=self.class_weights,
         )
+        
         mask = targets != self.ignore_index
         ce = ce[mask]
         pt = torch.exp(-ce)
