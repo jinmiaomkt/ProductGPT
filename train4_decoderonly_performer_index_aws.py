@@ -71,66 +71,58 @@ build_tokenizer_tgt = lambda: _tok_base({})                       # 1…9 only
 #         return -(probs[keep] * pen[tgt[keep]]).sum(1).mean()
 
 class FocalLoss(nn.Module):
-    def __init__(self, gamma=0.0, ignore_index=0, class_weights=None):
-        """
-        Args:
-            gamma (float): Focal loss exponent, default=2.
-            ignore_index (int): Token ID to ignore in the loss.
-            class_weights (Tensor): 1D tensor of shape [num_classes],
-                                    e.g. to upweight rare classes.
-        """
+    """Multi-class focal loss that works with fp16 and optional weights."""
+
+    def __init__(
+        self,
+        gamma: float = 0.0,
+        ignore_index: int = 0,
+        class_weights: torch.Tensor | None = None,
+    ) -> None:
         super().__init__()
-        self.gamma = gamma
+        self.gamma        = gamma
         self.ignore_index = ignore_index
-        # Register the weights as a buffer so they move to GPU with the model.
+
+        # ---- ALWAYS create the attribute so it exists after pickling ----
         if class_weights is not None:
-            self.register_buffer('class_weights', class_weights)
+            w = class_weights.float()          # keep a float32 master copy
         else:
-            self.class_weights = None
+            w = torch.empty(0)                 # ↳ size 0  ⇒  “no weights”
+        self.register_buffer("w", w)           # now self.w is guaranteed
 
-    def forward(self, inputs, targets):
+    # ---------------------------------------------------------------------
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """
-        inputs: (B, T, V) => raw logits
-        targets: (B, T)   => integer class IDs
+        logits  : (B, T, C)
+        targets : (B, T)
         """
-        B, T, V = inputs.shape
+        B, T, C = logits.shape
+        logits  = logits.view(-1, C)
+        targets = targets.view(-1)
 
-        # Flatten to 1D
-        inputs_2d = inputs.reshape(-1, V)         # (B*T, V)
-        targets_1d = targets.reshape(-1)          # (B*T,)
+        # bring weights to same device/dtype *every call*
+        weight = None
+        if self.w.numel():                                # we do have weights
+            if self.w.numel() != C:
+                raise ValueError(f"weight len {self.w.numel()} ≠ #classes {C}")
+            weight = self.w.to(device=logits.device, dtype=logits.dtype)
 
-        # --- bring the weight vector onto the right device & dtype -------
-        if self.w is not None:
-            if self.w.numel() != V:
-                raise ValueError(
-                    f"`weight` length {self.w.numel()} ≠ #classes {V}"
-                )
-            w = self.w.to(device=inputs_2d.device, dtype=inputs_2d.dtype)
-        else:
-            w = None
-
-        # Use cross_entropy with 'none' reduction so we can apply focal transform ourselves
-        ce_loss = F.cross_entropy(
-            inputs_2d,
-            targets_1d,
-            reduction='none',
-            weight=w,  # <---- the magic: per-class weighting
-            ignore_index=self.ignore_index
+        ce = F.cross_entropy(
+            logits,
+            targets,
+            weight=weight,
+            ignore_index=self.ignore_index,
+            reduction="none",
         )
 
-        # Mask out tokens == ignore_index
-        valid_mask = (targets_1d != self.ignore_index)
-        ce_loss = ce_loss[valid_mask]
+        mask = targets != self.ignore_index
+        ce   = ce[mask]
+        if ce.numel() == 0:
+            return logits.new_tensor(0.0)
 
-        # Focal transform
-        pt = torch.exp(-ce_loss)
-        focal = (1 - pt) ** self.gamma * ce_loss
-
-        # If everything got masked, return 0
-        if focal.numel() == 0:
-            return torch.tensor(0.0, device=inputs.device)
-
-        return focal.mean()
+        pt   = torch.exp(-ce)
+        loss = ((1.0 - pt) ** self.gamma) * ce
+        return loss.mean()
 
 # ══════════════════════ 3.  HELPER FUNCTIONS ════════════════════════════
 def transition_mask(seq: torch.Tensor) -> torch.Tensor:
