@@ -29,8 +29,8 @@ from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
     f1_score,
-    label_binarize,
 )
+from sklearn.preprocessing import label_binarize
 from torch.utils.data import DataLoader, random_split
 from tokenizers import Tokenizer, models, pre_tokenizers
 from tqdm import tqdm
