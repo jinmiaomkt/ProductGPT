@@ -23,18 +23,28 @@ from dataset4_productgpt import TransformerDataset, load_json_dataset
 from tokenizers           import Tokenizer, models, pre_tokenizers
 
 # ══════════════════════ 1.  TOKENISERS ══════════════════════════════════
-def _tok_base(extra: Dict[str, int]) -> Tokenizer:
+def _tok_base(extra: Dict[str, int] | None = None) -> Tokenizer:
+    """
+    Same as before, but `extra` is optional.  If you call `_tok_base()`
+    you now get the 13-to-60 mapping as default.
+    """
+    if extra is None:                           # <- NEW
+        extra = {str(i): i for i in range(13, 61)}
     tok = Tokenizer(models.WordLevel(unk_token="[UNK]"))
     tok.pre_tokenizer = pre_tokenizers.Whitespace()
-    tok.model = models.WordLevel(vocab={
-        "[PAD]": 0,
-        **{str(i): i for i in range(1, 10)},   # decisions 1…9
-        "[SOS]": 10,
-        "[EOS]": 11,
-        "[UNK]": 12,
-        **extra                                # e.g. 13…60 in src vocab
-    }, unk_token="[UNK]")
+    tok.model = models.WordLevel(
+        vocab={
+            "[PAD]": 0,
+            **{str(i): i for i in range(1, 10)},   # 1…9
+            "[SOS]": 10,
+            "[EOS]": 11,
+            "[UNK]": 12,
+            **extra
+        },
+        unk_token="[UNK]"
+    )
     return tok
+
 
 build_tokenizer_src = lambda: _tok_base({str(i): i for i in range(13, 61)})
 build_tokenizer_tgt = lambda: _tok_base({})                       # 1…9 only
