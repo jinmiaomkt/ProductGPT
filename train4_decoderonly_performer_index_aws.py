@@ -1,11 +1,3 @@
-# train4_decoderonly.py  ───────────────────────────────────────────────────
-# Decision-Only trainer
-#   • PairwiseRevenueLoss  (-E |R_i − R_j|)
-#   • Four evaluation slices: all / STOP-cur / after-STOP / transition
-#   • Clean DeepSpeed (ZeRO-1 + FusedLAMB) – no noisy logs
-#   • Same checkpoint + JSON metadata format as before
-# -------------------------------------------------------------------------
-
 import os, json, warnings, logging, numpy as np, boto3, botocore
 from pathlib import Path
 from typing import Dict, Any
@@ -47,32 +39,77 @@ def _tok_base(extra: Dict[str, int]) -> Tokenizer:
 build_tokenizer_src = lambda: _tok_base({str(i): i for i in range(13, 61)})
 build_tokenizer_tgt = lambda: _tok_base({})                       # 1…9 only
 
-
 # ══════════════════════ 2.  REVENUE-GAP LOSS ════════════════════════════
-class PairwiseRevenueLoss(nn.Module):
-    """
-    L = – E_{p(i|x)} [ |R_i – R_j| ],
-    i.e. negative expected absolute revenue gap.
-    """
-    def __init__(self, revenue, vocab_size, ignore_index=0):
+# class PairwiseRevenueLoss(nn.Module):
+#     def __init__(self, revenue, vocab_size, ignore_index=0):
+#         super().__init__()
+#         if len(revenue) < vocab_size:
+#             revenue = revenue + [0.] * (vocab_size - len(revenue))
+#         rev = torch.tensor(revenue, dtype=torch.float32)
+#         self.register_buffer("penalty",
+#                              -torch.abs(rev[:, None] - rev[None, :]))  # V×V
+#         self.ignore_index = ignore_index
+
+#     def forward(self, logits, targets):
+#         V = logits.size(-1)
+#         probs = F.softmax(logits.view(-1, V), dim=-1)   # (B*N, V)
+#         tgt   = targets.view(-1)                        # (B*N,)
+#         keep  = tgt != self.ignore_index
+#         if keep.sum() == 0:
+#             return logits.new_tensor(0.0)
+#         pen = self.penalty.to(probs)
+#         return -(probs[keep] * pen[tgt[keep]]).sum(1).mean()
+
+class FocalLoss(nn.Module):
+    def __init__(self, gamma=0.0, ignore_index=0, class_weights=None):
+        """
+        Args:
+            gamma (float): Focal loss exponent, default=2.
+            ignore_index (int): Token ID to ignore in the loss.
+            class_weights (Tensor): 1D tensor of shape [num_classes],
+                                    e.g. to upweight rare classes.
+        """
         super().__init__()
-        if len(revenue) < vocab_size:
-            revenue = revenue + [0.] * (vocab_size - len(revenue))
-        rev = torch.tensor(revenue, dtype=torch.float32)
-        self.register_buffer("penalty",
-                             -torch.abs(rev[:, None] - rev[None, :]))  # V×V
+        self.gamma = gamma
         self.ignore_index = ignore_index
+        # Register the weights as a buffer so they move to GPU with the model.
+        if class_weights is not None:
+            self.register_buffer('class_weights', class_weights)
+        else:
+            self.class_weights = None
 
-    def forward(self, logits, targets):
-        V = logits.size(-1)
-        probs = F.softmax(logits.view(-1, V), dim=-1)   # (B*N, V)
-        tgt   = targets.view(-1)                        # (B*N,)
-        keep  = tgt != self.ignore_index
-        if keep.sum() == 0:
-            return logits.new_tensor(0.0)
-        pen = self.penalty.to(probs)
-        return -(probs[keep] * pen[tgt[keep]]).sum(1).mean()
+    def forward(self, inputs, targets):
+        """
+        inputs: (B, T, V) => raw logits
+        targets: (B, T)   => integer class IDs
+        """
+        B, T, V = inputs.shape
 
+        # Flatten to 1D
+        inputs_2d = inputs.reshape(-1, V)         # (B*T, V)
+        targets_1d = targets.reshape(-1)          # (B*T,)
+
+        # Use cross_entropy with 'none' reduction so we can apply focal transform ourselves
+        ce_loss = F.cross_entropy(
+            inputs_2d,
+            targets_1d,
+            reduction='none',
+            weight=self.class_weights  # <---- the magic: per-class weighting
+        )
+
+        # Mask out tokens == ignore_index
+        valid_mask = (targets_1d != self.ignore_index)
+        ce_loss = ce_loss[valid_mask]
+
+        # Focal transform
+        pt = torch.exp(-ce_loss)
+        focal = (1 - pt) ** self.gamma * ce_loss
+
+        # If everything got masked, return 0
+        if focal.numel() == 0:
+            return torch.tensor(0.0, device=inputs.device)
+
+        return focal.mean()
 
 # ══════════════════════ 3.  HELPER FUNCTIONS ════════════════════════════
 def transition_mask(seq: torch.Tensor) -> torch.Tensor:
@@ -232,7 +269,6 @@ def _evaluate(loader, eng, dev, loss_fn, pad, tok, ai_rate):
             _subset(P,L,PR, m_after_stop),
             _subset(P,L,PR, m_transition))
 
-
 # ══════════════════════ 7.  TRAINING LOOP ═══════════════════════════════
 def train_model(cfg):
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -243,8 +279,8 @@ def train_model(cfg):
 
     s3      = _s3_client()
     bucket  = cfg["s3_bucket"]
-    ck_key  = f"FullProductGPT/checkpoints/{ckpt_path.name}"
-    js_key  = f"FullProductGPT/metrics/{ckpt_path.name}"
+    ck_key  = f"FullProductGPT/performer/checkpoints/{ckpt_path.name}"
+    js_key  = f"FullProductGPT/performer/metrics/{json_path.name}"
     
     print(f"[INFO] artefacts will be saved to\n"
           f"  • s3://{bucket}/{ck_key}\n"
@@ -254,10 +290,17 @@ def train_model(cfg):
     pad_id = tok_tgt.token_to_id("[PAD]")
 
     model   = _build_model(cfg)
-    loss_fn = PairwiseRevenueLoss(
-        revenue=[0,1,10,1,10,1,10,1,10,0],    # customise as you wish
-        vocab_size=cfg["vocab_size_src"],      # MUST match logits.size(-1)
-        ignore_index=pad_id)
+    # loss_fn = PairwiseRevenueLoss(
+    #     revenue=[0,1,10,1,10,1,10,1,10,0],    # customise as you wish
+    #     vocab_size=cfg["vocab_size_src"],      # MUST match logits.size(-1)
+    #     ignore_index=pad_id)
+
+    tokenizer_tgt = _tok_base()
+
+    weights = torch.ones(cfg['vocab_size_tgt'])
+    weights[9] = cfg['weight']
+    weights = weights.to(dev)
+    loss_fn = FocalLoss(gamma=cfg['gamma'], ignore_index=tokenizer_tgt.token_to_id('[PAD]'), class_weights=weights).to(dev)
 
     eng, _, _, _ = deepspeed.initialize(
         model=model, model_parameters=model.parameters(),

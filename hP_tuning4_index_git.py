@@ -87,11 +87,11 @@ def run_one(params):
 
         ckpt = Path(res["best_checkpoint_path"])
         if ckpt.exists() and s3_put(ckpt, bucket,
-            f"FullProductGPT/checkpoints/{ckpt.name}", s3):
+            f"FullProductGPT/performer/checkpoints/{ckpt.name}", s3):
             ckpt.unlink()
 
         if s3_put(json_path, bucket,
-                f"FullProductGPT/metrics/{json_path.name}", s3):
+                f"FullProductGPT/performer/metrics/{json_path.name}", s3):
             json_path.unlink()
 
 
@@ -103,11 +103,11 @@ def run_one(params):
 
     ckpt = Path(res["best_checkpoint_path"])
     if ckpt.exists() and s3_put(ckpt, bucket,
-        f"FullProductGPT/checkpoints/{ckpt.name}", s3):
+        f"FullProductGPT/performer/checkpoints/{ckpt.name}", s3):
         ckpt.unlink()
 
     if s3_put(json_path, bucket,
-              f"FullProductGPT/metrics/{json_path.name}", s3):
+              f"FullProductGPT/performer/metrics/{json_path.name}", s3):
         json_path.unlink()
 
     return uid
