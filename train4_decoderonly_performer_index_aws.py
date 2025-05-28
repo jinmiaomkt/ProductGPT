@@ -176,6 +176,19 @@ def _upload(local: Path, bucket: str, key: str, s3) -> bool:
         print(f"[S3-ERR] {e}")
         return False
     
+# ─────────────────── pretty-printer for metric blocks ───────────────────
+def _show(tag: str, metrics: Tuple[float, float, dict, dict, dict, dict]) -> None:
+    loss, ppl, m_all, m_st, m_af, m_tr = metrics
+    print(f"{tag}  Loss={loss:.4f}  PPL={ppl:.4f}")
+    for name, d in (
+        ("all",          m_all),
+        ("cur-STOP",     m_st),
+        ("after-STOP",   m_af),
+        ("transition",   m_tr),
+    ):
+        print(f"  {name:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
+              f"AUPRC={d['auprc']:.4f}")
+
 # ══════════════════════ 4.  DATA LOADERS ════════════════════════════════
 def _make_loaders(cfg):
     raw = load_json_dataset(cfg["filepath"])
@@ -422,7 +435,7 @@ def train_model(cfg):
     if _upload(test_json, bucket,
                f"FullProductGPT/performer/Index/metrics/{test_json.name}", s3):
         test_json.unlink(missing_ok=True)
-        
+
     # return {"uid": uid, "val_loss": best}
     return {"uid": uid, "val_loss": best, "best_checkpoint_path": str(ckpt_path)}
 

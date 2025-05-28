@@ -259,6 +259,19 @@ def _upload(local: Path, bucket: str, key: str, s3) -> bool:
         print(f"[S3‑ERR] {e}")
         return False
 
+# ─────────────────── pretty-printer for metric blocks ───────────────────
+def _show(tag: str, metrics: Tuple[float, float, dict, dict, dict, dict]) -> None:
+    loss, ppl, m_all, m_st, m_af, m_tr = metrics
+    print(f"{tag}  Loss={loss:.4f}  PPL={ppl:.4f}")
+    for name, d in (
+        ("all",          m_all),
+        ("cur-STOP",     m_st),
+        ("after-STOP",   m_af),
+        ("transition",   m_tr),
+    ):
+        print(f"  {name:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
+              f"AUPRC={d['auprc']:.4f}")
+
 # ══════════════════════════════ 8. Model builder ═════════════════════=
 
 def build_model(cfg: Dict[str, Any], feat_tensor: torch.Tensor) -> nn.Module:
@@ -439,7 +452,8 @@ def train_model(cfg: Dict[str, Any]):
         # ---- validation ----------------------------------------------
         v_metrics = evaluate(val_dl, engine, device, loss_fn, pad_id, tok_tgt, cfg["ai_rate"])
         v_loss = v_metrics[0]
-        print(f"Epoch {ep:02d} ValLoss={v_loss:.4f} PPL={v_metrics[1]:.4f}")
+        _show(f"[Epoch {ep:02d}] VAL", v_metrics)
+        # print(f"Epoch {ep:02d} ValLoss={v_loss:.4f} PPL={v_metrics[1]:.4f}")
 
         if best_loss is None or v_loss < best_loss:
             best_loss, patience = v_loss, 0
@@ -449,9 +463,23 @@ def train_model(cfg: Dict[str, Any]):
                 "optimizer_state_dict": optimizer.state_dict(),
             }
             torch.save(ckpt, ckpt_path)
-            json_path.write_text(json.dumps({"val_loss": best_loss}, indent=2))
-            _upload(ckpt_path, bucket, ck_key, s3)
+            # json_path.write_text(json.dumps({"val_loss": best_loss}, indent=2))
+
+            # ─── save full validation metrics ───────────────────────────────
+            meta = {
+                "best_checkpoint_path": ckpt_path.name,
+
+                # validation
+                "val_loss":        v_metrics[0],
+                "val_ppl":         v_metrics[1],
+                "val_all":         v_metrics[2],
+                "val_cur_stop":    v_metrics[3],
+                "val_after_stop":  v_metrics[4],
+                "val_transition":  v_metrics[5],
+            }
+            json_path.write_text(json.dumps(meta, indent=2))
             _upload(json_path, bucket, js_key, s3)
+            _upload(ckpt_path, bucket, ck_key, s3)
         else:
             patience += 1
             if patience >= cfg["patience"]:
@@ -463,7 +491,24 @@ def train_model(cfg: Dict[str, Any]):
         state = torch.load(ckpt_path, map_location=device)
         engine.module.load_state_dict(state["model_state_dict"])
         test_metrics = evaluate(test_dl, engine, device, loss_fn, pad_id, tok_tgt, cfg["ai_rate"])
-        print(f"TEST Loss={test_metrics[0]:.4f}  PPL={test_metrics[1]:.4f}")
+        # print(f"TEST Loss={test_metrics[0]:.4f}  PPL={test_metrics[1]:.4f}")
+        _show("** TEST **", test_metrics)
+
+        # ─── append test metrics and re-upload ───────────────────────────
+    with json_path.open() as f:
+        meta = json.load(f)
+
+    meta.update({
+        "test_loss":        test_metrics[0],
+        "test_ppl":         test_metrics[1],
+        "test_all":         test_metrics[2],
+        "test_cur_stop":    test_metrics[3],
+        "test_after_stop":  test_metrics[4],
+        "test_transition":  test_metrics[5],
+    })
+
+    json_path.write_text(json.dumps(meta, indent=2))
+    _upload(json_path, bucket, js_key, s3)
 
     return {"uid": uid, "val_loss": best_loss, "checkpoint": str(ckpt_path)}
 
