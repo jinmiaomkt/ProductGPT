@@ -107,10 +107,10 @@ def run_one_experiment(params):
     bucket = config['s3_bucket']
 
     ckpt = Path(results["best_checkpoint_path"])
-    if ckpt.exists() and s3_put(ckpt, bucket, f"FullProductGPT/performer/FeatureBased/checkpoints/{ckpt.name}", s3):
+    if ckpt.exists() and s3_put(ckpt, bucket, f"FullProductGPT/performer/Feature/checkpoints/{ckpt.name}", s3):
          ckpt.unlink()
 
-    if s3_put(json_path, bucket, f"FullProductGPT/performer/FeatureBased/metrics/{json_path.name}", s3):
+    if s3_put(json_path, bucket, f"FullProductGPT/performer/Feature/metrics/{json_path.name}", s3):
         json_path.unlink()
     
     # with open(json_path, 'w') as f:
