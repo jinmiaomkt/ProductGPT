@@ -22,23 +22,74 @@ from dataset4 import TransformerDataset, load_json_dataset
 import re
 from config4 import get_config
 
-class PairwiseRevenueLoss(nn.Module):
-    def __init__(self, revenue, vocab_size, ignore_index=0):
+class FocalLoss(nn.Module):
+    def __init__(self, gamma=0.0, ignore_index=0, class_weights=None):
+        """
+        Args:
+            gamma (float): Focal loss exponent, default=2.
+            ignore_index (int): Token ID to ignore in the loss.
+            class_weights (Tensor): 1D tensor of shape [num_classes],
+                                    e.g. to upweight rare classes.
+        """
         super().__init__()
-        if len(revenue) < vocab_size:
-            revenue = revenue + [0.] * (vocab_size - len(revenue))
-        rev = torch.tensor(revenue, dtype=torch.float32)
-        self.register_buffer("penalty",
-                             -torch.abs(rev[:, None] - rev[None, :]))
-        self.ignore = ignore_index
+        self.gamma = gamma
+        self.ignore_index = ignore_index
+        # Register the weights as a buffer so they move to GPU with the model.
+        if class_weights is not None:
+            self.register_buffer('class_weights', class_weights)
+        else:
+            self.class_weights = None
 
-    def forward(self, logits, tgt):
-        B, V = logits.shape
-        probs = F.softmax(logits.view(-1, V), dim=-1)
-        tgt = tgt.view(-1)
-        keep = tgt != self.ignore
-        pen = self.penalty.to(probs)
-        return -(probs[keep] * pen[tgt[keep]]).sum(dim=-1).mean()
+    def forward(self, inputs, targets):
+        """
+        inputs: (B, T, V) => raw logits
+        targets: (B, T)   => integer class IDs
+        """
+        B, T, V = inputs.shape
+
+        # Flatten to 1D
+        inputs_2d = inputs.reshape(-1, V)         # (B*T, V)
+        targets_1d = targets.reshape(-1)          # (B*T,)
+
+        # Use cross_entropy with 'none' reduction so we can apply focal transform ourselves
+        ce_loss = F.cross_entropy(
+            inputs_2d,
+            targets_1d,
+            reduction='none',
+            weight=self.class_weights  # <---- the magic: per-class weighting
+        )
+
+        # Mask out tokens == ignore_index
+        valid_mask = (targets_1d != self.ignore_index)
+        ce_loss = ce_loss[valid_mask]
+
+        # Focal transform
+        pt = torch.exp(-ce_loss)
+        focal = (1 - pt) ** self.gamma * ce_loss
+
+        # If everything got masked, return 0
+        if focal.numel() == 0:
+            return torch.tensor(0.0, device=inputs.device)
+
+        return focal.mean()
+    
+# class PairwiseRevenueLoss(nn.Module):
+#     def __init__(self, revenue, vocab_size, ignore_index=0):
+#         super().__init__()
+#         if len(revenue) < vocab_size:
+#             revenue = revenue + [0.] * (vocab_size - len(revenue))
+#         rev = torch.tensor(revenue, dtype=torch.float32)
+#         self.register_buffer("penalty",
+#                              -torch.abs(rev[:, None] - rev[None, :]))
+#         self.ignore = ignore_index
+
+#     def forward(self, logits, tgt):
+#         B, V = logits.shape
+#         probs = F.softmax(logits.view(-1, V), dim=-1)
+#         tgt = tgt.view(-1)
+#         keep = tgt != self.ignore
+#         pen = self.penalty.to(probs)
+#         return -(probs[keep] * pen[tgt[keep]]).sum(dim=-1).mean()
 
 def _transition_mask(lbl):
     return lbl != F.pad(lbl, (1, 0), value=-1)[:, :-1]
@@ -286,9 +337,16 @@ def train_model(cfg):
 
     tr, va, te = _make_loaders(cfg, tok)
     model = _build_model(cfg)
-    loss_fn = PairwiseRevenueLoss(
-        [0,1,10,1,10,1,10,1,10,0], cfg["vocab_size_tgt"], pad_id)
+    # loss_fn = PairwiseRevenueLoss(
+    #     [0,1,10,1,10,1,10,1,10,0], cfg["vocab_size_tgt"], pad_id)
     
+    # tokenizer_tgt = _tok_base()
+
+    weights = torch.ones(cfg['vocab_size_tgt'])
+    weights[9] = cfg['weight']
+    weights = weights.to(dev)
+    loss_fn = FocalLoss(gamma=cfg['gamma'], ignore_index=tok.token_to_id('[PAD]'), class_weights=weights).to(dev)
+
     ds_cfg = {
         "train_micro_batch_size_per_gpu": 1,
         "gradient_accumulation_steps":    4,
