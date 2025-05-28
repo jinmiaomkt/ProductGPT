@@ -23,8 +23,12 @@ lr_values         = [1e-4]
 weight_values     = [2, 4, 8]
 
 HP_GRID = list(itertools.product(nb_features_values,
-                                 d_model_values, d_ff_values, N_values,
-                                 num_heads_values, lr_values, weight_values))
+                                 d_model_values, 
+                                 d_ff_values, 
+                                 N_values,
+                                 num_heads_values, 
+                                 lr_values, 
+                                 weight_values))
 
 # ---------------- S3 helpers ---------------------------------------------
 def get_s3():                # single client per process
@@ -50,11 +54,7 @@ def run_one(params):
     cfg = get_config()
 
     cfg.update({"nb_features":nbf, 
-                # "seq_len_ai":ctxW,
-                # "seq_len_tgt":ctxW//15, 
-                # "ai_rate":15,
                 "d_model":dm, 
-                "nb_features":nbf,
                 "d_ff":dff, 
                 "N":N,
                 "num_heads":H, 
