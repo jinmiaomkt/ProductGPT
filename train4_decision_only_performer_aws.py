@@ -270,6 +270,19 @@ def _upload(local: Path, bucket: str, key: str, s3) -> bool:
         print(f"[S3-ERR] {e}")
         return False
 
+# ─────────────────── pretty-printer for metric blocks ───────────────────
+def _show(tag: str, metrics: Tuple[float, float, dict, dict, dict, dict]) -> None:
+    loss, ppl, m_all, m_st, m_af, m_tr = metrics
+    print(f"{tag}  Loss={loss:.4f}  PPL={ppl:.4f}")
+    for name, d in (
+        ("all",          m_all),
+        ("cur-STOP",     m_st),
+        ("after-STOP",   m_af),
+        ("transition",   m_tr),
+    ):
+        print(f"  {name:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
+              f"AUPRC={d['auprc']:.4f}")
+
 # ═════════════════ data & model ═════════════════════════════════
 # def _make_loaders(cfg):
 #     # raw = load_json_dataset(cfg["filepath"])
@@ -489,6 +502,15 @@ def train_model(cfg):
     t_loss, t_ppl, t_all, t_cur_stop, t_after_stop, t_tr = _evaluate(
         te, eng, dev, loss_fn, cfg["ai_rate"], pad_id, tok)
 
+    print(f"Valudation Epoch {ep:02d}  ValLoss={v_loss:.4f}  PPL={v_ppl:.4f}")
+    for tag, d in (
+        ("all",        v_all),
+        ("cur-STOP",   v_cur_stop),
+        ("after-STOP", v_after_stop),
+        ("transition", v_tr)):
+        print(f"  {tag:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
+              f"AUPRC={d['auprc']:.4f}")
+
     # ---------- append test metrics to the same JSON ----------------
     # read what we wrote during validation
     with json_local.open() as f:
@@ -507,7 +529,7 @@ def train_model(cfg):
 
     # (re-)upload the updated file
     _upload(json_local, bucket, js_key, s3)
-        
+
     return {"uid": uid, "val_loss": best, "test_loss": t_loss}
    
 # ──────────────── CLI (for quick manual run) ────────────────────
