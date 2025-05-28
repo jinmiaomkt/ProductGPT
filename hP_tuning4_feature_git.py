@@ -11,23 +11,16 @@ import os
 import json
 import uuid
 
-# import boto3
+import itertools, json, os, socket
+import boto3, botocore, torch
 import torch
 
-from config4git import get_config
-from train4_decoderonly_feature_git import train_model
+from config4 import get_config
+from train4_decoderonly_performer_feature_aws import train_model
 
-from google.cloud import storage
-
-def upload_to_gcs(local_path: str, bucket_name: str, destination_blob_name: str):
-    """Uploads a file to GCS bucket."""
-    storage_client = storage.Client()
-    bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob(destination_blob_name)
-    blob.upload_from_filename(local_path)
-    print(f"Uploaded {local_path} to gs://{bucket_name}/{destination_blob_name}")
 
 # Hyper‑parameter grids
+nb_features_values = [16, 32]
 d_model_values     = [32, 64, 128]
 d_ff_values        = [32, 64, 128]
 N_values           = [4, 6, 8]
@@ -36,6 +29,7 @@ weight_values      = [2, 4, 8]
 
 # Precompute every combo
 HP_GRID = list(itertools.product(
+    nb_features_values,
     d_model_values,
     d_ff_values,
     N_values,
@@ -43,23 +37,40 @@ HP_GRID = list(itertools.product(
     weight_values
 ))
 
-# S3 client
-# s3 = boto3.client("s3")
+s3 = boto3.client("s3")
 
-# def upload_to_s3(local_path: str, bucket: str, key: str):
-#     """Upload a local file to S3."""
-#     s3.upload_file(local_path, bucket, key)
+def upload_to_s3(local_path: str, bucket: str, key: str):
+    """Upload a local file to S3."""
+    s3.upload_file(local_path, bucket, key)
+
+def get_s3():                # single client per process
+    try:    return boto3.client("s3")
+    except botocore.exceptions.BotoCoreError: return None
+
+def s3_put(local, bucket, key, s3):
+    if s3 is None: return False
+    try:
+        s3.upload_file(str(local), bucket, key)
+        print(f"[S3] {local.name} → s3://{bucket}/{key}")
+        return True
+    except botocore.exceptions.BotoCoreError as e:
+        print(f"[S3-WARN] {e}"); return False
+    
+def free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("",0)); return s.getsockname()[1]
 
 def run_one_experiment(params):
     """
     Unpack one hyperparam tuple, run train_model, save/upload results.
     Returns unique_id.
     """
-    d_model, d_ff, N, num_heads, gamma, lr, weight = params
+    nbf, d_model, d_ff, N, num_heads, gamma, lr, weight = params
 
     # 1) Build config
     config = get_config()
     config.update({
+        'nb_features': nbf,
         'd_model':    d_model,
         'd_ff':       d_ff,
         'N':          N,
@@ -70,9 +81,13 @@ def run_one_experiment(params):
     })
 
     # 2) Unique identifier
-    unique_id = f"dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_" \
-                f"gamma{gamma}_lr{lr}_weight{weight}"
-    config['model_basename'] = f"MyProductGPT_{unique_id}"
+    unique_id = f"performer_nb_features{cfg['nb_features']}dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_gamma{gamma}_lr{lr}_weight{weight}"
+    config['model_basename'] = f"MyProductGPT_FeatureBased_{unique_id}"
+
+    if torch.cuda.device_count():
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(hash(unique_id)%torch.cuda.device_count())
+    os.environ["MASTER_ADDR"] = "127.0.0.1"
+    os.environ["MASTER_PORT"] = str(free_port())
 
     # 3) GPU pinning (one process per GPU)
     ngpu = torch.cuda.device_count()
@@ -83,38 +98,38 @@ def run_one_experiment(params):
     results = train_model(config)
 
     # 5) Write metrics JSON
-    metrics_file = f"FeatureBased_FullProductGPT_{unique_id}.json"
-    with open(metrics_file, 'w') as f:
-        json.dump({
-            "d_model":   d_model,
-            "d_ff":      d_ff,
-            "N":         N,
-            "num_heads": num_heads,
-            "gamma":     gamma,
-            "lr":        lr,
-            "weight":    weight,
-            "val_loss":  results['val_loss'],
-            "val_ppl":   results['val_ppl'],
-            "val_confusion_matrix": results['val_confusion_matrix'],
-            "val_hit_rate":          results['val_hit_rate'],
-            "val_f1_score":          results['val_f1_score'],
-            "val_auprc":             results['val_auprc'],
-            "best_checkpoint_path":  results['best_checkpoint_path']
-        }, f, indent=2)
+    json_path = Path(results["best_checkpoint_path"]).with_suffix(".json")
 
-    # 6) Upload checkpoint + metrics, then clean up
-    #     bucket = config['s3_bucket']
-    gcs_bucket = config["gcp_bucket"]  # <- your bucket name
+    if not json_path.exists():
+        print(f"[WARN] Expected JSON not found: {json_path}")
+    
+    s3 = get_s3()
+    bucket = config['s3_bucket']
 
-    ckpt   = results['best_checkpoint_path']
-    if ckpt and Path(ckpt).exists():
-        # upload_to_s3(ckpt, bucket, f"checkpoints/{Path(ckpt).name}")
-        upload_to_gcs(ckpt, gcs_bucket, f"checkpoints/{Path(ckpt).name}")
-        os.remove(ckpt)
+    ckpt = Path(results["best_checkpoint_path"])
+    if ckpt.exists() and s3_put(ckpt, bucket, f"FullProductGPT/performer/FeatureBased/checkpoints/{ckpt.name}", s3):
+         ckpt.unlink()
 
-    # upload_to_s3(metrics_file, bucket, f"metrics/{metrics_file}")
-    upload_to_gcs(metrics_file, gcs_bucket, f"metrics/{metrics_file}")
-    os.remove(metrics_file)
+    if s3_put(json_path, bucket, f"FullProductGPT/performer/FeatureBased/metrics/{json_path.name}", s3):
+        json_path.unlink()
+    
+    # with open(json_path, 'w') as f:
+    #     json.dump({
+    #         "d_model":   d_model,
+    #         "d_ff":      d_ff,
+    #         "N":         N,
+    #         "num_heads": num_heads,
+    #         "gamma":     gamma,
+    #         "lr":        lr,
+    #         "weight":    weight,
+    #         "val_loss":  results['val_loss'],
+    #         "val_ppl":   results['val_ppl'],
+    #         "val_confusion_matrix": results['val_confusion_matrix'],
+    #         "val_hit_rate":          results['val_hit_rate'],
+    #         "val_f1_score":          results['val_f1_score'],
+    #         "val_auprc":             results['val_auprc'],
+    #         "best_checkpoint_path":  results['best_checkpoint_path']
+    #     }, f, indent=2)
 
     return unique_id
 

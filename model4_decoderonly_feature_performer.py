@@ -353,6 +353,7 @@ class CausalPerformer(nn.Module):
     def __init__(self, d_model: int, n_heads: int,
                  dropout: float=0.1,
                  kernel_type: str="exp",
+                 nb_features: int=16,
                  block_size_h: int=1,
                  block_size_w: int=1):
         super().__init__()
@@ -361,7 +362,7 @@ class CausalPerformer(nn.Module):
         assert d_model % n_heads == 0, "d_model must be divisible by n_heads"
         self.d_k = d_model // n_heads
 
-        self.nb_features = max(1, math.ceil(math.log(d_model)))
+        self.nb_features = nb_features
         self.kernel_type = kernel_type
 
         self.block_size_h = block_size_h
@@ -553,6 +554,9 @@ class Transformer(nn.Module):
                  n_layers: int, 
                  n_heads: int,
                  d_ff: int, 
+                 nb_features: int,
+                 block_size_h: int,
+                 block_size_w: int,
                  dropout: float, 
                  feature_tensor: torch.Tensor,
                  special_token_ids: torch.Tensor,
@@ -587,7 +591,7 @@ class Transformer(nn.Module):
                 d_model        = d_model,
                 feature_tensor = feature_tensor,           # (59, 34)
                 product_ids    = list(range(13, 57)) + [59],      # 13 … 56
-                vocab_size_src     = vocab_size_src                # 59
+                vocab_size_src = vocab_size_src                # 59
         )
 
         self.pos_enc   = PositionalEncoding(d_model, max_seq_len, dropout)
@@ -595,7 +599,13 @@ class Transformer(nn.Module):
         # Build N decoder blocks
         blocks = []
         for _ in range(n_layers):
-            performer = CausalPerformer(d_model, n_heads, dropout)
+            performer = CausalPerformer(d_model = d_model, 
+                                        n_heads = n_heads, 
+                                        dropout = dropout, 
+                                        kernel_type = kernel_type,
+                                        nb_features = nb_features, 
+                                        block_size_h = block_size_h, 
+                                        block_size_w = block_size_w)                        
             ff_block  = FeedForwardBlock(d_model, d_ff, dropout)
             blk = DecoderBlock(d_model, performer, ff_block, dropout)
             blocks.append(blk)
@@ -639,6 +649,9 @@ def build_transformer(vocab_size_src: int,
                       n_heads: int,
                       d_ff: int,
                       dropout: float,
+                      nb_features: int,
+                      block_size_h: int,
+                      block_size_w: int,
                       feature_tensor: torch.Tensor,
                       special_token_ids: torch.Tensor,
                       kernel_type: str="exp"):
@@ -652,6 +665,9 @@ def build_transformer(vocab_size_src: int,
         n_heads      = n_heads,
         d_ff         = d_ff,
         dropout      = dropout,
+        nb_features  = nb_features,
+        block_size_h = block_size_h,
+        block_size_w = block_size_w,
         feature_tensor = feature_tensor,
         special_token_ids = special_token_ids,
         kernel_type  = kernel_type

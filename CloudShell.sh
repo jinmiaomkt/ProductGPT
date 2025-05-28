@@ -1,15 +1,15 @@
 # Inside CloudShell
 mkdir -p ~/metrics
-aws s3 cp s3://productgptbucket/FullProductGPT/metrics/ ~/metrics/ \
-  --recursive --exclude "*" --include "FullProductGPT*.json"
+aws s3 cp s3://productgptbucket/DecisionOnly/metrics/ ~/metrics/ \
+  --recursive --exclude "*" --include "DecisionOnly_performer*.json"
 
 # Zip and download
 cd ~
-zip -r FullProductGPT.zip metrics
+zip -r DecisionOnly.zip metrics
 # Click the "Download" button that appears in CloudShell after the zip finishes
 
 # Put it in a temporary folder in the same bucket
-aws s3 cp FullProductGPT.zip s3://productgptbucket/tmp/FullProductGPT.zip
+aws s3 cp DecisionOnly.zip s3://productgptbucket/tmp/DecisionOnly.zip
 
 
 

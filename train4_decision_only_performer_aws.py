@@ -136,26 +136,77 @@ def _make_loaders(cfg):
     return loader(mk(tr_ds), True), loader(mk(va_ds), False), loader(mk(te_ds), False), tok_tgt
 
 
-# --- loss -----------------------------------------------------
-class PairwiseRevenueLoss(nn.Module):
-    def __init__(self, revenue, vocab_size, ignore_index=0):
+# # --- loss -----------------------------------------------------
+# class PairwiseRevenueLoss(nn.Module):
+#     def __init__(self, revenue, vocab_size, ignore_index=0):
+#         super().__init__()
+#         if len(revenue) < vocab_size:
+#             revenue = revenue + [0.] * (vocab_size - len(revenue))
+#         rev = torch.as_tensor(revenue, dtype=torch.float32)
+#         self.register_buffer("penalty", -torch.abs(rev[:, None] - rev[None, :]))
+#         self.ignore = ignore_index
+
+#     def forward(self, logits, tgt):
+#         V = logits.size(-1)
+#         probs = F.softmax(logits.view(-1, V), dim=-1)
+#         tgt   = tgt.view(-1)
+#         keep  = tgt != self.ignore
+#         if keep.sum() == 0:
+#             return logits.sum() * 0.0
+#         pen = self.penalty.to(probs)
+#         return -(probs[keep] * pen[tgt[keep]]).sum(dim=-1).mean()
+
+class FocalLoss(nn.Module):
+    def __init__(self, gamma=0.0, ignore_index=0, class_weights=None):
+        """
+        Args:
+            gamma (float): Focal loss exponent, default=2.
+            ignore_index (int): Token ID to ignore in the loss.
+            class_weights (Tensor): 1D tensor of shape [num_classes],
+                                    e.g. to upweight rare classes.
+        """
         super().__init__()
-        if len(revenue) < vocab_size:
-            revenue = revenue + [0.] * (vocab_size - len(revenue))
-        rev = torch.as_tensor(revenue, dtype=torch.float32)
-        self.register_buffer("penalty", -torch.abs(rev[:, None] - rev[None, :]))
-        self.ignore = ignore_index
+        self.gamma = gamma
+        self.ignore_index = ignore_index
+        # Register the weights as a buffer so they move to GPU with the model.
+        if class_weights is not None:
+            self.register_buffer('class_weights', class_weights)
+        else:
+            self.class_weights = None
 
-    def forward(self, logits, tgt):
-        V = logits.size(-1)
-        probs = F.softmax(logits.view(-1, V), dim=-1)
-        tgt   = tgt.view(-1)
-        keep  = tgt != self.ignore
-        if keep.sum() == 0:
-            return logits.sum() * 0.0
-        pen = self.penalty.to(probs)
-        return -(probs[keep] * pen[tgt[keep]]).sum(dim=-1).mean()
+    def forward(self, inputs, targets):
+        """
+        inputs: (B, T, V) => raw logits
+        targets: (B, T)   => integer class IDs
+        """
+        B, T, V = inputs.shape
 
+        # Flatten to 1D
+        inputs_2d = inputs.reshape(-1, V)         # (B*T, V)
+        targets_1d = targets.reshape(-1)          # (B*T,)
+
+        # Use cross_entropy with 'none' reduction so we can apply focal transform ourselves
+        ce_loss = F.cross_entropy(
+            inputs_2d,
+            targets_1d,
+            reduction='none',
+            weight=self.class_weights  # <---- the magic: per-class weighting
+        )
+
+        # Mask out tokens == ignore_index
+        valid_mask = (targets_1d != self.ignore_index)
+        ce_loss = ce_loss[valid_mask]
+
+        # Focal transform
+        pt = torch.exp(-ce_loss)
+        focal = (1 - pt) ** self.gamma * ce_loss
+
+        # If everything got masked, return 0
+        if focal.numel() == 0:
+            return torch.tensor(0.0, device=inputs.device)
+
+        return focal.mean()
+    
 # --- tiny utils -------------------------------------------------
 def _transition_mask(lbl: torch.Tensor):
     return lbl != F.pad(lbl, (1, 0), value=-1)[:, :-1]
@@ -346,9 +397,15 @@ def train_model(cfg):
     pad_id = tok.token_to_id("[PAD]")
 
     model   = _build_model(cfg)
-    loss_fn = PairwiseRevenueLoss([0,1,10,1,10,1,10,1,10,0],
-                                  cfg["vocab_size_tgt"], pad_id)
+    # loss_fn = PairwiseRevenueLoss([0,1,10,1,10,1,10,1,10,0], cfg["vocab_size_tgt"], pad_id)
 
+    tokenizer_tgt = _build_tok()
+
+    weights = torch.ones(cfg['vocab_size_tgt'])
+    weights[9] = cfg['weight']
+    weights = weights.to(dev)
+    loss_fn = FocalLoss(gamma=cfg['gamma'], ignore_index=tokenizer_tgt.token_to_id('[PAD]'), class_weights=weights).to(dev)
+    
     eng, _, _, _ = deepspeed.initialize(
         model=model,
         model_parameters=model.parameters(),
@@ -386,7 +443,7 @@ def train_model(cfg):
         v_loss, v_ppl, v_all, v_cur_stop, v_after_stop, v_tr = _evaluate(
             va, eng, dev, loss_fn, cfg["ai_rate"], pad_id, tok)
         
-        print(f"Epoch {ep:02d}  ValLoss={v_loss:.4f}  PPL={v_ppl:.4f}")
+        print(f"Valudation Epoch {ep:02d}  ValLoss={v_loss:.4f}  PPL={v_ppl:.4f}")
         for tag, d in (
                 ("all",        v_all),
                 ("cur-STOP",   v_cur_stop),
@@ -402,14 +459,14 @@ def train_model(cfg):
                         "model_state_dict": eng.module.state_dict()}, ckpt_local)
             meta = _json_safe({
                 "best_checkpoint_path": ckpt_local.name,
-                "val_loss": best, "val_ppl": v_ppl,
-                "val_all": v_all, "val_cur_stop": v_cur_stop, "val_after_stop": v_after_stop, "val_transition": v_tr})
+                "val_loss": best, 
+                "val_ppl": v_ppl,
+                "val_all": v_all, 
+                "val_cur_stop": v_cur_stop, 
+                "val_after_stop": v_after_stop, 
+                "val_transition": v_tr})
             json_local.write_text(json.dumps(meta, indent=2))
 
-            if _upload(ckpt_local, bucket, ck_key, s3):
-                ckpt_local.unlink(missing_ok=True)
-            if _upload(json_local, bucket, js_key, s3):
-                json_local.unlink(missing_ok=True)
         else:
             patience += 1
             if patience >= cfg["patience"]:
@@ -424,7 +481,22 @@ def train_model(cfg):
     t_loss, t_ppl, t_all, t_cur_stop, t_after_stop, t_tr = _evaluate(
         te, eng, dev, loss_fn, cfg["ai_rate"], pad_id, tok)
 
-    print(f"Epoch {ep:02d}  ValLoss={t_loss:.4f}  PPL={t_ppl:.4f}")
+    # ---------- save test metrics -------------------------------
+    # reuse your json path or create a separate one
+    json_test = ckpt_local.with_suffix(".test.json")
+    test_meta = _json_safe({
+        "test_checkpoint_path": ckpt_local.name,
+        "test_loss": t_loss,
+        "test_ppl": t_ppl,
+        "test_all": t_all,
+        "test_cur_stop": t_cur_stop,
+        "test_after_stop": t_after_stop,
+        "test_transition": t_tr
+    })
+    json_test.write_text(json.dumps(test_meta, indent=2))
+
+    print(f"Test Epoch {ep:02d}  Test Loss={t_loss:.4f}  PPL={t_ppl:.4f}")
+
     for tag, d in (
             ("all",        t_all),
             ("cur-STOP",   t_cur_stop),
@@ -433,8 +505,13 @@ def train_model(cfg):
         print(f"  {tag:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
             f"AUPRC={d['auprc']:.4f}")
 
-    return {"uid": uid, "val_loss": best}
-
+    if _upload(ckpt_local, bucket, ck_key, s3):
+                ckpt_local.unlink(missing_ok=True)
+    if _upload(json_local, bucket, js_key, s3):
+                json_local.unlink(missing_ok=True)
+    
+    return {"uid": uid, "val_loss": best, "test_loss": t_loss}
+   
 # ──────────────── CLI (for quick manual run) ────────────────────
 if __name__ == "__main__":
     cfg = get_config()

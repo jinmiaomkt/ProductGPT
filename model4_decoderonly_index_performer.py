@@ -141,6 +141,7 @@ class CausalPerformer(nn.Module):
         self._create_feature_map()
 
     def _create_feature_map(self):
+        
         omega = torch.randn(self.nb_features, self.d_k) / math.sqrt(self.d_k)
         # Typically we don't train omega in Performer random feature approach
         self.omega = nn.Parameter(omega, requires_grad=False)
