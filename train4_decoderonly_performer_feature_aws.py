@@ -261,6 +261,7 @@ def build_model(cfg: Dict[str, Any], feat_tensor: torch.Tensor) -> nn.Module:
         n_layers=cfg["N"],
         n_heads=cfg["num_heads"],
         dropout=cfg["dropout"],
+        nb_features=cfg["nb_features"],
         kernel_type=cfg["kernel_type"],
         block_size_h=cfg["ai_rate"],
         block_size_w=cfg["ai_rate"],
