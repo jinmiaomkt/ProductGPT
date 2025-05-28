@@ -366,8 +366,8 @@ def train_model(cfg: Dict[str, Any]):
     model = build_model(cfg, feat_tensor).to(device)
 
     # ---- QAT stub (optional) -----------------------------------------
-    model.qconfig = torch.quantization.get_default_qat_qconfig("fbgemm")
-    torch.quantization.prepare_qat(model, inplace=True)
+    # model.qconfig = torch.quantization.get_default_qat_qconfig("fbgemm")
+    # torch.quantization.prepare_qat(model, inplace=True)
 
     # ---- criterion ----------------------------------------------------
     weights = torch.ones(cfg["vocab_size_tgt"], device=device)
