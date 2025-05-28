@@ -407,6 +407,22 @@ def train_model(cfg):
             print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
                   f"AUPRC={d['auprc']:.4f}")
 
+    # ---- NEW: save + upload test metrics ---------------------------
+    test_json = ckpt_path.with_suffix(".test.json")
+    test_json.write_text(json.dumps(_json_safe({
+        "checkpoint_path": ckpt_path.name,
+        "test_loss":  t_loss,
+        "test_ppl":   t_ppl,
+        "test_all":        t_all,
+        "test_stop_cur":   t_stop,
+        "test_after_stop": t_after,
+        "test_transition": t_tr
+    }), indent=2))
+
+    if _upload(test_json, bucket,
+               f"FullProductGPT/performer/Index/metrics/{test_json.name}", s3):
+        test_json.unlink(missing_ok=True)
+        
     # return {"uid": uid, "val_loss": best}
     return {"uid": uid, "val_loss": best, "best_checkpoint_path": str(ckpt_path)}
 

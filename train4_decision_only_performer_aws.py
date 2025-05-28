@@ -489,35 +489,25 @@ def train_model(cfg):
     t_loss, t_ppl, t_all, t_cur_stop, t_after_stop, t_tr = _evaluate(
         te, eng, dev, loss_fn, cfg["ai_rate"], pad_id, tok)
 
-    # ---------- save test metrics -------------------------------
-    # reuse your json path or create a separate one
-    json_test = ckpt_local.with_suffix(".test.json")
-    test_meta = _json_safe({
-        "test_checkpoint_path": ckpt_local.name,
-        "test_loss": t_loss,
-        "test_ppl": t_ppl,
-        "test_all": t_all,
-        "test_cur_stop": t_cur_stop,
-        "test_after_stop": t_after_stop,
-        "test_transition": t_tr
+    # ---------- append test metrics to the same JSON ----------------
+    # read what we wrote during validation
+    with json_local.open() as f:
+        meta = json.load(f)
+
+    meta.update({
+        "test_loss":        t_loss,
+        "test_ppl":         t_ppl,
+        "test_all":         t_all,
+        "test_cur_stop":    t_cur_stop,
+        "test_after_stop":  t_after_stop,
+        "test_transition":  t_tr,
     })
-    json_test.write_text(json.dumps(test_meta, indent=2))
 
-    print(f"Test Epoch {ep:02d}  Test Loss={t_loss:.4f}  PPL={t_ppl:.4f}")
+    json_local.write_text(json.dumps(meta, indent=2))
 
-    for tag, d in (
-            ("all",        t_all),
-            ("cur-STOP",   t_cur_stop),
-            ("after-STOP", t_after_stop),
-            ("transition", t_tr)):
-        print(f"  {tag:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
-            f"AUPRC={d['auprc']:.4f}")
-
-    if _upload(ckpt_local, bucket, ck_key, s3):
-                ckpt_local.unlink(missing_ok=True)
-    if _upload(json_local, bucket, js_key, s3):
-                json_local.unlink(missing_ok=True)
-    
+    # (re-)upload the updated file
+    _upload(json_local, bucket, js_key, s3)
+        
     return {"uid": uid, "val_loss": best, "test_loss": t_loss}
    
 # ──────────────── CLI (for quick manual run) ────────────────────
