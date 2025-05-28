@@ -185,12 +185,20 @@ class FocalLoss(nn.Module):
         inputs_2d = inputs.reshape(-1, V)         # (B*T, V)
         targets_1d = targets.reshape(-1)          # (B*T,)
 
+        # --- make sure `weight` matches logits’ dtype/device -------------
+        weight = None
+        if self.class_weights is not None:
+            weight = self.class_weights
+            if weight.dtype != inputs_2d.dtype or weight.device != inputs_2d.device:
+                weight = weight.to(device=inputs_2d.device, dtype=inputs_2d.dtype)
+
         # Use cross_entropy with 'none' reduction so we can apply focal transform ourselves
         ce_loss = F.cross_entropy(
             inputs_2d,
             targets_1d,
             reduction='none',
-            weight=self.class_weights  # <---- the magic: per-class weighting
+            weight=weight,  # <---- the magic: per-class weighting
+            ignore_index=self.ignore_index
         )
 
         # Mask out tokens == ignore_index
