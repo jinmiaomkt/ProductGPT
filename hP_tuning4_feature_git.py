@@ -85,7 +85,7 @@ def run_one_experiment(params):
     })
 
     # 2) Unique identifier
-    unique_id = f"performer_nb_features{cfg['nb_features']}dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_gamma{gamma}_lr{lr}_weight{weight}"
+    unique_id = f"performer_nb_features{config['nb_features']}dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_gamma{gamma}_lr{lr}_weight{weight}"
     config['model_basename'] = f"MyProductGPT_FeatureBased_{unique_id}"
 
     if torch.cuda.device_count():
