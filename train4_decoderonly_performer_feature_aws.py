@@ -377,6 +377,7 @@ def train_model(cfg: Dict[str, Any]):
     # ---- DeepSpeed ----------------------------------------------------
     ds_cfg = {
         "train_micro_batch_size_per_gpu": cfg["batch_size"],
+        "zero_allow_untested_optimizer": True,
         "gradient_accumulation_steps": 2,
         "optimizer": {
             "type": "Lamb",
