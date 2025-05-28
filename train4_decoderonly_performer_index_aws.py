@@ -395,7 +395,7 @@ def train_model(cfg):
                   f"AUPRC={d['auprc']:.4f}")
 
     # return {"uid": uid, "val_loss": best}
-    return { "uid": uid, "val_loss": best, "best_checkpoint_path": str(ckpt_path)}
+    return {"uid": uid, "val_loss": best, "best_checkpoint_path": str(ckpt_path)}
 
 # ══════════════════════ 8.  CLI ENTRY ═══════════════════════════════════
 if __name__ == "__main__":
