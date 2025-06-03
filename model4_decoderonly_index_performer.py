@@ -350,22 +350,11 @@ class Transformer(nn.Module):
                  d_ff: int, 
                  dropout: float, 
                  nb_features: int,
-                 block_size_h: int,
-                 block_size_w: int,
                  kernel_type="exp"):
         super().__init__()
         # Embedding
         self.token_emb = InputEmbeddings(d_model, vocab_size)
         self.pos_enc   = PositionalEncoding(d_model, max_seq_len, dropout)
-
-        # def __init__(self, 
-        #              d_model: int, 
-        #              n_heads: int,
-        #              dropout: float=0.1,
-        #              kernel_type: str="exp",
-        #              nb_features: int=16,
-        #              block_size_h: int=1,
-        #              block_size_w: int=1)
 
         # Build N decoder blocks
         blocks = []
