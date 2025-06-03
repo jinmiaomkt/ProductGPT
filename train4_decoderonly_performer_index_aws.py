@@ -138,18 +138,24 @@ def _perplexity(logits, targets, pad=0):
         return float("nan")
     return torch.exp(F.nll_loss(lp2d[m], tgt[m], reduction="mean")).item()
 
-def _subset(pred, lbl, probs, mask, classes=np.arange(1, 10)):
+def _subset(pred, lbl, probs, rev_err, mask, classes=np.arange(1, 10)):
+    """Compute metrics on boolean `mask`."""
     if mask.sum() == 0:
-        return {"hit": np.nan, "f1": np.nan, "auprc": np.nan}
-    p, l, pr = pred[mask], lbl[mask], probs[mask]
-    hit = accuracy_score(l, p)
-    f1  = f1_score(l, p, average="macro")
+        nan = float("nan")
+        return {"hit": nan, "f1": nan, "auprc": nan, "rev_mae": nan}
+
+    from sklearn.metrics import accuracy_score, f1_score, average_precision_score
+    from sklearn.preprocessing import label_binarize
+
+    p, l, pr, re = pred[mask], lbl[mask], probs[mask], rev_err[mask]
+    hit  = accuracy_score(l, p)
+    f1   = f1_score(l, p, average="macro")
     try:
         auprc = average_precision_score(
             label_binarize(l, classes=classes), pr[:, 1:10], average="macro")
     except ValueError:
-        auprc = np.nan
-    return {"hit": hit, "f1": f1, "auprc": auprc}
+        auprc = float("nan")
+    return {"hit": hit, "f1": f1, "auprc": auprc, "rev_mae": re.mean()}
 
 def _json_safe(o: Any):
     import numpy as _np, torch as _th
@@ -232,14 +238,18 @@ def _build_model(cfg):
 # ══════════════════════ 6.  EVALUATION ══════════════════════════════════
 def _evaluate(loader, eng, dev, loss_fn, pad, tok, ai_rate):
     if not loader:
-        nan = float("nan"); emp = {"hit":nan,"f1":nan,"auprc":nan}
+        nan = float("nan"); emp = {"hit":nan,"f1":nan,"auprc":nan,"rev_mae":nan}
         return nan, nan, emp, emp, emp, emp
 
     special = {pad, tok.token_to_id("[SOS]"), tok.token_to_id("[UNK]")}
 
     tot_loss = tot_ppl = 0.0
-    P, L, PR = [], [], []
+    P, L, PR, RE = [], [], [], []
     m_stop, m_after_stop, m_tr = [], [], []
+
+    REV_VEC = torch.tensor([1, 10, 1, 10, 1, 10, 1, 10, 0],
+                       dtype=torch.float32)                      # shape (9,)
+    rev_vec = REV_VEC.to(dev)
 
     eng.eval()
     with torch.no_grad():
@@ -275,23 +285,29 @@ def _evaluate(loader, eng, dev, loss_fn, pad, tok, ai_rate):
 
             P.append(pred[keep]); L.append(lbl[keep]); PR.append(prob[keep])
 
+            # --- RevMAE -------------------------------------------------
+            exp_rev  = (prob[..., 1:10] * rev_vec).sum(-1)       # (B, n_slots)
+            true_rev = rev_vec[(tgt - 1).clamp(min=0, max=8)]    # same shape
+            rev_err  = torch.abs(exp_rev - true_rev).view(-1).cpu().numpy()
+            RE.append(rev_err)
+
             flat = lambda m: m.view(-1).cpu().numpy()[keep]
             m_stop.append(flat(tgt == 9))
             prev = F.pad(tgt, (1,0), value=-1)[:, :-1]
             m_after_stop.append(flat(prev == 9))
             m_tr.append(flat(transition_mask(tgt)))
 
-    P,L,PR = map(np.concatenate, (P,L,PR))
+    P,L,PR,RE = map(np.concatenate, (P,L,PR,RE))
     m_stop_cur   = np.concatenate(m_stop)
     m_after_stop = np.concatenate(m_after_stop)
     m_transition = np.concatenate(m_tr)
     all_mask     = np.ones_like(P, dtype=bool)
 
     return (tot_loss/len(loader), tot_ppl/len(loader),
-            _subset(P,L,PR, all_mask),
-            _subset(P,L,PR, m_stop_cur),
-            _subset(P,L,PR, m_after_stop),
-            _subset(P,L,PR, m_transition))
+            _subset(P,L,PR,RE, all_mask),
+            _subset(P,L,PR,RE, m_stop_cur),
+            _subset(P,L,PR,RE, m_after_stop),
+            _subset(P,L,PR,RE, m_transition))
 
 # ══════════════════════ 7.  TRAINING LOOP ═══════════════════════════════
 def train_model(cfg):
@@ -379,7 +395,7 @@ def train_model(cfg):
         for tag,d in (("all",v_all),("STOP_cur",v_stop),
                       ("after_STOP",v_after),("transition",v_tr)):
             print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
-                  f"AUPRC={d['auprc']:.4f}")
+                  f"AUPRC={d['auprc']:.4f}  RevMAE={d['rev_mae']:.4f}")
 
         # -------------- checkpoint logic --------------------------------
         if best is None or v_loss < best:
@@ -390,15 +406,19 @@ def train_model(cfg):
                 "val_all_hit_rate"     : v_all["hit"],
                 "val_all_f1_score"     : v_all["f1"],
                 "val_all_auprc"        : v_all["auprc"],
+                "val_all_rev_mae"      : v_all["rev_mae"],
                 "val_stop_hit_rate"    : v_stop["hit"],
                 "val_stop_f1_score"    : v_stop["f1"],
                 "val_stop_auprc"       : v_stop["auprc"],
+                "val_stop_rev_mae"     : v_stop["rev_mae"],
                 "val_after_hit_rate"     : v_after["hit"],
                 "val_after_f1_score"     : v_after["f1"],
                 "val_after_auprc"        : v_after["auprc"],
+                "val_after_rev_mae"      : v_after["rev_mae"],
                 "val_transition_hit_rate"     : v_tr["hit"],
                 "val_transition_f1_score"     : v_tr["f1"],
                 "val_transition_auprc"        : v_tr["auprc"],
+                "val_transition_rev_mae"      : v_tr["rev_mae"],
             }
             torch.save({"epoch": ep,
                          "best_val_loss": best_val_loss,
@@ -443,15 +463,19 @@ def train_model(cfg):
         "test_all_hit_rate"     : t_all["hit"],
         "test_all_f1_score"     : t_all["f1"],
         "test_all_auprc"        : t_all["auprc"],
+        "test_all_rev_mae"      : t_all["rev_mae"],
         "test_stop_hit_rate"    : t_stop["hit"],
         "test_stop_f1_score"    : t_stop["f1"],
         "test_stop_auprc"       : t_stop["auprc"],
+        "test_stop_rev_mae"     : t_stop["rev_mae"],
         "test_after_hit_rate"     : t_after["hit"],
         "test_after_f1_score"     : t_after["f1"],
         "test_after_auprc"        : t_after["auprc"],
+        "test_after_rev_mae"      : t_after["rev_mae"],
         "test_transition_hit_rate"     : t_tr["hit"],
         "test_transition_f1_score"     : t_tr["f1"],
         "test_transition_auprc"        : t_tr["auprc"],
+        "test_transition_rev_mae"      : t_tr["rev_mae"],
     }
     json_path.write_text(json.dumps(_json_safe(metadata), indent=2))
     print(f"[INFO] Metrics written → {json_path}")    
