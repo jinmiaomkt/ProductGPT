@@ -179,10 +179,11 @@ class CausalPerformer(nn.Module):
 
         # Determine block boundaries (causal)
         # block i => last index is (i+1)*block_size_w - 1
-        q_indices = torch.arange(seq_len_q, device=q.device)
-        q_block_indices = q_indices // self.block_size_h
+        q_indices = torch.arange(seq_len_q, device=q.device) # (0, 1, 2, ..., 1023)
+        q_block_indices = q_indices // self.block_size_h # (0, 1, 2, ..., 1023) // 24 --> (0, 0, 0, ..., 41)
         key_indices = (q_block_indices + 1)*self.block_size_w - 1
         key_indices = key_indices.clamp(max=seq_len_k - 1)
+        # Clamping is a method in which we limit a number in a range or in between two given numbers.
 
         # Gather from prefix sums
         # K_cum_selected => shape (B, seq_len_q, n_heads, r)
@@ -373,9 +374,7 @@ class Transformer(nn.Module):
                                         n_heads = n_heads, 
                                         dropout = dropout, 
                                         kernel_type = kernel_type,
-                                        nb_features = nb_features, 
-                                        block_size_h = block_size_h, 
-                                        block_size_w = block_size_w)
+                                        nb_features = nb_features)
             ff_block  = FeedForwardBlock(d_model, d_ff, dropout)
             blk = DecoderBlock(d_model, performer, ff_block, dropout)
             blocks.append(blk)
@@ -410,8 +409,6 @@ def build_transformer(vocab_size: int,
                       d_ff: int,
                       dropout: float,
                       nb_features: int,
-                      block_size_h: int,
-                      block_size_w: int,
                       kernel_type: str="exp"):
     
     transformer = Transformer(
@@ -424,8 +421,6 @@ def build_transformer(vocab_size: int,
         dropout      = dropout,
         kernel_type  = kernel_type,
         nb_features  = nb_features,
-        block_size_h = block_size_h,
-        block_size_w = block_size_w
     )
 
     for p in transformer.parameters():
