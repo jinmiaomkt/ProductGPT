@@ -14,7 +14,10 @@ import pandas as pd
 # ------------------------------------------------------------------
 # 1.  Folder with your result files
 # ------------------------------------------------------------------
-ROOT = Path("/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/TuningResult/DecisionOnly/metrics")
+ROOT = Path('/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/TuningResult/FeatureBasedFull')
+
+# '/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/TuningResult/IndexBasedFull/metrics'
+# "/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/TuningResult/DecisionOnly/metrics"
 
 # ------------------------------------------------------------------
 # 2.  Map short tokens → canonical column names
@@ -104,3 +107,4 @@ df = df[[c for c in front if c in df.columns] +
 out = ROOT / "metrics_summary.xlsx"
 df.to_excel(out, index=False)
 print(f"✔  {len(df)} files summarised → {out}")
+

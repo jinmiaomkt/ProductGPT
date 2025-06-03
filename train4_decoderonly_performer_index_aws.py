@@ -226,8 +226,6 @@ def _build_model(cfg):
         dropout     = cfg["dropout"],
         max_seq_len = cfg["seq_len_ai"],
         nb_features = cfg["nb_features"], 
-        block_size_h = cfg["ai_rate"],
-        block_size_w = cfg["ai_rate"],
         kernel_type = cfg["kernel_type"]
 )
 
@@ -385,21 +383,38 @@ def train_model(cfg):
 
         # -------------- checkpoint logic --------------------------------
         if best is None or v_loss < best:
-            best, patience = v_loss, 0
+            best_val_loss, best_epoch, patience = v_loss, ep, 0
+            best_val_metrics = {
+                "val_loss"             : v_loss,
+                "val_ppl"              : v_ppl,
+                "val_all_hit_rate"     : v_all["hit"],
+                "val_all_f1_score"     : v_all["f1"],
+                "val_all_auprc"        : v_all["auprc"],
+                "val_stop_hit_rate"    : v_stop["hit"],
+                "val_stop_f1_score"    : v_stop["f1"],
+                "val_stop_auprc"       : v_stop["auprc"],
+                "val_after_hit_rate"     : v_after["hit"],
+                "val_after_f1_score"     : v_after["f1"],
+                "val_after_auprc"        : v_after["auprc"],
+                "val_transition_hit_rate"     : v_tr["hit"],
+                "val_transition_f1_score"     : v_tr["f1"],
+                "val_transition_auprc"        : v_tr["auprc"],
+            }
             torch.save({"epoch": ep,
-                        "model_state_dict": eng.module.state_dict()}, ckpt_path)
-            json_path.write_text(json.dumps(_json_safe({
-                "best_checkpoint_path": ckpt_path.name,
-                "val_loss": best, "val_ppl": v_ppl,
-                "val_all": v_all, "val_stop_cur": v_stop,
-                "val_after_stop": v_after, "val_transition": v_tr
-            }), indent=2))
-            print(f"  [*] new best saved → {ckpt_path.name}")
+                         "best_val_loss": best_val_loss,
+                         "model_state_dict": eng.module.state_dict()}, ckpt_path)
+            # json_path.write_text(json.dumps(_json_safe({
+            #     "best_checkpoint_path": ckpt_path.name,
+            #     "val_loss": best, "val_ppl": v_ppl,
+            #     "val_all": v_all, "val_stop_cur": v_stop,
+            #     "val_after_stop": v_after, "val_transition": v_tr
+            # }), indent=2))
+            # print(f"  [*] new best saved → {ckpt_path.name}")
 
-            if _upload(ckpt_path, bucket, ck_key, s3):
-                ckpt_path.unlink(missing_ok=True)
-            if _upload(json_path, bucket, js_key, s3):
-                json_path.unlink(missing_ok=True)
+            # if _upload(ckpt_path, bucket, ck_key, s3):
+            #     ckpt_path.unlink(missing_ok=True)
+            # if _upload(json_path, bucket, js_key, s3):
+            #     json_path.unlink(missing_ok=True)
 
         else:
             patience += 1
@@ -420,21 +435,47 @@ def train_model(cfg):
             print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
                   f"AUPRC={d['auprc']:.4f}")
 
-    # ---- NEW: save + upload test metrics ---------------------------
-    test_json = ckpt_path.with_suffix(".test.json")
-    test_json.write_text(json.dumps(_json_safe({
-        "checkpoint_path": ckpt_path.name,
-        "test_loss":  t_loss,
-        "test_ppl":   t_ppl,
-        "test_all":        t_all,
-        "test_stop_cur":   t_stop,
-        "test_after_stop": t_after,
-        "test_transition": t_tr
-    }), indent=2))
+    metadata = {
+        "best_checkpoint_path": ckpt_path.name,
+        **best_val_metrics,
+        "test_loss"            : t_loss,
+        "test_ppl"             : t_ppl,
+        "test_all_hit_rate"     : t_all["hit"],
+        "test_all_f1_score"     : t_all["f1"],
+        "test_all_auprc"        : t_all["auprc"],
+        "test_stop_hit_rate"    : t_stop["hit"],
+        "test_stop_f1_score"    : t_stop["f1"],
+        "test_stop_auprc"       : t_stop["auprc"],
+        "test_after_hit_rate"     : t_after["hit"],
+        "test_after_f1_score"     : t_after["f1"],
+        "test_after_auprc"        : t_after["auprc"],
+        "test_transition_hit_rate"     : t_tr["hit"],
+        "test_transition_f1_score"     : t_tr["f1"],
+        "test_transition_auprc"        : t_tr["auprc"],
+    }
+    json_path.write_text(json.dumps(_json_safe(metadata), indent=2))
+    print(f"[INFO] Metrics written → {json_path}")    
 
-    if _upload(test_json, bucket,
-               f"FullProductGPT/performer/Index/metrics/{test_json.name}", s3):
-        test_json.unlink(missing_ok=True)
+
+    # # ---- NEW: save + upload test metrics ---------------------------
+    # test_json = ckpt_path.with_suffix(".test.json")
+    # test_json.write_text(json.dumps(_json_safe({
+    #     "checkpoint_path": ckpt_path.name,
+    #     "test_loss":  t_loss,
+    #     "test_ppl":   t_ppl,
+    #     "test_all":        t_all,
+    #     "test_stop_cur":   t_stop,
+    #     "test_after_stop": t_after,
+    #     "test_transition": t_tr
+    # }), indent=2))
+
+    if _upload(ckpt_path, bucket,
+               f"FullProductGPT/performer/Index/metrics/{ckpt_path.name}", s3):
+        ckpt_path.unlink(missing_ok=True)
+    
+    if _upload(json_path, bucket,
+               f"FullProductGPT/performer/Index/metrics/{json_path.name}", s3):
+        json_path.unlink(missing_ok=True)
 
     # return {"uid": uid, "val_loss": best}
     return {"uid": uid, "val_loss": best, "best_checkpoint_path": str(ckpt_path)}
