@@ -318,8 +318,6 @@ def _build_model(cfg):
         dropout     = cfg["dropout"],
         max_seq_len = cfg["seq_len_ai"],
         nb_features = cfg["nb_features"], 
-        block_size_h = cfg["ai_rate"],
-        block_size_w = cfg["ai_rate"],
         kernel_type = cfg["kernel_type"]
     )
 
