@@ -86,7 +86,7 @@ def run_one_experiment(params):
     })
 
     # 2) Unique identifier
-    unique_id = f"performer_nb_features{config['nb_features']}dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_gamma{gamma}_lr{lr}_weight{weight}"
+    unique_id = f"featurebased_performerfeatures{config['nb_features']}dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_gamma{gamma}_lr{lr}_weight{weight}"
     config['model_basename'] = f"MyProductGPT_FeatureBased_{unique_id}"
 
     if torch.cuda.device_count():
@@ -117,25 +117,7 @@ def run_one_experiment(params):
 
     if s3_put(json_path, bucket, f"FullProductGPT/performer/Feature/metrics/{json_path.name}", s3):
         json_path.unlink()
-    
-    # with open(json_path, 'w') as f:
-    #     json.dump({
-    #         "d_model":   d_model,
-    #         "d_ff":      d_ff,
-    #         "N":         N,
-    #         "num_heads": num_heads,
-    #         "gamma":     gamma,
-    #         "lr":        lr,
-    #         "weight":    weight,
-    #         "val_loss":  results['val_loss'],
-    #         "val_ppl":   results['val_ppl'],
-    #         "val_confusion_matrix": results['val_confusion_matrix'],
-    #         "val_hit_rate":          results['val_hit_rate'],
-    #         "val_f1_score":          results['val_f1_score'],
-    #         "val_auprc":             results['val_auprc'],
-    #         "best_checkpoint_path":  results['best_checkpoint_path']
-    #     }, f, indent=2)
-
+        
     return unique_id
 
 def hyperparam_sweep_parallel(max_workers=None):

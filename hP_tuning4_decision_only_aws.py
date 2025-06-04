@@ -59,7 +59,7 @@ def run_one_experiment(params):
     })
 
     # 2) Unique basename / id
-    unique_id = f"performer_nb_features{config['nb_features']}_ai_rate{config['ai_rate']}_dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_lr{lr}_weight{weight}"
+    unique_id = f"decisiononly_performerfeatures{config['nb_features']}_ai_rate{config['ai_rate']}_dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_lr{lr}_weight{weight}"
     config["model_basename"] = f"DecisionOnly_{unique_id}"
 
     # 3) (Optional) pin each process to a different GPU if you have >1 GPU
