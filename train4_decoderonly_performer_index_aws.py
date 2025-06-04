@@ -384,7 +384,7 @@ def train_model(cfg):
 
             eng.zero_grad(); eng.backward(loss); eng.step()
             running += loss.item()
-        print(f"\nTrain loss {running/len(tr):.4f}")
+        # print(f"\nTrain loss {running/len(tr):.4f}")
 
         # ---------------- validation ------------------------------------
         v_loss,v_ppl,v_all,v_stop,v_after,v_tr = _evaluate(
@@ -395,6 +395,10 @@ def train_model(cfg):
                       ("after_STOP",v_after),("transition",v_tr)):
             print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
                   f"AUPRC={d['auprc']:.4f}  RevMAE={d['rev_mae']:.4f}")
+        
+        print(f"[INFO] artefacts will be saved to\n"
+          f"  • s3://{bucket}/{ck_key}\n"
+          f"  • s3://{bucket}/{js_key}\n")
 
         # -------------- checkpoint logic --------------------------------
         if best_val_loss is None or v_loss < best_val_loss:
