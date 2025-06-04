@@ -297,12 +297,6 @@ def _evaluate(loader, eng, dev, loss_fn, pad, tok, ai_rate):
 
             P.append(pred[keep]); L.append(lbl[keep]); PR.append(prob[keep])
 
-            # --- RevMAE -------------------------------------------------
-            exp_rev  = (prob[..., 1:10] * rev_vec).sum(-1)       # (B, n_slots)
-            true_rev = rev_vec[(tgt - 1).clamp(min=0, max=8)]    # same shape
-            rev_err  = torch.abs(exp_rev - true_rev).view(-1).cpu().numpy()
-            RE.append(rev_err)
-
             flat = lambda m: m.view(-1).cpu().numpy()[keep]
             m_stop.append(flat(tgt == 9))
             prev = F.pad(tgt, (1,0), value=-1)[:, :-1]
@@ -369,7 +363,7 @@ def train_model(cfg):
         }
     )
 
-    best, patience = None, 0
+    best_val_loss, patience = None, 0
     for ep in range(cfg["num_epochs"]):
         # ---------------- training -------------------------------------
         eng.train(); running = 0.0
@@ -410,7 +404,7 @@ def train_model(cfg):
                   f"AUPRC={d['auprc']:.4f}  RevMAE={d['rev_mae']:.4f}")
 
         # -------------- checkpoint logic --------------------------------
-        if best is None or v_loss < best:
+        if best_val_loss is None or v_loss < best_val_loss:
             best_val_loss, best_epoch, patience = v_loss, ep, 0
             best_val_metrics = {
                 "val_loss"             : v_loss,
