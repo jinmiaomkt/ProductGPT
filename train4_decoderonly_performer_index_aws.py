@@ -22,6 +22,9 @@ from model4_decoderonly_index_performer   import build_transformer
 from dataset4_productgpt import TransformerDataset, load_json_dataset
 from tokenizers           import Tokenizer, models, pre_tokenizers
 
+from sklearn.metrics import accuracy_score, f1_score, average_precision_score
+from sklearn.preprocessing import label_binarize
+
 # ══════════════════════ 1.  TOKENISERS ══════════════════════════════════
 def _tok_base(extra: Dict[str, int] | None = None) -> Tokenizer:
     """
@@ -143,9 +146,6 @@ def _subset(pred, lbl, probs, rev_err, mask, classes=np.arange(1, 10)):
     if mask.sum() == 0:
         nan = float("nan")
         return {"hit": nan, "f1": nan, "auprc": nan, "rev_mae": nan}
-
-    from sklearn.metrics import accuracy_score, f1_score, average_precision_score
-    from sklearn.preprocessing import label_binarize
 
     p, l, pr, re = pred[mask], lbl[mask], probs[mask], rev_err[mask]
     hit  = accuracy_score(l, p)
@@ -282,7 +282,7 @@ def _evaluate(loader, eng, dev, loss_fn, pad, tok, ai_rate):
 
             # ---- metrics --------------------------------------------------
             prob = F.softmax(logits, dim=-1).view(-1, logits.size(-1)).cpu().numpy()
-            rev_vec = rev_vec.to(dtype=prob.dtype)
+            rev_vec = rev_vec.to(dtype=logits.dtype)
 
             pred = prob.argmax(1)
             lbl  = tgt.view(-1).cpu().numpy()
