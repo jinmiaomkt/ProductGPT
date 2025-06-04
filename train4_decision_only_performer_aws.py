@@ -228,10 +228,10 @@ def _ppl(logits, tgt, pad=0):
         return float("nan")
     return torch.exp(F.nll_loss(lp2[m], t[m], reduction="mean")).item()
 
-def _subset(pred, lbl, probs, mask, cls=np.arange(1, 10)):
+def _subset(pred, lbl, probs, rev_err, mask, cls=np.arange(1, 10)):
     if mask.sum() == 0:
         return {"hit": np.nan, "f1": np.nan, "auprc": np.nan, "rev_mae": np.nan}
-    p, l, pr, re = pred[mask], lbl[mask], probs[mask]
+    p, l, pr, re = pred[mask], lbl[mask], probs[mask], rev_err[mask]
     hit = accuracy_score(l, p)
     f1  = f1_score(l, p, average="macro")
     try:

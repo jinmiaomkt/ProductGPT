@@ -295,10 +295,10 @@ def build_model(cfg: Dict[str, Any], feat_tensor: torch.Tensor) -> nn.Module:
 
 # ══════════════════════════════ 9. Evaluation ════════════════════════
 
-def _subset(pred, lbl, probs, mask, classes=np.arange(1, 10)):
+def _subset(pred, lbl, probs, rev_err, mask, classes=np.arange(1, 10)):
     if mask.sum() == 0:
         return {"hit": np.nan, "f1": np.nan, "auprc": np.nan, "rev_mae": np.nan}
-    p, l, pr, re = pred[mask], lbl[mask], probs[mask]
+    p, l, pr, re = pred[mask], lbl[mask], probs[mask], rev_err[mask]
     return {
         "hit": accuracy_score(l, p),
         "f1": f1_score(l, p, average="macro"),
