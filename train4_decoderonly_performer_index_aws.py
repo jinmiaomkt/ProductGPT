@@ -321,8 +321,8 @@ def train_model(cfg):
 
     s3      = _s3_client()
     bucket  = cfg["s3_bucket"]
-    ck_key  = f"FullProductGPT/performer/Index/checkpoints/{ckpt_path.name}"
-    js_key  = f"FullProductGPT/performer/Index/metrics/{json_path.name}"
+    ck_key  = f"FullProductGPT/performer/IndexBased/checkpoints/{ckpt_path.name}"
+    js_key  = f"FullProductGPT/performer/IndexBased/metrics/{json_path.name}"
     
     print(f"[INFO] artefacts will be saved to\n"
           f"  • s3://{bucket}/{ck_key}\n"
@@ -483,7 +483,6 @@ def train_model(cfg):
     json_path.write_text(json.dumps(_json_safe(metadata), indent=2))
     print(f"[INFO] Metrics written → {json_path}")    
 
-
     # # ---- NEW: save + upload test metrics ---------------------------
     # test_json = ckpt_path.with_suffix(".test.json")
     # test_json.write_text(json.dumps(_json_safe({
@@ -497,11 +496,11 @@ def train_model(cfg):
     # }), indent=2))
 
     if _upload(ckpt_path, bucket,
-               f"FullProductGPT/performer/Index/metrics/{ckpt_path.name}", s3):
+               f"FullProductGPT/performer/IndexBased/checkpoints/{ckpt_path.name}", s3):
         ckpt_path.unlink(missing_ok=True)
     
     if _upload(json_path, bucket,
-               f"FullProductGPT/performer/Index/metrics/{json_path.name}", s3):
+               f"FullProductGPT/performer/IndexBased/metrics/{json_path.name}", s3):
         json_path.unlink(missing_ok=True)
 
     return {"uid": uid, "val_loss": best_val_loss, "best_checkpoint_path": str(ckpt_path)}
