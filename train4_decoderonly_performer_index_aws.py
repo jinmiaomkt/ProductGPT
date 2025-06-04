@@ -250,7 +250,7 @@ def _evaluate(loader, eng, dev, loss_fn, pad, tok, ai_rate):
     REV_VEC = torch.tensor([1, 10, 1, 10, 1, 10, 1, 10, 0],
                        dtype=torch.float32)                      # shape (9,)
     
-    REV_VEC = torch.as_tensor(REV_VEC, dtype=prob.dtype, device=prob.device)
+    # REV_VEC = torch.as_tensor(REV_VEC, dtype=prob.dtype, device=prob.device)
 
     rev_vec = REV_VEC.to(dev)
 
@@ -282,6 +282,8 @@ def _evaluate(loader, eng, dev, loss_fn, pad, tok, ai_rate):
 
             # ---- metrics --------------------------------------------------
             prob = F.softmax(logits, dim=-1).view(-1, logits.size(-1)).cpu().numpy()
+            rev_vec = rev_vec.to(dtype=prob.dtype)
+
             pred = prob.argmax(1)
             lbl  = tgt.view(-1).cpu().numpy()
             keep = ~np.isin(lbl, list(special))
