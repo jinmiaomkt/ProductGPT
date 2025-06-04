@@ -456,7 +456,7 @@ def train_model(cfg):
         for tag,d in (("all",t_all),("STOP_cur",t_stop),
                       ("after_STOP",t_after),("transition",t_tr)):
             print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
-                  f"AUPRC={d['auprc']:.4f}")
+                  f"AUPRC={d['auprc']:.4f}   RevMAE={d['rev_mae']:.4f} ")
 
     metadata = {
         "best_checkpoint_path": ckpt_path.name,

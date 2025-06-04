@@ -485,7 +485,7 @@ def train_model(cfg):
                 ("after-STOP", v_after),
                 ("transition", v_tr)):
             print(f"  {tag:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
-                f"AUPRC={d['auprc']:.4f}")
+                f"AUPRC={d['auprc']:.4f}   RevMAE={d['rev_mae']:.4f} ")
 
         # ----- store best ----------------------------------------
         if best_val_loss is None or v_loss < best_val_loss:
@@ -535,7 +535,7 @@ def train_model(cfg):
             ("after-STOP", t_after),
             ("transition", v_tr)):
             print(f"  {tag:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
-                f"AUPRC={d['auprc']:.4f}")
+                f"AUPRC={d['auprc']:.4f}   RevMAE={d['rev_mae']:.4f} ")
 
     metadata = {
         "best_checkpoint_path": ckpt_local.name,
