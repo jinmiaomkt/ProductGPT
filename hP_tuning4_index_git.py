@@ -61,7 +61,7 @@ def run_one(params):
                 "lr":lr, 
                 "weight":wt})
     
-    uid  = (f"performer_nb_features{cfg['nb_features']}_dmodel{dm}_ff{dff}_N{N}_heads{H}_lr{lr}_weight{wt}")
+    uid  = (f"indexbased_performerfeatures{cfg['nb_features']}_dmodel{dm}_ff{dff}_N{N}_heads{H}_lr{lr}_weight{wt}")
     stem = f"MyProductGPT_{uid}"
     cfg["model_basename"] = stem
 
