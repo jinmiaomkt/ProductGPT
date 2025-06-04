@@ -555,8 +555,6 @@ class Transformer(nn.Module):
                  n_heads: int,
                  d_ff: int, 
                  nb_features: int,
-                 block_size_h: int,
-                 block_size_w: int,
                  dropout: float, 
                  feature_tensor: torch.Tensor,
                  special_token_ids: torch.Tensor,
@@ -603,9 +601,7 @@ class Transformer(nn.Module):
                                         n_heads = n_heads, 
                                         dropout = dropout, 
                                         kernel_type = kernel_type,
-                                        nb_features = nb_features, 
-                                        block_size_h = block_size_h, 
-                                        block_size_w = block_size_w)                        
+                                        nb_features = nb_features)                        
             ff_block  = FeedForwardBlock(d_model, d_ff, dropout)
             blk = DecoderBlock(d_model, performer, ff_block, dropout)
             blocks.append(blk)
@@ -650,8 +646,6 @@ def build_transformer(vocab_size_src: int,
                       d_ff: int,
                       dropout: float,
                       nb_features: int,
-                      block_size_h: int,
-                      block_size_w: int,
                       feature_tensor: torch.Tensor,
                       special_token_ids: torch.Tensor,
                       kernel_type: str="exp"):
@@ -666,8 +660,6 @@ def build_transformer(vocab_size_src: int,
         d_ff         = d_ff,
         dropout      = dropout,
         nb_features  = nb_features,
-        block_size_h = block_size_h,
-        block_size_w = block_size_w,
         feature_tensor = feature_tensor,
         special_token_ids = special_token_ids,
         kernel_type  = kernel_type
