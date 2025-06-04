@@ -21,13 +21,13 @@ from train4_decoderonly_performer_feature_aws import train_model
 
 # Hyper‑parameter grids
 nb_features_values = [16, 32]
-d_model_values     = [32, 64, 128]
-d_ff_values        = [32, 64, 128]
-N_values           = [4, 6, 8]
+d_model_values     = [32, 64]
+d_ff_values        = [32, 64]
+N_values           = [6, 8]
 num_heads_values   = [4, 8]
 gamma_values       = [1.0]
 lr_values          = [1e-4]
-weight_values      = [2, 4, 8]
+weight_values      = [2, 4]
 
 # Precompute every combo
 HP_GRID = list(itertools.product(
