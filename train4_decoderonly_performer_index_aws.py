@@ -281,9 +281,16 @@ def _evaluate(loader, eng, dev, loss_fn, pad, tok, ai_rate):
             tot_ppl  += _perplexity(logits, tgt_loss, pad)
 
             # ---- metrics --------------------------------------------------
-            prob = F.softmax(logits, dim=-1).view(-1, logits.size(-1)).cpu().numpy()
-            rev_vec = rev_vec.to(dtype=logits.dtype)
+            prob_t = F.softmax(logits, dim=-1)
+            rev_vec = rev_vec.to(dtype=prob_t.dtype)
 
+            # ----- revenue error (all torch) --------------------------------
+            exp_rev  = (prob_t[..., 1:10] * rev_vec).sum(-1)              # (B, n_slots)
+            true_rev = rev_vec[(tgt - 1).clamp(min=0, max=8)]             # same shape
+            rev_err  = torch.abs(exp_rev - true_rev).view(-1).cpu().numpy()
+            RE.append(rev_err)
+
+            prob = prob_t.view(-1, prob_t.size(-1)).cpu().numpy()         # NumPy copy
             pred = prob.argmax(1)
             lbl  = tgt.view(-1).cpu().numpy()
             keep = ~np.isin(lbl, list(special))
@@ -317,7 +324,7 @@ def _evaluate(loader, eng, dev, loss_fn, pad, tok, ai_rate):
 # ══════════════════════ 7.  TRAINING LOOP ═══════════════════════════════
 def train_model(cfg):
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    uid   = (f"performer_nb_features{cfg['nb_features']}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}_"
+    uid   = (f"indexbased_performerfeatures{cfg['nb_features']}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}_"
              f"heads{cfg['num_heads']}_lr{cfg['lr']}_weight{cfg['weight']}")
     ckpt_path = Path(cfg["model_folder"]) / f"FullProductGPT_{uid}.pt"
     json_path = ckpt_path.with_suffix(".json")
