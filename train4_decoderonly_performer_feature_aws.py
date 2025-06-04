@@ -297,14 +297,14 @@ def build_model(cfg: Dict[str, Any], feat_tensor: torch.Tensor) -> nn.Module:
 
 def _subset(pred, lbl, probs, mask, classes=np.arange(1, 10)):
     if mask.sum() == 0:
-        return {"hit": np.nan, "f1": np.nan, "auprc": np.nan}
-    p, l, pr = pred[mask], lbl[mask], probs[mask]
+        return {"hit": np.nan, "f1": np.nan, "auprc": np.nan, "rev_mae": np.nan}
+    p, l, pr, re = pred[mask], lbl[mask], probs[mask]
     return {
         "hit": accuracy_score(l, p),
         "f1": f1_score(l, p, average="macro"),
         "auprc": average_precision_score(label_binarize(l, classes=classes), pr[:, 1:10], average="macro"),
+        "rev_mae": re.mean(),
     }
-
 
 def evaluate(loader: DataLoader, model: nn.Module, dev: torch.device, loss_fn, pad: int, tok: Tokenizer, ai_rate: int):
     if not loader:
