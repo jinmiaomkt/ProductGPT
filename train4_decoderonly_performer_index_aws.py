@@ -249,9 +249,6 @@ def _evaluate(loader, eng, dev, loss_fn, pad, tok, ai_rate):
 
     REV_VEC = torch.tensor([1, 10, 1, 10, 1, 10, 1, 10, 0],
                        dtype=torch.float32)                      # shape (9,)
-    
-    # REV_VEC = torch.as_tensor(REV_VEC, dtype=prob.dtype, device=prob.device)
-
     rev_vec = REV_VEC.to(dev)
 
     eng.eval()

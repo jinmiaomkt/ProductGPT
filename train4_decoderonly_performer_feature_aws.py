@@ -340,9 +340,15 @@ def evaluate(loader: DataLoader, model: nn.Module, dev: torch.device, loss_fn, p
             tot_loss += loss_fn(logits, tgt_).item()
             tot_ppl += perplexity(logits, tgt_, pad)
 
-            prob = F.softmax(logits, dim=-1).view(-1, logits.size(-1)).cpu().numpy()
-            rev_vec = rev_vec.to(dtype=logits.dtype)
+            prob_t = F.softmax(logits, dim=-1)
+            rev_vec = rev_vec.to(dtype=prob_t.dtype)
 
+            # ----- revenue error (all torch) --------------------------------
+            exp_rev  = (prob_t[..., 1:10] * rev_vec).sum(-1)              # (B, n_slots)
+            true_rev = rev_vec[(tgt - 1).clamp(min=0, max=8)]             # same shape
+            rev_err  = torch.abs(exp_rev - true_rev).view(-1).cpu().numpy()
+
+            prob = prob_t.view(-1, prob_t.size(-1)).cpu().numpy()         # NumPy copy
             pred = prob.argmax(1)
             lbl = tgt.view(-1).cpu().numpy()
             keep = ~np.isin(lbl, list(special))
@@ -350,12 +356,7 @@ def evaluate(loader: DataLoader, model: nn.Module, dev: torch.device, loss_fn, p
             P.append(pred[keep])
             L.append(lbl[keep])
             PR.append(prob[keep])
-
-            # --- RevMAE -------------------------------------------------
-            exp_rev  = (prob[..., 1:10] * rev_vec).sum(-1)       # (B, n_slots)
-            true_rev = rev_vec[(tgt - 1).clamp(min=0, max=8)]    # same shape
-            rev_err  = torch.abs(exp_rev - true_rev).view(-1).cpu().numpy()
-            RE.append(rev_err)
+            RE.append(rev_err[keep])
 
             flat = lambda m: m.view(-1).cpu().numpy()[keep]
             m_stop.append(flat(tgt == 9))
