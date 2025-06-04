@@ -240,13 +240,20 @@ def build_dataloaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, Data
 
 
 # ══════════════════════════════ 7. S3 helpers ═════════════════════════
+def _json_safe(o: Any):
+    import numpy as _np, torch as _th
+    if isinstance(o, (_th.Tensor, _th.nn.Parameter)): return o.cpu().tolist()
+    if isinstance(o, _np.ndarray):  return o.tolist()
+    if isinstance(o, (_np.floating, _np.integer)):   return o.item()
+    if isinstance(o, dict):   return {k: _json_safe(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)): return [_json_safe(v) for v in o]
+    return o
 
 def _s3_client():
     try:
         return boto3.client("s3")
     except botocore.exceptions.BotoCoreError:
         return None
-
 
 def _upload(local: Path, bucket: str, key: str, s3) -> bool:
     if s3 is None or not local.exists():
@@ -553,9 +560,11 @@ def train_model(cfg: Dict[str, Any]):
         "test_transition_auprc"        : t_tr["auprc"],
         "test_transition_rev_mae"      : t_tr["rev_mae"],
     }
+    json_path.write_text(json.dumps(_json_safe(metadata), indent=2))
+    print(f"[INFO] Metrics written → {json_path}")    
 
     if _upload(ckpt_path, bucket,
-               f"FullProductGPT/performer/FeatureBased/metrics/{ckpt_path.name}", s3):
+               f"FullProductGPT/performer/FeatureBased/checkpoints/{ckpt_path.name}", s3):
         ckpt_path.unlink(missing_ok=True)
     
     if _upload(json_path, bucket,

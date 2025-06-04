@@ -572,7 +572,7 @@ def train_model(cfg):
     print(f"[INFO] Metrics written → {json_local}")    
 
     if _upload(ckpt_local, bucket,
-               f"DecisionOnly/metrics/{ckpt_local.name}", s3):
+               f"DecisionOnly/checkpoints/{ckpt_local.name}", s3):
         ckpt_local.unlink(missing_ok=True)
     
     if _upload(json_local, bucket,

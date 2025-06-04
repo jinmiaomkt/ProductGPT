@@ -73,7 +73,7 @@ def run_one_experiment(params):
 
     # 1) Build config
     config = get_config()
-    config["num_epochs"] = 800
+    config["num_epochs"] = 300
 
     config["ai_rate"] = 15                          # <<<< FIX
     config["seq_len_ai"] = config["ai_rate"] * config["seq_len_tgt"]
