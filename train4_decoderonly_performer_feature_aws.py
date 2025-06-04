@@ -391,7 +391,7 @@ def train_model(cfg: Dict[str, Any]):
     bucket = cfg["s3_bucket"]
     ck_key = f"FullProductGPT/performer/FeatureBased/checkpoints/{ckpt_path.name}"
     js_key = f"FullProductGPT/performer/FeatureBased/metrics/{json_path.name}"
-    print(f"[INFO] artefacts → s3://{bucket}/{ck_key}")
+    print(f"[INFO] artefacts → s3://{bucket}/{ck_key} and s3://{bucket}/{js_key}")
 
     # --- data ----------------------------------------------------------
     train_dl, val_dl, test_dl, tok_tgt = build_dataloaders(cfg)
@@ -463,7 +463,7 @@ def train_model(cfg: Dict[str, Any]):
             engine.backward(loss)
             engine.step()
             running += loss.item()
-        print(f"Train loss {running / len(train_dl):.4f}")
+        # print(f"Train loss {running / len(train_dl):.4f}")
 
         # ---- validation ----------------------------------------------
         v_loss,v_ppl,v_all,v_stop,v_after,v_tr = evaluate(val_dl, engine, device, loss_fn, pad_id, tok_tgt, cfg["ai_rate"])
@@ -473,7 +473,9 @@ def train_model(cfg: Dict[str, Any]):
                       ("after_STOP",v_after),("transition",v_tr)):
             print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
                   f"AUPRC={d['auprc']:.4f}  RevMAE={d['rev_mae']:.4f}")
-            
+
+        print(f"[INFO] artefacts → s3://{bucket}/{ck_key} and s3://{bucket}/{js_key}")
+
         if best_val_loss is None or v_loss < best_val_loss:
             best_val_loss, patience = v_loss, 0
 
@@ -527,6 +529,7 @@ def train_model(cfg: Dict[str, Any]):
                       ("after_STOP",t_after),("transition",t_tr)):
             print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
                   f"AUPRC={d['auprc']:.4f}")
+        print(f"[INFO] artefacts → s3://{bucket}/{ck_key} and s3://{bucket}/{js_key}")
 
     metadata = {
         "best_checkpoint_path": ckpt_path.name,
