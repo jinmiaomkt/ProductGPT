@@ -486,6 +486,10 @@ def train_model(cfg):
                 ("transition", v_tr)):
             print(f"  {tag:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
                 f"AUPRC={d['auprc']:.4f}   RevMAE={d['rev_mae']:.4f} ")
+            
+        print(f"[INFO] artefacts will be saved to\n"
+          f"  • s3://{bucket}/{ck_key}\n"
+          f"  • s3://{bucket}/{js_key}\n")
 
         # ----- store best ----------------------------------------
         if best_val_loss is None or v_loss < best_val_loss:
@@ -536,6 +540,10 @@ def train_model(cfg):
             ("transition", v_tr)):
             print(f"  {tag:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
                 f"AUPRC={d['auprc']:.4f}   RevMAE={d['rev_mae']:.4f} ")
+
+        print(f"[INFO] artefacts will be saved to\n"
+          f"  • s3://{bucket}/{ck_key}\n"
+          f"  • s3://{bucket}/{js_key}\n")
 
     metadata = {
         "best_checkpoint_path": ckpt_local.name,
