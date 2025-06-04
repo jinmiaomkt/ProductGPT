@@ -340,10 +340,14 @@ def _evaluate(loader, eng, dev, loss_fn, step, pad, tok):
     special = {pad, tok.token_to_id("[SOS]"), tok.token_to_id("[UNK]")}
 
     tloss = tppl = 0.0
-    P, L, PR = [], [], []
+    P, L, PR, RE = [], [], [], []
     cur_stop_mask_all   = []
     after_stop_mask_all = []
     transition_mask_all = []
+
+    REV_VEC = torch.tensor([1, 10, 1, 10, 1, 10, 1, 10, 0],
+                       dtype=torch.float32)                      # shape (9,)
+    rev_vec = REV_VEC.to(dev)
 
     eng.eval()
     with torch.no_grad():
@@ -363,15 +367,25 @@ def _evaluate(loader, eng, dev, loss_fn, step, pad, tok):
             tloss += loss_fn(logits, tgt_masked).item()
             tppl  += _ppl(logits, tgt_masked, pad)
 
+            # ---- metrics --------------------------------------------------
+            prob_t = F.softmax(logits, dim=-1)
+            rev_vec = rev_vec.to(dtype=prob_t.dtype)
+
+            # ----- revenue error (all torch) --------------------------------
+            exp_rev  = (prob_t[..., 1:10] * rev_vec).sum(-1)              # (B, n_slots)
+            true_rev = rev_vec[(tgt - 1).clamp(min=0, max=8)]             # same shape
+            rev_err  = torch.abs(exp_rev - true_rev).view(-1).cpu().numpy()
+
             # ─── flatten predictions & labels (after skipping specials) ───
-            prob = F.softmax(logits, dim=-1).view(-1, logits.size(-1)).cpu().numpy()
+            prob = prob_t.softmax(logits, dim=-1).view(-1, logits.size(-1)).cpu().numpy()
             pred = prob.argmax(1)
             lbl  = tgt.view(-1).cpu().numpy()
 
             keep = ~np.isin(lbl, list(special))      # drop [PAD] [SOS] [UNK]
-            P .append(pred[keep])
-            L .append(lbl [keep])
+            P.append(pred[keep])
+            L.append(lbl [keep])
             PR.append(prob[keep])
+            RE.append(rev_err[keep])
 
             # derived masks
             flat = lambda m: m.view(-1).cpu().numpy()[keep]
@@ -384,6 +398,7 @@ def _evaluate(loader, eng, dev, loss_fn, step, pad, tok):
     P = np.concatenate(P)
     L = np.concatenate(L)
     PR = np.concatenate(PR)
+    RE = np.concatenate(RE)
     cur_stop_mask    = np.concatenate(cur_stop_mask_all)
     after_stop_mask  = np.concatenate(after_stop_mask_all)
     transition_mask  = np.concatenate(transition_mask_all)
@@ -391,17 +406,17 @@ def _evaluate(loader, eng, dev, loss_fn, step, pad, tok):
     all_mask = np.ones_like(P, dtype=bool)
 
     return (tloss / len(loader), tppl / len(loader),
-            _subset(P, L, PR, all_mask),
-            _subset(P, L, PR, cur_stop_mask),
-            _subset(P, L, PR, after_stop_mask),
-            _subset(P, L, PR, transition_mask))
+            _subset(P, L, PR, RE, all_mask),
+            _subset(P, L, PR, RE, cur_stop_mask),
+            _subset(P, L, PR, RE, after_stop_mask),
+            _subset(P, L, PR, RE, transition_mask))
 
 # ═════════════════ training loop ════════════════════════════════
 def train_model(cfg):
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # ---------- unique run-id & file names -----------------------
-    uid   = (f"performer_nb_features{cfg['nb_features']}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}_"
+    uid   = (f"decisiononly_performerfeatures{cfg['nb_features']}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}_"
              f"heads{cfg['num_heads']}_lr{cfg['lr']}_weight{cfg['weight']}")
     ckpt_local = Path(cfg["model_folder"]) / f"DecisionOnly_{uid}.pt"
     json_local = ckpt_local.with_suffix(".json")
@@ -445,7 +460,7 @@ def train_model(cfg):
     )
 
     # ---------- epochs ------------------------------------------
-    best, patience = None, 0
+    best_val_loss, patience = None, 0
     for ep in range(cfg["num_epochs"]):
         eng.train(); run = 0.0
         for b in tqdm(tr, desc=f"Ep {ep:02d}", leave=False):
@@ -462,32 +477,45 @@ def train_model(cfg):
             run += loss.item()
         print(f"\nTrain loss {run/len(tr):.4f}")
 
-        v_loss, v_ppl, v_all, v_cur_stop, v_after_stop, v_tr = _evaluate(
+        v_loss,v_ppl,v_all,v_stop,v_after,v_tr = _evaluate(
             va, eng, dev, loss_fn, cfg["ai_rate"], pad_id, tok)
         
         print(f"Valudation Epoch {ep:02d}  ValLoss={v_loss:.4f}  PPL={v_ppl:.4f}")
         for tag, d in (
                 ("all",        v_all),
-                ("cur-STOP",   v_cur_stop),
-                ("after-STOP", v_after_stop),
+                ("cur-STOP",   v_stop),
+                ("after-STOP", v_after),
                 ("transition", v_tr)):
             print(f"  {tag:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
                 f"AUPRC={d['auprc']:.4f}")
 
         # ----- store best ----------------------------------------
-        if best is None or v_loss < best:
-            best, patience = v_loss, 0
+        if best_val_loss is None or v_loss < best_val_loss:
+            best_val_loss, patience = v_loss, 0
+
+            best_val_metrics = {
+                "val_loss"             : v_loss,
+                "val_ppl"              : v_ppl,
+                "val_all_hit_rate"     : v_all["hit"],
+                "val_all_f1_score"     : v_all["f1"],
+                "val_all_auprc"        : v_all["auprc"],
+                "val_all_rev_mae"      : v_all["rev_mae"],
+                "val_stop_hit_rate"    : v_stop["hit"],
+                "val_stop_f1_score"    : v_stop["f1"],
+                "val_stop_auprc"       : v_stop["auprc"],
+                "val_stop_rev_mae"     : v_stop["rev_mae"],
+                "val_after_hit_rate"     : v_after["hit"],
+                "val_after_f1_score"     : v_after["f1"],
+                "val_after_auprc"        : v_after["auprc"],
+                "val_after_rev_mae"      : v_after["rev_mae"],
+                "val_transition_hit_rate"     : v_tr["hit"],
+                "val_transition_f1_score"     : v_tr["f1"],
+                "val_transition_auprc"        : v_tr["auprc"],
+                "val_transition_rev_mae"      : v_tr["rev_mae"],
+            }
             torch.save({"epoch": ep,
-                        "model_state_dict": eng.module.state_dict()}, ckpt_local)
-            meta = _json_safe({
-                "best_checkpoint_path": ckpt_local.name,
-                "val_loss": best, 
-                "val_ppl": v_ppl,
-                "val_all": v_all, 
-                "val_cur_stop": v_cur_stop, 
-                "val_after_stop": v_after_stop, 
-                "val_transition": v_tr})
-            json_local.write_text(json.dumps(meta, indent=2))
+                         "best_val_loss": best_val_loss,
+                         "model_state_dict": eng.module.state_dict()}, ckpt_local)
 
         else:
             patience += 1
@@ -500,38 +528,52 @@ def train_model(cfg):
         state = torch.load(ckpt_local, map_location=dev)
         eng.module.load_state_dict(state["model_state_dict"])
 
-    t_loss, t_ppl, t_all, t_cur_stop, t_after_stop, t_tr = _evaluate(
-        te, eng, dev, loss_fn, cfg["ai_rate"], pad_id, tok)
+        t_loss,t_ppl,t_all,t_stop,t_after,t_tr = _evaluate(te, eng, dev, loss_fn, cfg["ai_rate"], pad_id, tok)
 
-    print(f"Valudation Epoch {ep:02d}  ValLoss={v_loss:.4f}  PPL={v_ppl:.4f}")
-    for tag, d in (
-        ("all",        v_all),
-        ("cur-STOP",   v_cur_stop),
-        ("after-STOP", v_after_stop),
-        ("transition", v_tr)):
-        print(f"  {tag:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
-              f"AUPRC={d['auprc']:.4f}")
+        print(f"Valudation Epoch {ep:02d}  ValLoss={v_loss:.4f}  PPL={v_ppl:.4f}")
+        for tag, d in (
+            ("all",        v_all),
+            ("cur-STOP",   t_stop),
+            ("after-STOP", t_after),
+            ("transition", v_tr)):
+            print(f"  {tag:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
+                f"AUPRC={d['auprc']:.4f}")
 
-    # ---------- append test metrics to the same JSON ----------------
-    # read what we wrote during validation
-    with json_local.open() as f:
-        meta = json.load(f)
+    metadata = {
+        "best_checkpoint_path": ckpt_local.name,
+        **best_val_metrics,
+        "test_loss"            : t_loss,
+        "test_ppl"             : t_ppl,
+        "test_all_hit_rate"     : t_all["hit"],
+        "test_all_f1_score"     : t_all["f1"],
+        "test_all_auprc"        : t_all["auprc"],
+        "test_all_rev_mae"      : t_all["rev_mae"],
+        "test_stop_hit_rate"    : t_stop["hit"],
+        "test_stop_f1_score"    : t_stop["f1"],
+        "test_stop_auprc"       : t_stop["auprc"],
+        "test_stop_rev_mae"     : t_stop["rev_mae"],
+        "test_after_hit_rate"     : t_after["hit"],
+        "test_after_f1_score"     : t_after["f1"],
+        "test_after_auprc"        : t_after["auprc"],
+        "test_after_rev_mae"      : t_after["rev_mae"],
+        "test_transition_hit_rate"     : t_tr["hit"],
+        "test_transition_f1_score"     : t_tr["f1"],
+        "test_transition_auprc"        : t_tr["auprc"],
+        "test_transition_rev_mae"      : t_tr["rev_mae"],
+    }
 
-    meta.update({
-        "test_loss":        t_loss,
-        "test_ppl":         t_ppl,
-        "test_all":         t_all,
-        "test_cur_stop":    t_cur_stop,
-        "test_after_stop":  t_after_stop,
-        "test_transition":  t_tr,
-    })
+    json_local.write_text(json.dumps(_json_safe(metadata), indent=2))
+    print(f"[INFO] Metrics written → {json_local}")    
 
-    json_local.write_text(json.dumps(meta, indent=2))
+    if _upload(ckpt_local, bucket,
+               f"DecisionOnly/metrics/{ckpt_local.name}", s3):
+        ckpt_local.unlink(missing_ok=True)
+    
+    if _upload(json_local, bucket,
+               f"DecisionOnly/metrics/{json_local.name}", s3):
+        json_local.unlink(missing_ok=True)
 
-    # (re-)upload the updated file
-    _upload(json_local, bucket, js_key, s3)
-
-    return {"uid": uid, "val_loss": best, "test_loss": t_loss}
+    return {"uid": uid, "val_loss": best_val_loss, "best_checkpoint_path": str(ckpt_local)}
    
 # ──────────────── CLI (for quick manual run) ────────────────────
 if __name__ == "__main__":
