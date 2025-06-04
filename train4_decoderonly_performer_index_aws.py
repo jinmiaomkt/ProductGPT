@@ -500,7 +500,6 @@ def train_model(cfg):
                f"FullProductGPT/performer/Index/metrics/{json_path.name}", s3):
         json_path.unlink(missing_ok=True)
 
-    # return {"uid": uid, "val_loss": best}
     return {"uid": uid, "val_loss": best_val_loss, "best_checkpoint_path": str(ckpt_path)}
 
 # ══════════════════════ 8.  CLI ENTRY ═══════════════════════════════════

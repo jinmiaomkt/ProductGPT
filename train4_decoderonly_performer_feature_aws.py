@@ -285,8 +285,6 @@ def build_model(cfg: Dict[str, Any], feat_tensor: torch.Tensor) -> nn.Module:
         dropout=cfg["dropout"],
         nb_features=cfg["nb_features"],
         kernel_type=cfg["kernel_type"],
-        block_size_h=cfg["ai_rate"],
-        block_size_w=cfg["ai_rate"],
         d_ff=cfg["d_ff"],
         feature_tensor=feat_tensor,
         special_token_ids=SPECIAL_IDS,
@@ -500,12 +498,12 @@ def train_model(cfg: Dict[str, Any]):
                 "val_transition_rev_mae"      : v_tr["rev_mae"],
             }
 
-            ckpt = {
-                "epoch": ep,
-                "best_val_loss": best_val_loss,
-                "model_state_dict": engine.module.state_dict(),
-            }
-            torch.save(ckpt, ckpt_path)
+            # ckpt = {
+            #     "epoch": ep,
+            #     "best_val_loss": best_val_loss,
+            #     "model_state_dict": engine.module.state_dict(),
+            # }
+            # torch.save(ckpt, ckpt_path)
 
             # json_path.write_text(json.dumps({"val_loss": best_loss}, indent=2))
             # json_path.write_text(json.dumps(meta, indent=2))
