@@ -73,6 +73,7 @@ def run_one_experiment(params):
 
     # 1) Build config
     config = get_config()
+    config["num_epochs"] = 800
     config.update({
         'nb_features': nbf,
         'd_model':    d_model,
