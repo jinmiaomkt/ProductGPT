@@ -288,14 +288,13 @@ def _evaluate(loader, eng, dev, loss_fn, pad, tok, ai_rate):
             exp_rev  = (prob_t[..., 1:10] * rev_vec).sum(-1)              # (B, n_slots)
             true_rev = rev_vec[(tgt - 1).clamp(min=0, max=8)]             # same shape
             rev_err  = torch.abs(exp_rev - true_rev).view(-1).cpu().numpy()
-            RE.append(rev_err)
 
             prob = prob_t.view(-1, prob_t.size(-1)).cpu().numpy()         # NumPy copy
             pred = prob.argmax(1)
             lbl  = tgt.view(-1).cpu().numpy()
             keep = ~np.isin(lbl, list(special))
 
-            P.append(pred[keep]); L.append(lbl[keep]); PR.append(prob[keep])
+            P.append(pred[keep]); L.append(lbl[keep]); PR.append(prob[keep]); RE.append(rev_err[keep])
 
             flat = lambda m: m.view(-1).cpu().numpy()[keep]
             m_stop.append(flat(tgt == 9))
@@ -379,10 +378,7 @@ def train_model(cfg):
             assert pos.numel() == tgt.size(1), (
                 f"expected {tgt.size(1)} slots but got {pos.numel()}"
             )
-            # n_slots = tgt.size(1)
-            # pos = torch.arange(cfg["ai_rate"]-1,
-            #                    cfg["ai_rate"]*n_slots,
-            #                    cfg["ai_rate"], device=dev)
+
             logits = eng(x)[:, pos, :]             # (B, n_slots, V)
 
             tgt_train = tgt.clone()
@@ -508,7 +504,7 @@ def train_model(cfg):
         json_path.unlink(missing_ok=True)
 
     # return {"uid": uid, "val_loss": best}
-    return {"uid": uid, "val_loss": best, "best_checkpoint_path": str(ckpt_path)}
+    return {"uid": uid, "val_loss": best_val_loss, "best_checkpoint_path": str(ckpt_path)}
 
 # ══════════════════════ 8.  CLI ENTRY ═══════════════════════════════════
 if __name__ == "__main__":
