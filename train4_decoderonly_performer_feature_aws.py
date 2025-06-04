@@ -382,7 +382,7 @@ def train_model(cfg: Dict[str, Any]):
 
     # --- artefact paths ------------------------------------------------
     uid = (
-        f"performer_featurebased_performerfeatures{cfg['nb_features']}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_"
+        f"featurebased_performerfeatures{cfg['nb_features']}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_"
         f"N{cfg['N']}_heads{cfg['num_heads']}_lr{cfg['lr']}_w{cfg['weight']}"
     )
     ckpt_path = Path(cfg["model_folder"]) / f"FullProductGPT_{uid}.pt"
@@ -447,7 +447,7 @@ def train_model(cfg: Dict[str, Any]):
             optimizer.load_state_dict(state["optimizer_state_dict"])
 
     # ---- training -----------------------------------------------------
-    best_loss, patience = None, 0
+    best_val_loss, patience = None, 0
     for ep in range(cfg["num_epochs"]):
         engine.train()
         running = 0.0
@@ -459,42 +459,57 @@ def train_model(cfg: Dict[str, Any]):
             tgt_ = tgt.clone()
             tgt_[transition_mask(tgt)] = pad_id
             loss = loss_fn(logits, tgt_)
+
+            engine.zero_grad()
             engine.backward(loss)
             engine.step()
             running += loss.item()
         print(f"Train loss {running / len(train_dl):.4f}")
 
         # ---- validation ----------------------------------------------
-        v_metrics = evaluate(val_dl, engine, device, loss_fn, pad_id, tok_tgt, cfg["ai_rate"])
-        v_loss = v_metrics[0]
-        _show(f"[Epoch {ep:02d}] VAL", v_metrics)
-        # print(f"Epoch {ep:02d} ValLoss={v_loss:.4f} PPL={v_metrics[1]:.4f}")
+        v_loss,v_ppl,v_all,v_stop,v_after,v_tr = evaluate(val_dl, engine, device, loss_fn, pad_id, tok_tgt, cfg["ai_rate"])
+        
+        print(f"Epoch {ep:02d}  ValLoss={v_loss:.4f}  PPL={v_ppl:.4f}")
+        for tag,d in (("all",v_all),("STOP_cur",v_stop),
+                      ("after_STOP",v_after),("transition",v_tr)):
+            print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
+                  f"AUPRC={d['auprc']:.4f}  RevMAE={d['rev_mae']:.4f}")
+            
+        if best_val_loss is None or v_loss < best_val_loss:
+            best_val_loss, patience = v_loss, 0
 
-        if best_loss is None or v_loss < best_loss:
-            best_loss, patience = v_loss, 0
+            best_val_metrics = {
+                "val_loss"             : v_loss,
+                "val_ppl"              : v_ppl,
+                "val_all_hit_rate"     : v_all["hit"],
+                "val_all_f1_score"     : v_all["f1"],
+                "val_all_auprc"        : v_all["auprc"],
+                "val_all_rev_mae"      : v_all["rev_mae"],
+                "val_stop_hit_rate"    : v_stop["hit"],
+                "val_stop_f1_score"    : v_stop["f1"],
+                "val_stop_auprc"       : v_stop["auprc"],
+                "val_stop_rev_mae"     : v_stop["rev_mae"],
+                "val_after_hit_rate"     : v_after["hit"],
+                "val_after_f1_score"     : v_after["f1"],
+                "val_after_auprc"        : v_after["auprc"],
+                "val_after_rev_mae"      : v_after["rev_mae"],
+                "val_transition_hit_rate"     : v_tr["hit"],
+                "val_transition_f1_score"     : v_tr["f1"],
+                "val_transition_auprc"        : v_tr["auprc"],
+                "val_transition_rev_mae"      : v_tr["rev_mae"],
+            }
+
             ckpt = {
                 "epoch": ep,
+                "best_val_loss": best_val_loss,
                 "model_state_dict": engine.module.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
             }
             torch.save(ckpt, ckpt_path)
+
             # json_path.write_text(json.dumps({"val_loss": best_loss}, indent=2))
-
-            # ─── save full validation metrics ───────────────────────────────
-            meta = {
-                "best_checkpoint_path": ckpt_path.name,
-
-                # validation
-                "val_loss":        v_metrics[0],
-                "val_ppl":         v_metrics[1],
-                "val_all":         v_metrics[2],
-                "val_cur_stop":    v_metrics[3],
-                "val_after_stop":  v_metrics[4],
-                "val_transition":  v_metrics[5],
-            }
-            json_path.write_text(json.dumps(meta, indent=2))
-            _upload(json_path, bucket, js_key, s3)
-            _upload(ckpt_path, bucket, ck_key, s3)
+            # json_path.write_text(json.dumps(meta, indent=2))
+            # _upload(json_path, bucket, js_key, s3)
+            # _upload(ckpt_path, bucket, ck_key, s3)
         else:
             patience += 1
             if patience >= cfg["patience"]:
@@ -505,27 +520,48 @@ def train_model(cfg: Dict[str, Any]):
     if ckpt_path.exists():
         state = torch.load(ckpt_path, map_location=device)
         engine.module.load_state_dict(state["model_state_dict"])
-        test_metrics = evaluate(test_dl, engine, device, loss_fn, pad_id, tok_tgt, cfg["ai_rate"])
-        # print(f"TEST Loss={test_metrics[0]:.4f}  PPL={test_metrics[1]:.4f}")
-        _show("** TEST **", test_metrics)
 
-        # ─── append test metrics and re-upload ───────────────────────────
-    with json_path.open() as f:
-        meta = json.load(f)
+        t_loss,t_ppl,t_all,t_stop,t_after,t_tr = evaluate(test_dl, engine, device, loss_fn, pad_id, tok_tgt, cfg["ai_rate"])
+        
+        print(f"\n** TEST ** Loss={t_loss:.4f}  PPL={t_ppl:.4f}")
+        for tag,d in (("all",t_all),("STOP_cur",t_stop),
+                      ("after_STOP",t_after),("transition",t_tr)):
+            print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
+                  f"AUPRC={d['auprc']:.4f}")
 
-    meta.update({
-        "test_loss":        test_metrics[0],
-        "test_ppl":         test_metrics[1],
-        "test_all":         test_metrics[2],
-        "test_cur_stop":    test_metrics[3],
-        "test_after_stop":  test_metrics[4],
-        "test_transition":  test_metrics[5],
-    })
+    metadata = {
+        "best_checkpoint_path": ckpt_path.name,
+        **best_val_metrics,
+        "test_loss"            : t_loss,
+        "test_ppl"             : t_ppl,
+        "test_all_hit_rate"     : t_all["hit"],
+        "test_all_f1_score"     : t_all["f1"],
+        "test_all_auprc"        : t_all["auprc"],
+        "test_all_rev_mae"      : t_all["rev_mae"],
+        "test_stop_hit_rate"    : t_stop["hit"],
+        "test_stop_f1_score"    : t_stop["f1"],
+        "test_stop_auprc"       : t_stop["auprc"],
+        "test_stop_rev_mae"     : t_stop["rev_mae"],
+        "test_after_hit_rate"     : t_after["hit"],
+        "test_after_f1_score"     : t_after["f1"],
+        "test_after_auprc"        : t_after["auprc"],
+        "test_after_rev_mae"      : t_after["rev_mae"],
+        "test_transition_hit_rate"     : t_tr["hit"],
+        "test_transition_f1_score"     : t_tr["f1"],
+        "test_transition_auprc"        : t_tr["auprc"],
+        "test_transition_rev_mae"      : t_tr["rev_mae"],
+    }
 
-    json_path.write_text(json.dumps(meta, indent=2))
-    _upload(json_path, bucket, js_key, s3)
+    if _upload(ckpt_path, bucket,
+               f"FullProductGPT/performer/FeatureBased/metrics/{ckpt_path.name}", s3):
+        ckpt_path.unlink(missing_ok=True)
+    
+    if _upload(json_path, bucket,
+               f"FullProductGPT/performer/FeatureBased/metrics/{json_path.name}", s3):
+        json_path.unlink(missing_ok=True)
 
-    return {"uid": uid, "val_loss": best_loss, "checkpoint": str(ckpt_path)}
+    # return {"uid": uid, "val_loss": best}
+    return {"uid": uid, "val_loss": best_val_loss, "best_checkpoint_path": str(ckpt_path)}
 
 
 # ══════════════════════════════ 11. CLI ═══════════════════════════════
