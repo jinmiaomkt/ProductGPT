@@ -309,17 +309,23 @@ def _subset(pred, lbl, probs, mask, classes=np.arange(1, 10)):
 def evaluate(loader: DataLoader, model: nn.Module, dev: torch.device, loss_fn, pad: int, tok: Tokenizer, ai_rate: int):
     if not loader:
         nan = float("nan")
-        emp = {"hit": nan, "f1": nan, "auprc": nan}
+        emp = {"hit": nan, "f1": nan, "auprc": nan, "rev_mae":nan}
         return nan, nan, emp, emp, emp, emp
 
     special = {pad, tok.token_to_id("[SOS]"), tok.token_to_id("[UNK]")}
+
     tot_loss = tot_ppl = 0.0
     P: List[np.ndarray] = []
     L: List[np.ndarray] = []
     PR: List[np.ndarray] = []
+    RE: List[np.ndarray] = []
     m_stop: List[np.ndarray] = []
     m_after_stop: List[np.ndarray] = []
     m_tr: List[np.ndarray] = []
+
+    REV_VEC = torch.tensor([1, 10, 1, 10, 1, 10, 1, 10, 0],
+                       dtype=torch.float32)                      # shape (9,)    
+    rev_vec = REV_VEC.to(dev)
 
     model.eval()
     with torch.no_grad():
@@ -335,12 +341,21 @@ def evaluate(loader: DataLoader, model: nn.Module, dev: torch.device, loss_fn, p
             tot_ppl += perplexity(logits, tgt_, pad)
 
             prob = F.softmax(logits, dim=-1).view(-1, logits.size(-1)).cpu().numpy()
+            rev_vec = rev_vec.to(dtype=logits.dtype)
+
             pred = prob.argmax(1)
             lbl = tgt.view(-1).cpu().numpy()
             keep = ~np.isin(lbl, list(special))
+
             P.append(pred[keep])
             L.append(lbl[keep])
             PR.append(prob[keep])
+
+            # --- RevMAE -------------------------------------------------
+            exp_rev  = (prob[..., 1:10] * rev_vec).sum(-1)       # (B, n_slots)
+            true_rev = rev_vec[(tgt - 1).clamp(min=0, max=8)]    # same shape
+            rev_err  = torch.abs(exp_rev - true_rev).view(-1).cpu().numpy()
+            RE.append(rev_err)
 
             flat = lambda m: m.view(-1).cpu().numpy()[keep]
             m_stop.append(flat(tgt == 9))
@@ -348,14 +363,14 @@ def evaluate(loader: DataLoader, model: nn.Module, dev: torch.device, loss_fn, p
             m_after_stop.append(flat(prev == 9))
             m_tr.append(flat(transition_mask(tgt)))
 
-    P_, L_, PR_ = map(np.concatenate, (P, L, PR))
+    P_, L_, PR_, RE_ = map(np.concatenate, (P, L, PR, RE))
     return (
         tot_loss / len(loader),
         tot_ppl / len(loader),
-        _subset(P_, L_, PR_, np.ones_like(P_, dtype=bool)),
-        _subset(P_, L_, PR_, np.concatenate(m_stop)),
-        _subset(P_, L_, PR_, np.concatenate(m_after_stop)),
-        _subset(P_, L_, PR_, np.concatenate(m_tr)),
+        _subset(P_, L_, PR_, RE_, np.ones_like(P_, dtype=bool)),
+        _subset(P_, L_, PR_, RE_, np.concatenate(m_stop)),
+        _subset(P_, L_, PR_, RE_, np.concatenate(m_after_stop)),
+        _subset(P_, L_, PR_, RE_, np.concatenate(m_tr)),
     )
 
 
@@ -367,7 +382,7 @@ def train_model(cfg: Dict[str, Any]):
 
     # --- artefact paths ------------------------------------------------
     uid = (
-        f"performer_nbfeat{cfg['nb_features']}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_"
+        f"performer_featurebased_performerfeatures{cfg['nb_features']}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_"
         f"N{cfg['N']}_heads{cfg['num_heads']}_lr{cfg['lr']}_w{cfg['weight']}"
     )
     ckpt_path = Path(cfg["model_folder"]) / f"FullProductGPT_{uid}.pt"
