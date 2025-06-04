@@ -375,7 +375,7 @@ def _evaluate(loader, eng, dev, loss_fn, step, pad, tok):
             rev_err  = torch.abs(exp_rev - true_rev).view(-1).cpu().numpy()
 
             # ─── flatten predictions & labels (after skipping specials) ───
-            prob = prob_t.softmax(logits, dim=-1).view(-1, logits.size(-1)).cpu().numpy()
+            prob = prob_t.view(-1, logits.size(-1)).cpu().numpy()
             pred = prob.argmax(1)
             lbl  = tgt.view(-1).cpu().numpy()
 
