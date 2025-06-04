@@ -230,8 +230,8 @@ def _ppl(logits, tgt, pad=0):
 
 def _subset(pred, lbl, probs, mask, cls=np.arange(1, 10)):
     if mask.sum() == 0:
-        return {"hit": np.nan, "f1": np.nan, "auprc": np.nan}
-    p, l, pr = pred[mask], lbl[mask], probs[mask]
+        return {"hit": np.nan, "f1": np.nan, "auprc": np.nan, "rev_mae": np.nan}
+    p, l, pr, re = pred[mask], lbl[mask], probs[mask]
     hit = accuracy_score(l, p)
     f1  = f1_score(l, p, average="macro")
     try:
@@ -239,7 +239,7 @@ def _subset(pred, lbl, probs, mask, cls=np.arange(1, 10)):
                 label_binarize(l, classes=cls), pr[:, 1:10], average="macro")
     except ValueError:
         au = np.nan
-    return {"hit": hit, "f1": f1, "auprc": au}
+    return {"hit": hit, "f1": f1, "auprc": au, "rev_mae": re.mean()}
 
 def _json_safe(o):
     import numpy as _np, torch as _th
