@@ -53,6 +53,9 @@ def run_one(params):
     nbf, dm, dff, N, H, lr, wt = params
     cfg = get_config()
 
+    cfg["ai_rate"] = 15                          # <<<< FIX
+    cfg["seq_len_ai"] = cfg["ai_rate"] * cfg["seq_len_tgt"]
+
     cfg.update({"nb_features":nbf, 
                 "d_model":dm, 
                 "d_ff":dff, 
