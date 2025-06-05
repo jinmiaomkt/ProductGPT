@@ -47,7 +47,7 @@ def _raw_config():
 
         # ---------- optimisation ----------
         "weight_decay": 0.01,
-        "patience": 6,
+        "patience": 3,
         "gamma": 0,
         "eps": 1e-6,
         "weight": 2,

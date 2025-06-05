@@ -205,7 +205,9 @@ def _make_loaders(cfg):
     tok_src = build_tokenizer_src()
     tok_tgt = build_tokenizer_tgt()
 
-    out_dir = Path(cfg["model_folder"]); out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = Path(cfg["model_folder"]); 
+    out_dir.mkdir(parents=True, exist_ok=True)
+    
     tok_src.save(str(out_dir / "tokenizer_ai.json"))
     tok_tgt.save(str(out_dir / "tokenizer_tgt.json"))
 

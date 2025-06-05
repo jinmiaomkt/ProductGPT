@@ -391,8 +391,15 @@ def train_model(cfg: Dict[str, Any]):
         f"featurebased_performerfeatures{cfg['nb_features']}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_"
         f"N{cfg['N']}_heads{cfg['num_heads']}_lr{cfg['lr']}_w{cfg['weight']}"
     )
-    ckpt_path = Path(cfg["model_folder"]) / f"FullProductGPT_{uid}.pt"
-    json_path = ckpt_path.with_suffix(".json")
+
+    # --- artefact folders --------------------------------------------------
+    ckpt_dir    = Path(cfg["model_folder"]) / "checkpoints"
+    metrics_dir = Path(cfg["model_folder"]) / "metrics"
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+
+    ckpt_path = ckpt_dir   / f"FullProductGPT_{uid}.pt"
+    json_path = metrics_dir / f"FullProductGPT_{uid}.json"
 
     s3 = _s3_client()
     bucket = cfg["s3_bucket"]
