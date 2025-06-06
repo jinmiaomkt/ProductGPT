@@ -17,10 +17,11 @@ aws s3 cp DecisionOnly.zip s3://productgptbucket/tmp/DecisionOnly.zip
 
 
 # Step 1: Create the destination folder
+rm -rf ~/metrics
 mkdir -p ~/metrics
 
 # Step 2: Download JSON files from the correct S3 path with correct pattern
-aws s3 cp s3://productgptbucket/FullProductGPT/performer/Index/metrics/ ~/metrics/ --recursive --exclude "*" --include "FullProductGPT_indexbased*.json"
+aws s3 cp s3://productgptbucket/FullProductGPT/performer/IndexBased/metrics/ ~/metrics/ --recursive --exclude "*" --include "FullProductGPT_indexbased*.json"
 # aws s3 cp s3://productgptbucket/FullProductGPT/performer/Index/metrics/ ~/metrics/ --recursive --exclude "*" --include "*/FullProductGPT_indexbased*.json"
 
 # Step 3: Zip the folder

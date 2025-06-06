@@ -514,15 +514,14 @@ def train_model(cfg: Dict[str, Any]):
                 "val_transition_rev_mae"      : v_tr["rev_mae"],
             }
 
-            # ckpt = {
-            #     "epoch": ep,
-            #     "best_val_loss": best_val_loss,
-            #     "model_state_dict": engine.module.state_dict(),
-            # }
-            # torch.save(ckpt, ckpt_path)
-
-            # json_path.write_text(json.dumps({"val_loss": best_loss}, indent=2))
-            # json_path.write_text(json.dumps(meta, indent=2))
+            ckpt = {
+                "epoch": ep,
+                "best_val_loss": best_val_loss,
+                "model_state_dict": engine.module.state_dict(),
+            }
+            torch.save(ckpt, ckpt_path)
+            
+            json_path.write_text(json.dumps(_json_safe(best_val_metrics), indent=2))
             # _upload(json_path, bucket, js_key, s3)
             # _upload(ckpt_path, bucket, ck_key, s3)
         else:
@@ -570,13 +569,19 @@ def train_model(cfg: Dict[str, Any]):
     json_path.write_text(json.dumps(_json_safe(metadata), indent=2))
     print(f"[INFO] Metrics written → {json_path}")    
 
-    if _upload(ckpt_path, bucket,
-               f"FullProductGPT/performer/FeatureBased/checkpoints/{ckpt_path.name}", s3):
-        ckpt_path.unlink(missing_ok=True)
+    _upload(ckpt_path, bucket, ck_key, s3)
+    _upload(json_path, bucket, js_key,  s3)
+
+    ckpt_path.unlink(missing_ok=True)
+    json_path.unlink(missing_ok=True)
+
+    # if _upload(ckpt_path, bucket,
+    #            f"FullProductGPT/performer/FeatureBased/checkpoints/{ckpt_path.name}", s3):
+    #     ckpt_path.unlink(missing_ok=True)
     
-    if _upload(json_path, bucket,
-               f"FullProductGPT/performer/FeatureBased/metrics/{json_path.name}", s3):
-        json_path.unlink(missing_ok=True)
+    # if _upload(json_path, bucket,
+    #            f"FullProductGPT/performer/FeatureBased/metrics/{json_path.name}", s3):
+    #     json_path.unlink(missing_ok=True)
 
     # return {"uid": uid, "val_loss": best}
     return {"uid": uid, "val_loss": best_val_loss, "best_checkpoint_path": str(ckpt_path)}
