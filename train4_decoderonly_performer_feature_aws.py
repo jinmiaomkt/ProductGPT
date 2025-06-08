@@ -1,10 +1,11 @@
+from __future__ import annotations
+
 """ProductGPT – end‑to‑end train / evaluate script
 =================================================
 ✓ Hyper‑parameters come from `config4.py`
 ✓ Handles feature embeddings, data‑loading, training (DeepSpeed) and test
 ✓ No duplicated functions, clean imports, full type hints
 """
-from __future__ import annotations
 
 # ────────────────────────────── stdlib
 import json
