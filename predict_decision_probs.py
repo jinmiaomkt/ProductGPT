@@ -53,7 +53,7 @@ class PredictDataset(JsonLineDataset):
         row = super().__getitem__(idx)
 
         # ---- robust AggregateInput --------------------------------------
-        seq_raw = row["AggregateInput"]
+        seq_raw = row["PreviousDecision"]
         if isinstance(seq_raw, list):
             if len(seq_raw) == 1 and isinstance(seq_raw[0], str):
                 seq_str = seq_raw[0]                   # ["'10 20 NA'"] → '10 20 NA'
