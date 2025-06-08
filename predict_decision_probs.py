@@ -32,44 +32,41 @@ cfg = get_config()                     # loads the dict you trained with
 # cfg["test-filepath"] = args.data            # points to **new** dataset
 cfg["ai_rate"]  = 1                    # must match training
 cfg["batch_size"] = 512                # inference can use big batches
+
+# --- tokenizer block (unchanged until here) ------------------------
 TOK_PATH = Path(cfg["model_folder"]) / "tokenizer_tgt.json"
+tok_tgt  = Tokenizer.from_file(str(TOK_PATH)) if TOK_PATH.exists() else _build_tok()
 
-# ───────────────────── tokenizer (identical ordering!) ─────────
-tok_tgt = Tokenizer.from_file(str(TOK_PATH)) if TOK_PATH.exists() else _build_tok()
+pad_id  = tok_tgt.token_to_id("[PAD]")
+special = {pad_id, tok_tgt.token_to_id("[SOS]"), tok_tgt.token_to_id("[UNK]")}
 
-pad_id   = tok_tgt.token_to_id("[PAD]")
-special  = {pad_id,
-            tok_tgt.token_to_id("[SOS]"),
-            tok_tgt.token_to_id("[UNK]")}
-
-# ───────────────────── dataset / loader (streaming) ────────────
-# class PredictDataset(JsonLineDataset):
-#     def __getitem__(self, idx):
-#         row = super().__getitem__(idx)
-#         # integerise the token string that feed the decoder
-#         toks = [int(t) for t in row["AggregateInput"].split()]
-#         return {"uid": row["uid"][0], "x": torch.tensor(toks, dtype=torch.long)}
+# helper: robust int-conversion ------------------------------------
+def to_int_or_pad(tok: str) -> int:
+    """Return int(tok) if possible, otherwise pad_id."""
+    try:
+        return int(tok)
+    except ValueError:
+        return pad_id
 
 class PredictDataset(JsonLineDataset):
     def __getitem__(self, idx):
         row = super().__getitem__(idx)
 
-        # --- robust decoding of AggregateInput -----------------------------
-        seq_raw = row["AggregateInput"]               # could be str, [str], or [int]
+        # ---- robust AggregateInput --------------------------------------
+        seq_raw = row["AggregateInput"]
         if isinstance(seq_raw, list):
             if len(seq_raw) == 1 and isinstance(seq_raw[0], str):
-                seq_str = seq_raw[0]                  # ["'10 20 30'"]  →  '10 20 30'
-            else:                                     # [10, 20, 30]
-                seq_str = " ".join(map(str, seq_raw)) # → '10 20 30'
-        else:                                         # already a str
+                seq_str = seq_raw[0]                   # ["'10 20 NA'"] → '10 20 NA'
+            else:                                      # [10, 'NA', 20]
+                seq_str = " ".join(map(str, seq_raw))
+        else:                                          # already a str
             seq_str = seq_raw
-
-        toks = [int(t) for t in seq_str.strip().split()]
-        # -------------------------------------------------------------------
+        # Convert every token safely
+        toks = [to_int_or_pad(t) for t in seq_str.strip().split()]
+        # -----------------------------------------------------------------
 
         uid = row["uid"][0] if isinstance(row["uid"], list) else row["uid"]
         return {"uid": uid, "x": torch.tensor(toks, dtype=torch.long)}
-
 
 def collate(batch):
     uids = [b["uid"] for b in batch]
