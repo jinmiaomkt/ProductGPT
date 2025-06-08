@@ -359,11 +359,11 @@ def _evaluate(loader, eng, dev, loss_fn, step, pad, tok):
             tgt    = y[:, pos].clone()              # (B, N)
 
             # mask transitions for the loss only
-            tgt_masked = tgt.clone()
-            tgt_masked[_transition_mask(y)[:, pos]] = pad
+            # tgt_masked = tgt.clone()
+            # tgt_masked[_transition_mask(y)[:, pos]] = pad
 
-            tloss += loss_fn(logits, tgt_masked).item()
-            tppl  += _ppl(logits, tgt_masked, pad)
+            tloss += loss_fn(logits, tgt).item()
+            tppl  += _ppl(logits, tgt, pad)
 
             # ---- metrics --------------------------------------------------
             prob_t = F.softmax(logits, dim=-1)
@@ -468,7 +468,7 @@ def train_model(cfg):
 
             logits = eng(x)[:, pos, :]             # (B, N, V)
             tgt    = y[:, pos].clone()
-            tgt[_transition_mask(y)[:, pos]] = pad_id
+            # tgt[_transition_mask(y)[:, pos]] = pad_id
 
             loss = loss_fn(logits, tgt)
             eng.zero_grad(); eng.backward(loss); eng.step()

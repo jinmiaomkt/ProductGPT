@@ -341,7 +341,7 @@ def evaluate(loader: DataLoader, model: nn.Module, dev: torch.device, loss_fn, p
             logits = model(x)[:, pos, :]
 
             tgt_ = tgt.clone()
-            tgt_[transition_mask(tgt)] = pad
+            # tgt_[transition_mask(tgt)] = pad
             tot_loss += loss_fn(logits, tgt_).item()
             tot_ppl += perplexity(logits, tgt_, pad)
 
@@ -470,7 +470,7 @@ def train_model(cfg: Dict[str, Any]):
             pos = torch.arange(cfg["ai_rate"] - 1, cfg["seq_len_ai"], cfg["ai_rate"], device=device)
             logits = engine(x)[:, pos, :]
             tgt_ = tgt.clone()
-            tgt_[transition_mask(tgt)] = pad_id
+            # tgt_[transition_mask(tgt)] = pad_id
             loss = loss_fn(logits, tgt_)
 
             engine.zero_grad()
