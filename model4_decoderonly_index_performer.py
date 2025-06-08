@@ -3,6 +3,7 @@ import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from __future__ import annotations
 
 ##############################################################################
 # 1. gelu_approx
