@@ -20,7 +20,7 @@ from train4_decoderonly_performer_feature_aws import train_model
 
 
 # Hyper‑parameter grids
-nb_features_values = [16, 32, 64]
+nb_features_values = [32, 64]
 d_model_values     = [32, 64]
 d_ff_values        = [32, 64]
 N_values           = [6]
