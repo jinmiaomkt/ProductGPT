@@ -1,7 +1,8 @@
 # hP_tuning4_index_git.py  – robust sweep runner
 # ==============================================================
-import multiprocessing as mp
 from __future__ import annotations
+
+import multiprocessing as mp
 
 mp.set_start_method("spawn", force=True)
 

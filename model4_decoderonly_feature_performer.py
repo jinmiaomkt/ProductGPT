@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import math
 import random
 import torch
@@ -5,7 +7,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import pandas as pd
 import numpy as np
-from __future__ import annotations
 
 df = pd.read_excel("/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx", sheet_name=0)
 
