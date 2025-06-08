@@ -24,13 +24,13 @@ from config4 import get_config
 from train4_decision_only_performer_aws import train_model
 
 # hyper‐parameter grids
-nb_features_values = [4, 8]
+nb_features_values = [8, 16]
 d_model_values = [32, 64]
 d_ff_values = [32, 64]
 N_values = [6, 8]
 num_heads_values = [4, 8]
 lr_values = [1e-4]
-weight_values = [2, 4]
+weight_values = [2, 4, 8]
 
 # S3 client
 s3 = boto3.client("s3")

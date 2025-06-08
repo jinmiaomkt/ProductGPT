@@ -15,12 +15,12 @@ import numpy as np
 
 # ---------------- hyper-parameter grid -----------------------------------
 nb_features_values = [32, 64, 128]
-d_model_values    = [32, 64, 128]
-d_ff_values       = [32, 64, 128]
-N_values          = [4, 6, 8]
-num_heads_values  = [4, 8]
+d_model_values    = [32, 64]
+d_ff_values       = [32, 64]
+N_values          = [6]
+num_heads_values  = [4]
 lr_values         = [1e-4]
-weight_values     = [2, 4]
+weight_values     = [2, 4, 8]
 
 HP_GRID = list(itertools.product(nb_features_values,
                                  d_model_values, 
