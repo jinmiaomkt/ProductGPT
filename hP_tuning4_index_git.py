@@ -14,7 +14,7 @@ from train4_decoderonly_performer_index_aws  import train_model
 import numpy as np
 
 # ---------------- hyper-parameter grid -----------------------------------
-nb_features_values = [32, 64, 128]
+nb_features_values = [16, 64, 128]
 d_model_values    = [32, 64]
 d_ff_values       = [32, 64]
 N_values          = [6]
