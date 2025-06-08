@@ -13,6 +13,7 @@ def _raw_config():
     return {
         # ---------- data ----------
         "filepath": "/home/ec2-user/data/clean_list_int_wide4_simple6_FeatureBasedTrain.json",
+        "test_filepath": "/home/ec2-user/data/clean_list_int_wide4_simple6.json",
         "vocab_size_src": 68,
         "vocab_size_tgt": 18,
         "vocab_size_lto": 68,
