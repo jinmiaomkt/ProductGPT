@@ -1,6 +1,7 @@
 import os, json, warnings, logging, numpy as np, boto3, botocore
 from pathlib import Path
 from typing import Dict, Any
+from __future__ import annotations
 
 # ─────────────────────────── silence clutter ────────────────────────────
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
