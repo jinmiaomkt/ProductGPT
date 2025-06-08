@@ -275,7 +275,7 @@ def _evaluate(loader, eng, dev, loss_fn, pad, tok, ai_rate):
 
             # ---- loss: ignore transitions --------------------------------
             tgt_loss = tgt.clone()
-            tgt_loss[transition_mask(tgt)] = pad
+            # tgt_loss[transition_mask(tgt)] = pad
             tot_loss += loss_fn(logits, tgt_loss).item()
             tot_ppl  += _perplexity(logits, tgt_loss, pad)
 
@@ -379,9 +379,8 @@ def train_model(cfg):
             )
 
             logits = eng(x)[:, pos, :]             # (B, n_slots, V)
-
             tgt_train = tgt.clone()
-            tgt_train[transition_mask(tgt)] = pad_id
+            # tgt_train[transition_mask(tgt)] = pad_id
             loss = loss_fn(logits, tgt_train)
 
             eng.zero_grad(); eng.backward(loss); eng.step()
