@@ -22,7 +22,7 @@ from train4_decision_only_performer_aws import (_ensure_jsonl, JsonLineDataset, 
 
 # ───────────────────────── arguments ───────────────────────────
 p = argparse.ArgumentParser()
-# p.add_argument("--data", required=True,  help="ND-JSON file with your events")
+p.add_argument("--data", required=True,  help="ND-JSON file with your events")
 p.add_argument("--ckpt", required=True,  help="*.pt checkpoint produced at training time")
 p.add_argument("--out",  required=True,  help="where to write the jsonl predictions")
 args = p.parse_args()
