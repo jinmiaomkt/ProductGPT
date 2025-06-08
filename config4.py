@@ -6,6 +6,7 @@
 #     seq_len_ai            == ctx_window
 #     seq_len_tgt (labels)  == ctx_window // ai_rate
 # ————————————————————————————————————————————————————————————
+from __future__ import annotations  # ← add this line
 from pathlib import Path
 
 # ─────────────────────────── core config ───────────────────────────
