@@ -43,12 +43,33 @@ special  = {pad_id,
             tok_tgt.token_to_id("[UNK]")}
 
 # ───────────────────── dataset / loader (streaming) ────────────
+# class PredictDataset(JsonLineDataset):
+#     def __getitem__(self, idx):
+#         row = super().__getitem__(idx)
+#         # integerise the token string that feed the decoder
+#         toks = [int(t) for t in row["AggregateInput"].split()]
+#         return {"uid": row["uid"][0], "x": torch.tensor(toks, dtype=torch.long)}
+
 class PredictDataset(JsonLineDataset):
     def __getitem__(self, idx):
         row = super().__getitem__(idx)
-        # integerise the token string that feed the decoder
-        toks = [int(t) for t in row["AggregateInput"].split()]
-        return {"uid": row["uid"][0], "x": torch.tensor(toks, dtype=torch.long)}
+
+        # --- robust decoding of AggregateInput -----------------------------
+        seq_raw = row["AggregateInput"]               # could be str, [str], or [int]
+        if isinstance(seq_raw, list):
+            if len(seq_raw) == 1 and isinstance(seq_raw[0], str):
+                seq_str = seq_raw[0]                  # ["'10 20 30'"]  →  '10 20 30'
+            else:                                     # [10, 20, 30]
+                seq_str = " ".join(map(str, seq_raw)) # → '10 20 30'
+        else:                                         # already a str
+            seq_str = seq_raw
+
+        toks = [int(t) for t in seq_str.strip().split()]
+        # -------------------------------------------------------------------
+
+        uid = row["uid"][0] if isinstance(row["uid"], list) else row["uid"]
+        return {"uid": uid, "x": torch.tensor(toks, dtype=torch.long)}
+
 
 def collate(batch):
     uids = [b["uid"] for b in batch]
