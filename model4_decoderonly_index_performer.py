@@ -89,6 +89,25 @@ class PositionalEncoding(nn.Module):
         # x shape: (batch, seq_len, d_model)
         seq_len = x.size(1)
         # Add (batch=1) from self.pe up to seq_len
+
+        # grow the table if needed ----------
+        if seq_len > self.pe.size(1):
+            extra = seq_len - self.pe.size(1)
+            device = self.pe.device
+            d_model = self.pe.size(-1)
+
+            # rebuild sinusoid rows for the extra positions
+            pos = torch.arange(self.pe.size(1), self.pe.size(1) + extra,
+                               dtype=torch.float32, device=device).unsqueeze(1)
+            div = torch.exp(torch.arange(0, d_model, 2, device=device)
+                            * -(math.log(10000.0) / d_model))
+            pe_extra = torch.zeros(extra, d_model, device=device)
+            pe_extra[:, 0::2] = torch.sin(pos * div)
+            pe_extra[:, 1::2] = torch.cos(pos * div)
+            pe_extra = pe_extra.unsqueeze(0)            # (1, extra, d)
+
+            self.pe = torch.cat([self.pe, pe_extra], dim=1).detach()
+
         x = x + self.pe[:, :seq_len, :].requires_grad_(False)
         return self.dropout(x)
 
