@@ -1,4 +1,5 @@
 import multiprocessing as mp
+from __future__ import annotations
 
 # force every new process to be launched with 'spawn'
 mp.set_start_method('spawn', force=True)

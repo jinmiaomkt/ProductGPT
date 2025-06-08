@@ -36,6 +36,7 @@ from dataset4_decision_only import TransformerDataset
 from tokenizers import Tokenizer, models, pre_tokenizers
 from config4 import get_config
 from typing import Tuple 
+from __future__ import annotations
 
 # ───────────────────── tokenizer ──────────────────────
 

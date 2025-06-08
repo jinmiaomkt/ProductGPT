@@ -1,4 +1,5 @@
 # hyperparam_sweep_parallel_feature_git.py
+from __future__ import annotations
 
 import multiprocessing as mp
 # 1) force 'spawn' before any CUDA or ProcessPoolExecutor is imported
@@ -17,7 +18,6 @@ import torch
 
 from config4 import get_config
 from train4_decoderonly_performer_feature_aws import train_model
-
 
 # Hyper‑parameter grids
 nb_features_values = [32, 64]
