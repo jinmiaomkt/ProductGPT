@@ -329,7 +329,11 @@ class PositionalEncoding(nn.Module):
     def forward(self, x):
         # x shape: (batch, seq_len, d_model)
         seq_len = x.size(1)
-        # Add (batch=1) from self.pe up to seq_len
+
+        if seq_len > self.pe.size(1):
+            # dynamically expand positional encoding
+            self._extend_pe(seq_len, x.size(-1))
+
         x = x + self.pe[:, :seq_len, :].requires_grad_(False)
         return self.dropout(x)
 
