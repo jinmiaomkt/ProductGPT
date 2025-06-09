@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """
-predict_decision_probs_feature.py
+predict_decision_probs_decisiononly.py
 
-Inference for “Decision-Only” Performer model with features.
+Inference for “Decision-Only” Performer model.
 Outputs one JSON line per user with the 9-way decision distribution.
 """
 
@@ -13,8 +13,7 @@ from tokenizers import Tokenizer
 
 from config4 import get_config
 from model4_decoderonly_index_performer import build_transformer
-from train4_decision_only_performer_aws import (
-    _ensure_jsonl, JsonLineDataset, _build_tok)
+from train4_decision_only_performer_aws import _ensure_jsonl, JsonLineDataset, _build_tok
 
 # ───────────── CLI ─────────────
 cli = argparse.ArgumentParser()
@@ -24,75 +23,74 @@ cli.add_argument("--out",  required=True, help="output *.jsonl path")
 args = cli.parse_args()
 
 # ─────────── Config ────────────
-cfg = get_config()
-cfg["ai_rate"]    = 15
+cfg              = get_config()
+cfg["ai_rate"]   = 15
 cfg["batch_size"] = 512
 
-# ──────── Tokeniser ────────────
+# ──────── Tokenizer ────────────
 tok_path = Path(cfg["model_folder"]) / "tokenizer_tgt.json"
-tok_tgt  = Tokenizer.from_file(str(tok_path)) if tok_path.exists() else _build_tok()
+tok_tgt  = (Tokenizer.from_file(str(tok_path)) if tok_path.exists()
+            else _build_tok())
 pad_id   = tok_tgt.token_to_id("[PAD]")
 
 # ─────── Dataset helpers ───────
 def to_int_or_pad(tok: str) -> int:
-    try:
-        return int(tok)
-    except ValueError:
-        return pad_id
+    try:             return int(tok)
+    except ValueError:return pad_id
 
 class PredictDataset(JsonLineDataset):
     def __getitem__(self, idx):
-        row = super().__getitem__(idx)
+        row     = super().__getitem__(idx)
         seq_raw = row["AggregateInput"]
 
         if isinstance(seq_raw, list):
-            seq_str = " ".join(map(str, seq_raw)) if not (
-                len(seq_raw) == 1 and isinstance(seq_raw[0], str)
-            ) else seq_raw[0]
+            seq_str = (" ".join(map(str, seq_raw))
+                       if not (len(seq_raw)==1 and isinstance(seq_raw[0], str))
+                       else seq_raw[0])
         else:
             seq_str = seq_raw
 
-        toks = [to_int_or_pad(t) for t in seq_str.strip().split()]
-        uid = row["uid"][0] if isinstance(row["uid"], list) else row["uid"]
+        toks  = [to_int_or_pad(t) for t in seq_str.strip().split()]
+        uid   = row["uid"][0] if isinstance(row["uid"], list) else row["uid"]
         return {"uid": uid, "x": torch.tensor(toks, dtype=torch.long)}
 
 def collate(batch):
     uids = [b["uid"] for b in batch]
     lens = [len(b["x"]) for b in batch]
     Lmax = max(lens)
-    X = torch.full((len(batch), Lmax), pad_id, dtype=torch.long)
-    for i, (item, L) in enumerate(zip(batch, lens)):
-        X[i, :L] = item["x"]
+    X    = torch.full((len(batch), Lmax), pad_id, dtype=torch.long)
+    for i,(item,L) in enumerate(zip(batch,lens)):
+        X[i,:L] = item["x"]
     return {"uid": uids, "x": X}
 
 loader = DataLoader(
-    PredictDataset(_ensure_jsonl(args.data)),
-    batch_size=cfg["batch_size"],
-    collate_fn=collate,
-    shuffle=False)
+            PredictDataset(_ensure_jsonl(args.data)),
+            batch_size=cfg["batch_size"],
+            collate_fn=collate,
+            shuffle=False)
 
 # ───────── Build model ──────────
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = build_transformer(
-    vocab_size  = cfg["vocab_size_tgt"],
-    d_model     = 32,
-    n_layers    = 6,
-    n_heads     = 4,
-    d_ff        = 32,
-    dropout     = 0.0,
-    nb_features = 16,
-    max_seq_len = cfg["seq_len_ai"],
-    kernel_type = cfg["kernel_type"]
-).to(device).eval()
+
+model  = build_transformer(
+            vocab_size  = cfg["vocab_size_tgt"],
+            d_model     = 128,
+            n_layers    = 8,
+            n_heads     = 8,
+            d_ff        = 128,
+            dropout     = 0.0,
+            nb_features = 16,
+            max_seq_len = cfg["seq_len_ai"],
+            kernel_type = cfg["kernel_type"]).to(device).eval()
 
 # ─────── LOAD CHECKPOINT ───────
-state = torch.load(args.ckpt, map_location=device)
-
 def clean_state_dict(raw):
     def strip_prefix(k): return k[7:] if k.startswith("module.") else k
     ignore = ("weight_fake_quant", "activation_post_process")
     return {strip_prefix(k): v for k, v in raw.items()
             if not any(tok in k for tok in ignore)}
+
+state = torch.load(args.ckpt, map_location=device)
 
 if "model_state_dict" in state:
     raw_sd = state["model_state_dict"]
@@ -104,8 +102,8 @@ else:
 state_dict = clean_state_dict(raw_sd)
 model.load_state_dict(state_dict, strict=True)
 
-# ─────── Inference ───────
-focus_ids = torch.arange(1, 10, device=device)  # decision classes 1–9
+# ───────── Inference loop ───────
+focus_ids = torch.arange(1, 10, device=device)  # decision classes 1-9
 
 out_path = Path(args.out).expanduser()
 with out_path.open("w") as fout, torch.no_grad():
@@ -114,7 +112,8 @@ with out_path.open("w") as fout, torch.no_grad():
         uids = batch["uid"]
 
         probs = torch.softmax(model(x), dim=-1)
-        pos   = torch.arange(cfg["ai_rate"]-1, x.size(1), cfg["ai_rate"], device=device)
+        pos   = torch.arange(cfg["ai_rate"]-1, x.size(1), cfg["ai_rate"],
+                             device=device)
 
         prob_dec_focus = probs[:, pos, :][..., focus_ids]  # (B, N, 9)
 
