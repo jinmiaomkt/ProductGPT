@@ -11,7 +11,7 @@ import argparse, json, torch, deepspeed
 from pathlib import Path
 from torch.utils.data import DataLoader
 from tokenizers import Tokenizer
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 from config4 import get_config
 from model4_decoderonly_feature_performer import build_transformer
@@ -104,34 +104,6 @@ def load_feature_tensor(xls_path: Path) -> torch.Tensor:
         if FIRST_PROD_ID <= token_id <= LAST_PROD_ID:
             arr[token_id] = row[FEATURE_COLS].to_numpy(dtype=np.float32)
     return torch.from_numpy(arr)
-
-
-# ══════════════════════════════ 3. Tokenisers ═════════════════════════=
-
-def _base_tokeniser(extra_vocab: Dict[str, int] | None = None) -> Tokenizer:
-    """Word‑level tokeniser with a fixed numeric vocabulary."""
-    vocab: Dict[str, int] = {
-        "[PAD]": PAD_ID,
-        **{str(i): i for i in range(1, 10)},  # decisions
-        "[SOS]": SOS_DEC_ID,
-        "[EOS]": EOS_DEC_ID,
-        "[UNK]": UNK_DEC_ID,
-    }
-    if extra_vocab:
-        vocab.update(extra_vocab)
-    tok = Tokenizer(models.WordLevel(unk_token="[UNK]"))
-    tok.pre_tokenizer = pre_tokenizers.Whitespace()
-    tok.model = models.WordLevel(vocab=vocab, unk_token="[UNK]")
-    return tok
-
-
-def build_tokenizer_src() -> Tokenizer:  # with product IDs
-    prod_vocab = {str(i): i for i in range(FIRST_PROD_ID, UNK_PROD_ID + 1)}
-    return _base_tokeniser(prod_vocab)
-
-
-def build_tokenizer_tgt() -> Tokenizer:  # decisions only
-    return _base_tokeniser()
 
 # ─────── Dataset helpers ───────
 def to_int_or_pad(tok: str) -> int:
