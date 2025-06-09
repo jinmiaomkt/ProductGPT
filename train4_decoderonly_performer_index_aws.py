@@ -429,6 +429,9 @@ def train_model(cfg):
             torch.save({"epoch": ep,
                          "best_val_loss": best_val_loss,
                          "model_state_dict": eng.module.state_dict()}, ckpt_path)
+        
+            json_path.write_text(json.dumps(_json_safe(best_val_metrics), indent=2))
+
             # json_path.write_text(json.dumps(_json_safe({
             #     "best_checkpoint_path": ckpt_path.name,
             #     "val_loss": best, "val_ppl": v_ppl,
@@ -498,13 +501,19 @@ def train_model(cfg):
     #     "test_transition": t_tr
     # }), indent=2))
 
-    if _upload(ckpt_path, bucket,
-               f"FullProductGPT/performer/IndexBased/checkpoints/{ckpt_path.name}", s3):
-        ckpt_path.unlink(missing_ok=True)
+    # if _upload(ckpt_path, bucket,
+    #            f"FullProductGPT/performer/IndexBased/checkpoints/{ckpt_path.name}", s3):
+    #     ckpt_path.unlink(missing_ok=True)
     
-    if _upload(json_path, bucket,
-               f"FullProductGPT/performer/IndexBased/metrics/{json_path.name}", s3):
-        json_path.unlink(missing_ok=True)
+    # if _upload(json_path, bucket,
+    #            f"FullProductGPT/performer/IndexBased/metrics/{json_path.name}", s3):
+    #     json_path.unlink(missing_ok=True)
+
+    _upload(ckpt_path, bucket, ck_key, s3)
+    _upload(json_path, bucket, js_key, s3)
+
+    ckpt_path.unlink(missing_ok=True)
+    json_path.unlink(missing_ok=True)
 
     return {"uid": uid, "val_loss": best_val_loss, "best_checkpoint_path": str(ckpt_path)}
 

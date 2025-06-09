@@ -521,6 +521,7 @@ def train_model(cfg):
                          "best_val_loss": best_val_loss,
                          "model_state_dict": eng.module.state_dict()}, ckpt_local)
 
+            json_local.write_text(json.dumps(_json_safe(best_val_metrics), indent=2))
         else:
             patience += 1
             if patience >= cfg["patience"]:
@@ -542,10 +543,6 @@ def train_model(cfg):
             ("transition", v_tr)):
             print(f"  {tag:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
                 f"AUPRC={d['auprc']:.4f}   RevMAE={d['rev_mae']:.4f} ")
-
-        print(f"[INFO] artefacts will be saved to\n"
-          f"  • s3://{bucket}/{ck_key}\n"
-          f"  • s3://{bucket}/{js_key}\n")
 
     metadata = {
         "best_checkpoint_path": ckpt_local.name,
@@ -573,13 +570,19 @@ def train_model(cfg):
     json_local.write_text(json.dumps(_json_safe(metadata), indent=2))
     print(f"[INFO] Metrics written → {json_local}")    
 
-    if _upload(ckpt_local, bucket,
-               f"DecisionOnly/checkpoints/{ckpt_local.name}", s3):
-        ckpt_local.unlink(missing_ok=True)
+    # if _upload(ckpt_local, bucket,
+    #            f"DecisionOnly/checkpoints/{ckpt_local.name}", s3):
+    #     ckpt_local.unlink(missing_ok=True)
     
-    if _upload(json_local, bucket,
-               f"DecisionOnly/metrics/{json_local.name}", s3):
-        json_local.unlink(missing_ok=True)
+    # if _upload(json_local, bucket,
+    #            f"DecisionOnly/metrics/{json_local.name}", s3):
+    #     json_local.unlink(missing_ok=True)
+
+    _upload(ckpt_local, bucket, ck_key, s3)
+    _upload(json_local, bucket, js_key, s3)
+
+    ckpt_local.unlink(missing_ok=True)
+    json_local.unlink(missing_ok=True)
 
     return {"uid": uid, "val_loss": best_val_loss, "best_checkpoint_path": str(ckpt_local)}
    
