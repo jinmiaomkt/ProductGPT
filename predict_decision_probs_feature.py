@@ -29,7 +29,7 @@ args = cli.parse_args()
 # ─────────── Config ────────────
 cfg              = get_config()
 cfg["ai_rate"]   = 15
-cfg["batch_size"] = 512
+cfg["batch_size"] = 128
 
 # ──────── Tokenizer ────────────
 tok_path = Path(cfg["model_folder"]) / "tokenizer_tgt.json"
