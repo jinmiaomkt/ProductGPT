@@ -18,6 +18,14 @@ from model4_decoderonly_index_performer import build_transformer
 from train4_decision_only_performer_aws import (
         _ensure_jsonl, JsonLineDataset, _build_tok)
 
+import torch
+
+ckpt = torch.load("DecisionOnly_xxx.pt", map_location="cpu")
+print(set(ckpt))                # what’s inside?  (‘epoch’, ‘best_val_loss’, ‘model_state_dict’, …)
+
+state = ckpt["model_state_dict"] if "model_state_dict" in ckpt else ckpt
+print(len(state), "tensor blobs saved")
+
 # ───────────── CLI ─────────────
 cli = argparse.ArgumentParser()
 cli.add_argument("--data", required=True, help="ND-JSON events file")
