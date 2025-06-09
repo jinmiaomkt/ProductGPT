@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from tokenizers import Tokenizer
 
 from config4 import get_config
-from model4_decoderonly_index_performer import build_transformer
+from model4_decoderonly_feature_performer import build_transformer
 from train4_decision_only_performer_aws import _ensure_jsonl, JsonLineDataset, _build_tok
 
 # ───────────── CLI ─────────────
@@ -33,6 +33,104 @@ tok_path = Path(cfg["model_folder"]) / "tokenizer_tgt.json"
 tok_tgt  = (Tokenizer.from_file(str(tok_path)) if tok_path.exists()
             else _build_tok())
 pad_id   = tok_tgt.token_to_id("[PAD]")
+
+# ══════════════════════════════ 1. Constants ═══════════════════════════
+PAD_ID = 0
+DECISION_IDS = list(range(1, 10))  # 1‑9
+SOS_DEC_ID, EOS_DEC_ID, UNK_DEC_ID = 10, 11, 12
+FIRST_PROD_ID, LAST_PROD_ID = 13, 56
+EOS_PROD_ID, SOS_PROD_ID, UNK_PROD_ID = 57, 58, 59
+SPECIAL_IDS = [
+    PAD_ID,
+    SOS_DEC_ID,
+    EOS_DEC_ID,
+    UNK_DEC_ID,
+    EOS_PROD_ID,
+    SOS_PROD_ID,
+]
+MAX_TOKEN_ID = UNK_PROD_ID  # 59
+
+# ══════════════════════════════ 2. Data helpers ════════════════════════
+FEAT_FILE = Path("/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx")
+FEATURE_COLS: List[str] = [
+    # stats
+    "Rarity",
+    "MaxLife",
+    "MaxOffense",
+    "MaxDefense",
+    # categorical one‑hots
+    "WeaponTypeOneHandSword",
+    "WeaponTypeTwoHandSword",
+    "WeaponTypeArrow",
+    "WeaponTypeMagic",
+    "WeaponTypePolearm",
+    "EthnicityIce",
+    "EthnicityRock",
+    "EthnicityWater",
+    "EthnicityFire",
+    "EthnicityThunder",
+    "EthnicityWind",
+    "GenderFemale",
+    "GenderMale",
+    "CountryRuiYue",
+    "CountryDaoQi",
+    "CountryZhiDong",
+    "CountryMengDe",
+    # misc
+    "type_figure",
+    "MinimumAttack",
+    "MaximumAttack",
+    "MinSpecialEffect",
+    "MaxSpecialEffect",
+    "SpecialEffectEfficiency",
+    "SpecialEffectExpertise",
+    "SpecialEffectAttack",
+    "SpecialEffectSuper",
+    "SpecialEffectRatio",
+    "SpecialEffectPhysical",
+    "SpecialEffectLife",
+    "LTO",
+]
+
+
+def load_feature_tensor(xls_path: Path) -> torch.Tensor:
+    """Load product‑level feature embeddings – (V, D) FloatTensor."""
+    df = pd.read_excel(xls_path, sheet_name=0)
+    feat_dim = len(FEATURE_COLS)
+    arr = np.zeros((MAX_TOKEN_ID + 1, feat_dim), dtype=np.float32)
+    for _, row in df.iterrows():
+        token_id = int(row["NewProductIndex6"])
+        if FIRST_PROD_ID <= token_id <= LAST_PROD_ID:
+            arr[token_id] = row[FEATURE_COLS].to_numpy(dtype=np.float32)
+    return torch.from_numpy(arr)
+
+
+# ══════════════════════════════ 3. Tokenisers ═════════════════════════=
+
+def _base_tokeniser(extra_vocab: Dict[str, int] | None = None) -> Tokenizer:
+    """Word‑level tokeniser with a fixed numeric vocabulary."""
+    vocab: Dict[str, int] = {
+        "[PAD]": PAD_ID,
+        **{str(i): i for i in range(1, 10)},  # decisions
+        "[SOS]": SOS_DEC_ID,
+        "[EOS]": EOS_DEC_ID,
+        "[UNK]": UNK_DEC_ID,
+    }
+    if extra_vocab:
+        vocab.update(extra_vocab)
+    tok = Tokenizer(models.WordLevel(unk_token="[UNK]"))
+    tok.pre_tokenizer = pre_tokenizers.Whitespace()
+    tok.model = models.WordLevel(vocab=vocab, unk_token="[UNK]")
+    return tok
+
+
+def build_tokenizer_src() -> Tokenizer:  # with product IDs
+    prod_vocab = {str(i): i for i in range(FIRST_PROD_ID, UNK_PROD_ID + 1)}
+    return _base_tokeniser(prod_vocab)
+
+
+def build_tokenizer_tgt() -> Tokenizer:  # decisions only
+    return _base_tokeniser()
 
 # ─────── Dataset helpers ───────
 def to_int_or_pad(tok: str) -> int:
@@ -75,7 +173,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w2
 model  = build_transformer(
-            vocab_size  = cfg["vocab_size_tgt"],
+            vocab_size_tgt=cfg["vocab_size_tgt"],
+            vocab_size_src=cfg["vocab_size_src"],
             d_model     = 32,
             n_layers    = 6,
             n_heads     = 4,
@@ -83,7 +182,9 @@ model  = build_transformer(
             dropout     = 0.0,
             nb_features = 16,
             max_seq_len = 15360,
-            kernel_type = cfg["kernel_type"]).to(device).eval()
+            kernel_type = cfg["kernel_type"],
+            feature_tensor=load_feature_tensor(FEAT_FILE),
+            special_token_ids=SPECIAL_IDS,).to(device).eval()
 
 # ─────── LOAD CHECKPOINT ───────
 def clean_state_dict(raw):
