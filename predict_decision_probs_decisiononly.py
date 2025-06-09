@@ -81,17 +81,39 @@ model  = build_transformer(
             max_seq_len = cfg["seq_len_ai"],
             kernel_type = cfg["kernel_type"]).to(device).eval()
 
-# ─────── LOAD CHECKPOINT ───────
-# NB: PyTorch 2.6 default is now weights_only=True → we override it.
-state = torch.load(args.ckpt, map_location=device, weights_only=False)
+# ----- sanitise a DeepSpeed-QAT checkpoint -------------------
+def clean_state_dict(raw):
+    """Remove 'module.' prefix and QAT artefacts."""
+    def strip_prefix(k):         # 1️⃣ remove 'module.'
+        return k[7:] if k.startswith("module.") else k
 
-# tolerate either of these common layouts
-if "model_state_dict" in state:
-    model.load_state_dict(state["model_state_dict"], strict=True)
-elif "module" in state:                           # DS ZeRO engine save
-    model.load_state_dict(state["module"], strict=False)
-else:                                             # raw state-dict
-    model.load_state_dict(state, strict=True)
+    ignore = ("weight_fake_quant", "activation_post_process")
+    return {strip_prefix(k): v   # 2️⃣ drop QAT junk
+            for k, v in raw.items()
+            if not any(tok in k for tok in ignore)}
+
+# decide which blob inside the pickle is the actual state-dict
+state_dict = (state["module"]
+              if isinstance(state, dict) and "module" in state
+              else state)
+state_dict = clean_state_dict(state_dict)
+
+model.load_state_dict(state_dict, strict=True)    # 3️⃣ now works
+
+# ─────── LOAD CHECKPOINT (DeepSpeed + QAT compatible) ───────
+state  = torch.load(args.ckpt, map_location=device, weights_only=False)
+
+def clean_state_dict(raw):
+    def strip_prefix(k): return k[7:] if k.startswith("module.") else k
+    ignore = ("weight_fake_quant", "activation_post_process")
+    return {strip_prefix(k): v
+            for k, v in raw.items()
+            if not any(tok in k for tok in ignore)}
+
+state_dict = state["module"] if "module" in state else state
+state_dict = clean_state_dict(state_dict)
+
+model.load_state_dict(state_dict, strict=True)
 
 focus_ids = torch.arange(1, 10, device=device)  # decision classes 1-9
 
