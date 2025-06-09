@@ -20,7 +20,7 @@ from train4_decision_only_performer_aws import (
 
 import torch
 
-ckpt = torch.load("DecisionOnly_xxx.pt", map_location="cpu")
+ckpt = torch.load("FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w2.pt", map_location="cpu")
 print(set(ckpt))                # what’s inside?  (‘epoch’, ‘best_val_loss’, ‘model_state_dict’, …)
 
 state = ckpt["model_state_dict"] if "model_state_dict" in ckpt else ckpt
