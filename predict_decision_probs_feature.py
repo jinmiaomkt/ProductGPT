@@ -4,6 +4,7 @@ predict_decision_probs_decisiononly.py
 
 Inference for “Decision-Only” Performer model.
 Outputs one JSON line per user with the 9-way decision distribution.
+FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w2
 """
 
 import argparse, json, torch, deepspeed
@@ -72,15 +73,16 @@ loader = DataLoader(
 # ───────── Build model ──────────
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w2
 model  = build_transformer(
             vocab_size  = cfg["vocab_size_tgt"],
-            d_model     = 128,
-            n_layers    = 8,
-            n_heads     = 8,
-            d_ff        = 128,
+            d_model     = 32,
+            n_layers    = 6,
+            n_heads     = 4,
+            d_ff        = 32,
             dropout     = 0.0,
             nb_features = 16,
-            max_seq_len = cfg["seq_len_ai"],
+            max_seq_len = 15360,
             kernel_type = cfg["kernel_type"]).to(device).eval()
 
 # ─────── LOAD CHECKPOINT ───────
