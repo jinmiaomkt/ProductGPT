@@ -81,6 +81,10 @@ model  = build_transformer(
             max_seq_len = cfg["seq_len_ai"],
             kernel_type = cfg["kernel_type"]).to(device).eval()
 
+# ─────── LOAD CHECKPOINT ───────
+# NB: PyTorch 2.6 default is now weights_only=True → we override it.
+state = torch.load(args.ckpt, map_location=device, weights_only=False)
+
 # ----- sanitise a DeepSpeed-QAT checkpoint -------------------
 def clean_state_dict(raw):
     """Remove 'module.' prefix and QAT artefacts."""
@@ -114,6 +118,14 @@ state_dict = state["module"] if "module" in state else state
 state_dict = clean_state_dict(state_dict)
 
 model.load_state_dict(state_dict, strict=True)
+
+# # tolerate either of these common layouts
+# if "model_state_dict" in state:
+#     model.load_state_dict(state["model_state_dict"], strict=True)
+# elif "module" in state:                           # DS ZeRO engine save
+#     model.load_state_dict(state["module"], strict=False)
+# else:                                             # raw state-dict
+#     model.load_state_dict(state, strict=True)
 
 focus_ids = torch.arange(1, 10, device=device)  # decision classes 1-9
 
