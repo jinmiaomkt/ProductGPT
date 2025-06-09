@@ -27,7 +27,7 @@ N_values           = [6]
 num_heads_values   = [4]
 gamma_values       = [1.0]
 lr_values          = [1e-4]
-weight_values      = [8, 16]
+weight_values      = [16, 32]
 
 # Precompute every combo
 HP_GRID = list(itertools.product(
