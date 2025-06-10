@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-predict_lstm.py
+predict_decision_probs_lstm.py
 
-Loads a trained LSTMClassifier and produces per‐timestep decision probabilities.
+Loads a trained LSTMClassifier and produces per‐timestep decision probabilities
+from a JSON‐array file of records.
 """
 
 import argparse
@@ -13,42 +14,47 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 from tqdm import tqdm
 
 # ──────────────────────────── 1.  Dataset ──────────────────────────────
 class PredictDataset(Dataset):
     """
-    Expects an ND‐JSON file where each line is a dict with:
-      - "uid": unique identifier
-      - "AggregateInput": e.g. ["0 1 2 3 …"]
+    Expects a single JSON array in `json_path`, where each element is a dict
+    containing at least:
+      - "uid": either a string or a single‐element list
+      - "AggregateInput": a list whose first element is the whitespace-delimited feature string
     """
-    def __init__(self, jsonl_path: Path):
-        self.rows = [json.loads(line) for line in jsonl_path.open()]
-        self.pad_id = 0
+    def __init__(self, json_path: Path):
+        raw = json.loads(json_path.read_text())
+        if not isinstance(raw, list):
+            raise ValueError("Input must be a JSON array of objects")
+        self.rows = raw
 
     def __len__(self):
         return len(self.rows)
 
     def __getitem__(self, idx):
         rec = self.rows[idx]
-        uid = rec["uid"]
-        # parse the same way as training:
-        tok_str = rec["AggregateInput"][0]
-        toks = [int(t) if t != "NA" else 0 for t in tok_str.strip().split()]
+        # handle uid being a list or str
+        uid = rec["uid"][0] if isinstance(rec["uid"], list) else rec["uid"]
+        # extract the feature string and convert to floats
+        feat_str = rec["AggregateInput"][0]
+        toks = [float(x) for x in feat_str.strip().split()]
         return {"uid": uid, "x": torch.tensor(toks, dtype=torch.float32)}
 
 def collate(batch):
+    # batch is a list of {"uid":…, "x": tensor(T,D)}
     uids = [b["uid"] for b in batch]
     xs   = [b["x"] for b in batch]
-    # pad with zeros
-    x_pad = pad_sequence(xs, batch_first=True, padding_value=0.0)  # (B, T, INPUT_DIM)
+    # pad sequences to [B, T_max, D]
+    x_pad = pad_sequence(xs, batch_first=True, padding_value=0.0)
     return {"uid": uids, "x": x_pad}
 
 # ──────────────────────────── 2.  Model ───────────────────────────────
 class LSTMClassifier(nn.Module):
-    def __init__(self, input_dim: int, hidden_size: int, num_classes: int):
+    def __init__(self, input_dim: int, hidden_size: int, num_classes: int = 10):
         super().__init__()
         self.lstm = nn.LSTM(input_dim, hidden_size, batch_first=True)
         self.fc   = nn.Linear(hidden_size, num_classes)
@@ -62,37 +68,34 @@ class LSTMClassifier(nn.Module):
 parser = argparse.ArgumentParser(
     description="Predict per‐timestep decision probabilities with LSTM"
 )
-parser.add_argument("--data",       required=True,
-                    help="Input ND‐JSON file of sequences")
-parser.add_argument("--ckpt",       required=True,
+parser.add_argument("--data",        required=True,
+                    help="Path to JSON array file of sequences")
+parser.add_argument("--ckpt",        required=True,
                     help="Path to the .pt checkpoint")
-parser.add_argument("--hidden_size",type=int, required=True,
+parser.add_argument("--hidden_size", type=int, required=True,
                     help="Hidden size used at training time")
-parser.add_argument("--input_dim",  type=int, default=15,
-                    help="Feature dimension per timestep (default: 15)")
-parser.add_argument("--batch_size", type=int, default=128,
+parser.add_argument("--input_dim",   type=int, default=15,
+                    help="Feature dimension per timestep")
+parser.add_argument("--batch_size",  type=int, default=128,
                     help="Batch size for inference")
-parser.add_argument("--out",        required=True,
+parser.add_argument("--out",         required=True,
                     help="Output JSONL path")
 args = parser.parse_args()
 
 # ──────────────────────────── 4.  Setup ───────────────────────────────
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# build model & load checkpoint
 model = LSTMClassifier(
     input_dim   = args.input_dim,
     hidden_size = args.hidden_size,
     num_classes = 10
 ).to(device).eval()
 
-# load state dict
+# load checkpoint (supports either raw state_dict or {"model_state_dict":…})
 state = torch.load(args.ckpt, map_location=device)
-# tolerate both raw and wrapped dicts
 sd = state.get("model_state_dict", state)
 model.load_state_dict(sd, strict=True)
 
-# prepare data loader
 dataset = PredictDataset(Path(args.data))
 loader  = DataLoader(dataset,
                      batch_size=args.batch_size,
@@ -103,19 +106,18 @@ loader  = DataLoader(dataset,
 out_path = Path(args.out)
 with out_path.open("w") as fout, torch.no_grad():
     for batch in tqdm(loader, desc="Predict"):
-        x    = batch["x"].to(device)   # (B, T, D)
+        x    = batch["x"].to(device)    # (B, T, D)
         uids = batch["uid"]
 
-        logits = model(x)              # (B, T, 10)
+        logits = model(x)               # (B, T, 10)
         probs  = F.softmax(logits, dim=-1)  # (B, T, 10)
 
-        # write one JSON line per sequence
         for i, uid in enumerate(uids):
-            # convert to nested lists
-            prof = probs[i].cpu().tolist()  # list of T lists of length 10
+            # per‐timestep 10‐way probabilities
+            prob_list = probs[i].cpu().tolist()
             fout.write(json.dumps({
                 "uid":   uid,
-                "probs": prof
+                "probs": prob_list
             }) + "\n")
 
-print(f"[✓] Written predictions to {out_path}")
+print(f"[✓] Predictions written → {out_path}")
