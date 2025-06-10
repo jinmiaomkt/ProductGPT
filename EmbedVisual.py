@@ -108,32 +108,39 @@ import pandas as pd
 
 # 0. Configuration
 CKPT_PATH = "/home/ec2-user/ProductGPT/FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w2.pt"
-OUT_DIR   = "embeddings_output"
+# make OUT_DIR absolute, next to your checkpoint
+BASE_DIR  = os.path.dirname(CKPT_PATH)
+OUT_DIR   = os.path.join(BASE_DIR, "embeddings_output")
 FIRST_PROD_ID, LAST_PROD_ID = 13, 56
 
-# 1. Ensure output folder exists
+# 1. Print where we’re running
+print("Working directory:", os.getcwd())
+print("Writing output to:", OUT_DIR)
+
+# 2. Ensure output folder exists
 os.makedirs(OUT_DIR, exist_ok=True)
 
-# 2. Load checkpoint
+# 3. Load checkpoint
 ckpt = torch.load(CKPT_PATH, map_location="cpu")
 
-# 3. Grab the state_dict
+# 4. Grab the state_dict
 state_dict = ckpt.get("model_state_dict", ckpt)
 
-# 4. (Optional) Print all keys to confirm where the embedding lives
-keys = list(state_dict.keys())
-print("Available state_dict keys:", keys)
+# 5. (Optional) Print all keys to confirm where the embedding lives
+# keys = list(state_dict.keys())
+# print("Available state_dict keys:", keys)
 
-# 5. Identify the embedding key
+# 6. Identify the embedding key
 emb_key = next((k for k in state_dict if k.endswith("id_embed.weight")), None)
 if emb_key is None:
     raise KeyError("Could not find a key ending with 'id_embed.weight' in the checkpoint")
+print("Using embedding key:", emb_key)
 
-# 6. Slice out rows 13–56
+# 7. Slice out rows 13–56
 emb_matrix = state_dict[emb_key]  # shape: [vocab_size, d_model]
-subset = emb_matrix[FIRST_PROD_ID : LAST_PROD_ID + 1].cpu().numpy()
+subset = emb_matrix[FIRST_PROD_ID:LAST_PROD_ID + 1].cpu().numpy()
 
-# 7. Build DataFrame and save to CSV
+# 8. Build DataFrame and save to CSV
 df = pd.DataFrame(
     subset,
     index=range(FIRST_PROD_ID, LAST_PROD_ID + 1),
@@ -146,3 +153,6 @@ df.to_csv(csv_path)
 
 print(f"✅ Saved embeddings for tokens {FIRST_PROD_ID}–{LAST_PROD_ID} "
       f"({subset.shape[0]}×{subset.shape[1]}) to:\n  {csv_path}")
+
+# 9. List the files in OUT_DIR so you can confirm
+print("Contents of", OUT_DIR, ":", os.listdir(OUT_DIR))
