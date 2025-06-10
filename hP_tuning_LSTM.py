@@ -36,7 +36,7 @@ NUM_CLASSES    = 10    # 0=PAD, 1–9 real decisions
 EPOCHS         = 80
 CLASS_9_WEIGHT = 5.0
 
-JSON_PATH = "/home/ec2-user/data/clean_list_int_wide4_simple6_IndexBasedTrain.json"
+JSON_PATH = "/home/ec2-user/data/clean_list_int_wide4_simple6_FeatureBasedTrain.json"
 S3_BUCKET = "productgptbucket"
 S3_PREFIX = "RNN"
 
