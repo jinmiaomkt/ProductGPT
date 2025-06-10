@@ -19,30 +19,59 @@ from torch.nn.utils.rnn import pad_sequence
 from tqdm import tqdm
 
 # ──────────────────────────── 1.  Dataset ──────────────────────────────
+# class PredictDataset(Dataset):
+#     """
+#     Expects a single JSON array in `json_path`, where each element is a dict
+#     containing at least:
+#       - "uid": either a string or a single‐element list
+#       - "AggregateInput": a list whose first element is the whitespace-delimited feature string
+#     """
+#     def __init__(self, json_path: Path):
+#         raw = json.loads(json_path.read_text())
+#         if not isinstance(raw, list):
+#             raise ValueError("Input must be a JSON array of objects")
+#         self.rows = raw
+
+#     def __len__(self):
+#         return len(self.rows)
+
+#     def __getitem__(self, idx):
+#         rec = self.rows[idx]
+#         # handle uid being a list or str
+#         uid = rec["uid"][0] if isinstance(rec["uid"], list) else rec["uid"]
+#         # extract the feature string and convert to floats
+#         feat_str = rec["AggregateInput"][0]
+#         toks = [float(x) for x in feat_str.strip().split()]
+#         return {"uid": uid, "x": torch.tensor(toks, dtype=torch.float32)}
+
 class PredictDataset(Dataset):
     """
-    Expects a single JSON array in `json_path`, where each element is a dict
-    containing at least:
-      - "uid": either a string or a single‐element list
-      - "AggregateInput": a list whose first element is the whitespace-delimited feature string
+    Expects a JSON array in `json_path`, where each element is a dict
+    containing:
+      - "uid": string or single‐element list
+      - "AggregateInput": list whose 1st element is the whitespace-delimited feature string
     """
-    def __init__(self, json_path: Path):
+    def __init__(self, json_path: Path, input_dim: int):
         raw = json.loads(json_path.read_text())
         if not isinstance(raw, list):
             raise ValueError("Input must be a JSON array of objects")
         self.rows = raw
+        self.input_dim = input_dim
 
     def __len__(self):
         return len(self.rows)
 
     def __getitem__(self, idx):
         rec = self.rows[idx]
-        # handle uid being a list or str
         uid = rec["uid"][0] if isinstance(rec["uid"], list) else rec["uid"]
-        # extract the feature string and convert to floats
         feat_str = rec["AggregateInput"][0]
-        toks = [float(x) for x in feat_str.strip().split()]
-        return {"uid": uid, "x": torch.tensor(toks, dtype=torch.float32)}
+        # convert, treating "NA" as 0
+        flat = [0.0 if tok == "NA" else float(tok) for tok in feat_str.strip().split()]
+        # reshape into (T, input_dim)
+        T = len(flat) // self.input_dim
+        x = torch.tensor(flat, dtype=torch.float32).view(T, self.input_dim)
+        return {"uid": uid, "x": x}
+
 
 def collate(batch):
     # batch is a list of {"uid":…, "x": tensor(T,D)}
@@ -96,7 +125,14 @@ state = torch.load(args.ckpt, map_location=device)
 sd = state.get("model_state_dict", state)
 model.load_state_dict(sd, strict=True)
 
-dataset = PredictDataset(Path(args.data))
+# dataset = PredictDataset(Path(args.data))
+# loader  = DataLoader(dataset,
+#                      batch_size=args.batch_size,
+#                      shuffle=False,
+#                      collate_fn=collate)
+
+# below your imports and model load...
+dataset = PredictDataset(Path(args.data), input_dim=args.input_dim)
 loader  = DataLoader(dataset,
                      batch_size=args.batch_size,
                      shuffle=False,
