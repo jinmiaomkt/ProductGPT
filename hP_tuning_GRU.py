@@ -18,11 +18,14 @@ from pathlib import Path
 
 import boto3, numpy as np, torch, torch.nn.functional as F
 import torch.nn as nn
-from sklearn.metrics import (accuracy_score, average_precision_score,
-                             f1_score, label_binarize)
+
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset, random_split
 from tqdm import tqdm
+
+from sklearn.metrics import accuracy_score, average_precision_score, f1_score
+from sklearn.preprocessing import label_binarize
+
 
 # ═════════ 0.  Hyper-params ═══════════════════════════════
 HIDDEN_SIZES = [32, 64, 128]
