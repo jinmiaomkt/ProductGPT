@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-predict_decision_probs_lstm.py
+predict_decision_probs_gru.py
 
-Loads a trained LSTMClassifier and produces per‐timestep decision probabilities
+Loads a trained GRUClassifier and produces per‐timestep decision probabilities
 from a JSON‐array file of records.
 """
 
@@ -19,38 +19,7 @@ from torch.nn.utils.rnn import pad_sequence
 from tqdm import tqdm
 
 # ──────────────────────────── 1.  Dataset ──────────────────────────────
-# class PredictDataset(Dataset):
-#     """
-#     Expects a single JSON array in `json_path`, where each element is a dict
-#     containing at least:
-#       - "uid": either a string or a single‐element list
-#       - "AggregateInput": a list whose first element is the whitespace-delimited feature string
-#     """
-#     def __init__(self, json_path: Path):
-#         raw = json.loads(json_path.read_text())
-#         if not isinstance(raw, list):
-#             raise ValueError("Input must be a JSON array of objects")
-#         self.rows = raw
-
-#     def __len__(self):
-#         return len(self.rows)
-
-#     def __getitem__(self, idx):
-#         rec = self.rows[idx]
-#         # handle uid being a list or str
-#         uid = rec["uid"][0] if isinstance(rec["uid"], list) else rec["uid"]
-#         # extract the feature string and convert to floats
-#         feat_str = rec["AggregateInput"][0]
-#         toks = [float(x) for x in feat_str.strip().split()]
-#         return {"uid": uid, "x": torch.tensor(toks, dtype=torch.float32)}
-
 class PredictDataset(Dataset):
-    """
-    Expects a JSON array in `json_path`, where each element is a dict
-    containing:
-      - "uid": string or single‐element list
-      - "AggregateInput": list whose 1st element is the whitespace-delimited feature string
-    """
     def __init__(self, json_path: Path, input_dim: int):
         raw = json.loads(json_path.read_text())
         if not isinstance(raw, list):
@@ -65,44 +34,39 @@ class PredictDataset(Dataset):
         rec = self.rows[idx]
         uid = rec["uid"][0] if isinstance(rec["uid"], list) else rec["uid"]
         feat_str = rec["AggregateInput"][0]
-        # convert, treating "NA" as 0
-        flat = [0.0 if tok == "NA" else float(tok) for tok in feat_str.strip().split()]
-        # reshape into (T, input_dim)
+        flat = [0.0 if tok == "NA" else float(tok)
+                for tok in feat_str.strip().split()]
         T = len(flat) // self.input_dim
         x = torch.tensor(flat, dtype=torch.float32).view(T, self.input_dim)
         return {"uid": uid, "x": x}
 
-
 def collate(batch):
-    # batch is a list of {"uid":…, "x": tensor(T,D)}
     uids = [b["uid"] for b in batch]
     xs   = [b["x"] for b in batch]
-    # pad sequences to [B, T_max, D]
     x_pad = pad_sequence(xs, batch_first=True, padding_value=0.0)
     return {"uid": uids, "x": x_pad}
 
-# ──────────────────────────── 2.  Model ───────────────────────────────
-class LSTMClassifier(nn.Module):
+# ──────────────────────────── 2.  GRU model ─────────────────────────────
+class GRUClassifier(nn.Module):
     def __init__(self, input_dim: int, hidden_size: int, num_classes: int = 10):
         super().__init__()
-        self.lstm = nn.LSTM(input_dim, hidden_size, batch_first=True)
-        self.fc   = nn.Linear(hidden_size, num_classes)
+        self.gru = nn.GRU(input_dim, hidden_size, batch_first=True)
+        self.fc  = nn.Linear(hidden_size, num_classes)
 
     def forward(self, x):
-        # x: (B, T, input_dim)
-        out, _ = self.lstm(x)
+        out, _ = self.gru(x)
         return self.fc(out)  # (B, T, num_classes)
 
 # ──────────────────────────── 3.  CLI ─────────────────────────────────
 parser = argparse.ArgumentParser(
-    description="Predict per‐timestep decision probabilities with LSTM"
+    description="Predict per‐timestep decision probabilities with GRU"
 )
 parser.add_argument("--data",        required=True,
                     help="Path to JSON array file of sequences")
 parser.add_argument("--ckpt",        required=True,
                     help="Path to the .pt checkpoint")
 parser.add_argument("--hidden_size", type=int, required=True,
-                    help="Hidden size used at training time")
+                    help="Hidden size used at training time (must match ckpt)")
 parser.add_argument("--input_dim",   type=int, default=15,
                     help="Feature dimension per timestep")
 parser.add_argument("--batch_size",  type=int, default=128,
@@ -114,24 +78,17 @@ args = parser.parse_args()
 # ──────────────────────────── 4.  Setup ───────────────────────────────
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-model = LSTMClassifier(
+model = GRUClassifier(
     input_dim   = args.input_dim,
     hidden_size = args.hidden_size,
     num_classes = 10
 ).to(device).eval()
 
-# load checkpoint (supports either raw state_dict or {"model_state_dict":…})
+# load checkpoint (handles both raw and wrapped state_dict)
 state = torch.load(args.ckpt, map_location=device)
 sd = state.get("model_state_dict", state)
 model.load_state_dict(sd, strict=True)
 
-# dataset = PredictDataset(Path(args.data))
-# loader  = DataLoader(dataset,
-#                      batch_size=args.batch_size,
-#                      shuffle=False,
-#                      collate_fn=collate)
-
-# below your imports and model load...
 dataset = PredictDataset(Path(args.data), input_dim=args.input_dim)
 loader  = DataLoader(dataset,
                      batch_size=args.batch_size,
@@ -149,11 +106,9 @@ with out_path.open("w") as fout, torch.no_grad():
         probs  = F.softmax(logits, dim=-1)  # (B, T, 10)
 
         for i, uid in enumerate(uids):
-            # per‐timestep 10‐way probabilities
-            prob_list = probs[i].cpu().tolist()
             fout.write(json.dumps({
                 "uid":   uid,
-                "probs": prob_list
+                "probs": probs[i].cpu().tolist()
             }) + "\n")
 
 print(f"[✓] Predictions written → {out_path}")
