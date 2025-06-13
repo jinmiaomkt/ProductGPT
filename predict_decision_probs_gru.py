@@ -109,6 +109,12 @@ with out_path.open("w") as fout, torch.no_grad():
         probs = probs[..., 1:]                # keep columns 1-9  → (B,T,9)
         probs = probs / probs.sum(-1, keepdim=True)
 
+        # Safe renorm
+        row_sum = torch.where(row_sum == 0,
+                            torch.ones_like(row_sum),
+                            row_sum)
+        probs   = probs / row_sum
+
         for i, uid in enumerate(uids):
             fout.write(json.dumps({
                 "uid":   uid,

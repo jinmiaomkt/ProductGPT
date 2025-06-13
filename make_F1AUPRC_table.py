@@ -116,7 +116,7 @@ data["Group"] = np.select(
 
 # ---------------------- 6. build binary buckets ------------------
 BIN_TASKS = {
-    "Buy"        : [1,2,3,4,5,6,7,8],
+    "BuyNone"    : [9],
     "BuyOne"     : [1,3,5,7],
     "BuyTen"     : [2,4,6,8],
     "BuyRegular" : [1,2],
@@ -181,8 +181,8 @@ from sklearn.metrics import f1_score, average_precision_score
 # ----------  declare your models here  ------------------------
 MODELS = {
     "ProductGPT"   : "/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/Data/productgpt_predictions.jsonl",
-    "GRU"                        : "/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/Data/gru_predictions.jsonl",
-    "LSTM"                       : "/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/Data/lstm_predictions.jsonl",
+    "GRU"          : "/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/Data/gru_predictions.jsonl",
+    "LSTM"         : "/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/Data/lstm_predictions.jsonl",
 }
 
 metric_rows = []
