@@ -12,7 +12,7 @@ import torch, matplotlib.pyplot as plt
 # ------------------------------------------------------------------
 # 0. EDIT YOUR FILE LOCATIONS
 # ------------------------------------------------------------------
-PRED_PATH  = Path("/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/Data/productgpt_predictions.jsonl")
+PRED_PATH  = Path("/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/Data/lstm_predictions.jsonl")
 LABEL_PATH = Path("/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/Data/clean_list_int_wide4_simple6.json")
 SEED       = 33
 # ------------------------------------------------------------------
@@ -116,7 +116,7 @@ data["Group"] = np.select(
 
 # ---------------------- 6. build binary buckets ------------------
 BIN_TASKS = {
-    "Buy"        : [1,2,3,4,5,6,7,8],
+    "BuyNone"        : [9],
     "BuyOne"     : [1,3,5,7],
     "BuyTen"     : [2,4,6,8],
     "BuyRegular" : [1,2],
