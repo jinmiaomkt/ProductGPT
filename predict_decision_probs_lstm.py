@@ -148,6 +148,10 @@ with out_path.open("w") as fout, torch.no_grad():
         logits = model(x)               # (B, T, 10)
         probs  = F.softmax(logits, dim=-1)  # (B, T, 10)
 
+        # ─── NEW: drop the dummy logit 0 and renormalise ──────────────────
+        probs = probs[..., 1:]                # keep columns 1-9  → (B,T,9)
+        probs = probs / probs.sum(-1, keepdim=True)
+
         for i, uid in enumerate(uids):
             # per‐timestep 10‐way probabilities
             prob_list = probs[i].cpu().tolist()
