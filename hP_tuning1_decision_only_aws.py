@@ -23,7 +23,7 @@ import boto3
 import torch
 
 from config4 import get_config
-from train4_decision_only_performer_aws import train_model
+from train1_decision_only_performer_aws import train_model
 
 # hyper‐parameter grids
 nb_features_values = [8, 16]

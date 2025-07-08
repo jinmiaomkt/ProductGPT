@@ -16,7 +16,7 @@ import pandas as pd
 # ------------------------------------------------------------------
 # 1.  Folder with your result files
 # ------------------------------------------------------------------
-ROOT = Path('/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/TuningResult/FeatureBasedFull')
+ROOT = Path('/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/TuningResult/IndexBasedFull')
 
 # ------------------------------------------------------------------
 # 2.  Map short tokens → canonical column names (from filename)

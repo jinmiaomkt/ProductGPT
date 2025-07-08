@@ -18,7 +18,7 @@ import torch
 
 from config4 import get_config
 from model4_decoderonly_feature_performer import build_transformer
-from train4_decision_only_performer_aws import _ensure_jsonl, JsonLineDataset, _build_tok
+from train1_decision_only_performer_aws import _ensure_jsonl, JsonLineDataset, _build_tok
 
 # ───────────── CLI ─────────────
 cli = argparse.ArgumentParser()
