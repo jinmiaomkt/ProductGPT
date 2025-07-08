@@ -12,7 +12,7 @@ import torch, matplotlib.pyplot as plt
 # ------------------------------------------------------------------
 # 0. EDIT YOUR FILE LOCATIONS
 # ------------------------------------------------------------------
-PRED_PATH  = Path("/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/Data/gru_predictions.jsonl")
+PRED_PATH  = Path("/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/Data/productgpt_predictions.jsonl")
 LABEL_PATH = Path("/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/Data/clean_list_int_wide4_simple6.json")
 SEED       = 33
 # ------------------------------------------------------------------
@@ -145,30 +145,30 @@ auc_tbl = (pd.DataFrame(rows)
              .round(4)
              .sort_index())
 
-print("\n=============  BINARY ROC-AUC TABLE  =======================")
-print(auc_tbl.fillna(" NA"))
-print("============================================================")
+# print("\n=============  BINARY ROC-AUC TABLE  =======================")
+# print(auc_tbl.fillna(" NA"))
+# print("============================================================")
 
-# # ---------------------- 8. ROC curves (one bucket) ---------------
-# TASK   = "Buy"                      # choose any key in BIN_TASKS
-# GROUPS = ["Calibration","HoldoutA","HoldoutB"]
+# ---------------------- 8. ROC curves (one bucket) ---------------
+TASK   = "BuyNone"                      # choose any key in BIN_TASKS
+GROUPS = ["Calibration","HoldoutA","HoldoutB"]
 
-# fig, axes = plt.subplots(1,3,figsize=(14,5),sharey=True)
-# for ax, grp in zip(axes, GROUPS):
-#     gdf = data[data.Group==grp]
+fig, axes = plt.subplots(1,3,figsize=(14,5),sharey=True)
+for ax, grp in zip(axes, GROUPS):
+    gdf = data[data.Group==grp]
 
-#     ins = gdf[gdf.Split=="train"]
-#     oos = gdf[gdf.Split.isin(["val","test"])]
+    ins = gdf[gdf.Split=="train"]
+    oos = gdf[gdf.Split.isin(["val","test"])]
 
-#     fpr_i,tpr_i,_ = roc_curve(ins[f"y_{TASK}"], ins[f"p_{TASK}"])
-#     fpr_o,tpr_o,_ = roc_curve(oos[f"y_{TASK}"], oos[f"p_{TASK}"])
+    fpr_i,tpr_i,_ = roc_curve(ins[f"y_{TASK}"], ins[f"p_{TASK}"])
+    fpr_o,tpr_o,_ = roc_curve(oos[f"y_{TASK}"], oos[f"p_{TASK}"])
 
-#     ax.plot(fpr_i,tpr_i,lw=2,label=f"In-sample  AUC={auc(fpr_i,tpr_i):.3f}")
-#     ax.plot(fpr_o,tpr_o,lw=2,ls="--",
-#             label=f"OOS  (val+test) AUC={auc(fpr_o,tpr_o):.3f}")
-#     ax.plot([0,1],[0,1],"k:",lw=1)
-#     ax.set_title(grp); ax.set_xlim(0,1); ax.set_ylim(0,1)
-#     ax.set_xlabel("FPR"); ax.set_ylabel("TPR" if grp=="Calibration" else "")
-#     ax.legend(loc="lower right")
-# fig.suptitle(f"ROC curves – bucket: {TASK}",fontsize=14)
-# fig.tight_layout(rect=[0,0,1,0.95]); plt.show()
+    ax.plot(fpr_i,tpr_i,lw=2,label=f"In-sample  AUC={auc(fpr_i,tpr_i):.3f}")
+    ax.plot(fpr_o,tpr_o,lw=2,ls="--",
+            label=f"OOS  (val+test) AUC={auc(fpr_o,tpr_o):.3f}")
+    ax.plot([0,1],[0,1],"k:",lw=1)
+    ax.set_title(grp); ax.set_xlim(0,1); ax.set_ylim(0,1)
+    ax.set_xlabel("FPR"); ax.set_ylabel("TPR" if grp=="Calibration" else "")
+    ax.legend(loc="lower right")
+fig.suptitle(f"ROC curves – bucket: {TASK}",fontsize=14)
+fig.tight_layout(rect=[0,0,1,0.95]); plt.show()
