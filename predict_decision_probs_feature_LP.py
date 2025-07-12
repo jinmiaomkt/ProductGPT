@@ -7,6 +7,7 @@ Outputs one JSON line per user with the 9-way decision distribution.
 FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w2
 """
 
+import sys, gzip, json   # json was already there
 import argparse, json, torch, deepspeed
 from pathlib import Path
 from torch.utils.data import DataLoader
@@ -19,6 +20,16 @@ import torch
 from config2 import get_config
 from model2_decoderonly_feature_performer import build_transformer
 from train1_decision_only_performer_aws import _ensure_jsonl, JsonLineDataset, _build_tok
+
+def smart_open(path: str):
+    """
+    open() that (i) sends '-' to stdout, (ii) gzip‑opens *.gz, (iii) plain‑opens everything else
+    """
+    if path in ("-", None):
+        return sys.stdout                    # stream to stdout
+    if path.endswith(".gz"):
+        return gzip.open(path, "wt")         # text‑mode gzip
+    return open(path, "w")
 
 # ───────────── CLI ─────────────
 cli = argparse.ArgumentParser()
@@ -188,7 +199,8 @@ model.load_state_dict(state_dict, strict=True)
 focus_ids = torch.arange(1, 10, device=device)  # decision classes 1-9
 
 out_path = Path(args.out).expanduser()
-with out_path.open("w") as fout, torch.no_grad():
+# with out_path.open("w") as fout, torch.no_grad():
+with smart_open(out_path) as fout, torch.no_grad():
     for batch in loader:
         x    = batch["x"].to(device)
         uids = batch["uid"]
