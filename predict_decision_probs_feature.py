@@ -4,7 +4,7 @@ predict_decision_probs_decisiononly.py
 
 Inference for “Decision-Only” Performer model.
 Outputs one JSON line per user with the 9-way decision distribution.
-FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w2
+FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w2w
 """
 
 import argparse, json, torch, deepspeed
