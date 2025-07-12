@@ -21,15 +21,26 @@ from config2 import get_config
 from model2_decoderonly_feature_performer import build_transformer
 from train1_decision_only_performer_aws import _ensure_jsonl, JsonLineDataset, _build_tok
 
-def smart_open(path: str):
+import sys, gzip
+from contextlib import nullcontext
+from pathlib import Path            # NEW
+
+def smart_open(path):
     """
-    open() that (i) sends '-' to stdout, (ii) gzip‑opens *.gz, (iii) plain‑opens everything else
+    • path == '-'  → stdout
+    • *.gz         → gzip‑text file
+    • anything else→ normal text file
+    Works with str or pathlib.Path.
     """
-    if path in ("-", None):
-        return sys.stdout                    # stream to stdout
+    if isinstance(path, Path):      # NEW  convert Path → str
+        path = str(path)
+
+    if path == "-":
+        return nullcontext(sys.stdout)   # no .close() needed
     if path.endswith(".gz"):
-        return gzip.open(path, "wt")         # text‑mode gzip
+        return gzip.open(path, "wt")
     return open(path, "w")
+
 
 # ───────────── CLI ─────────────
 cli = argparse.ArgumentParser()
