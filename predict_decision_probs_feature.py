@@ -172,13 +172,14 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # FullProductGPT_featurebased_performerfeatures32_dmodel32_ff32_N6_heads4_lr0.0001_w8.pt
 # FullProductGPT_featurebased_performerfeatures32_dmodel32_ff32_N6_heads4_lr0.0001_w2.pt
 # FullProductGPT_featurebased_performerfeatures16_dmodel32_ff64_N6_heads4_lr0.0001_w2
+# FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w4
 model  = build_transformer(
             vocab_size_tgt=cfg["vocab_size_tgt"],
             vocab_size_src=cfg["vocab_size_src"],
             d_model     = 32,
             n_layers    = 6,
             n_heads     = 4,
-            d_ff        = 64,
+            d_ff        = 32,
             dropout     = 0.0,
             nb_features = 16,  
             max_seq_len = 15360,
