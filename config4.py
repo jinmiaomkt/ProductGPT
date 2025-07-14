@@ -45,7 +45,7 @@ def _raw_config():
         # ---------- rates ----------
         "source_rate": 10,
         "lto_rate":    4,
-        "ai_rate":    1,          # decision every 15 tokens in aggregate input
+        "ai_rate":    15,          # decision every 15 tokens in aggregate input
 
         # ---------- optimisation ----------
         "weight_decay": 0.01,
