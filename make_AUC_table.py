@@ -12,7 +12,7 @@ import torch, matplotlib.pyplot as plt
 # ------------------------------------------------------------------
 # 0. EDIT YOUR FILE LOCATIONS
 # ------------------------------------------------------------------
-PRED_PATH  = Path("/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/Data/gru_predictions.jsonl")
+PRED_PATH  = Path('/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/TuningResult/FeatureBasedLP/LP_feature_predictions.jsonl')
 LABEL_PATH = Path("/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/Data/clean_list_int_wide4_simple6.json")
 SEED       = 33
 # ------------------------------------------------------------------
