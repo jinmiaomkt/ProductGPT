@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 """
-predict_decision_probs_decisiononly.py
+predict_decision_probs_feature.py
 
-Inference for “Decision-Only” Performer model.
 Outputs one JSON line per user with the 9-way decision distribution.
 FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w2w
 """
@@ -227,5 +226,3 @@ with smart_open(out_path) as fout, torch.no_grad():
                 "uid": uid,
                 "probs": np.round(prob_dec_focus[i].cpu(), 6).tolist()
             }) + "\n")
-
-print(f"[✓] predictions written → {out_path}")

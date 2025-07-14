@@ -143,7 +143,7 @@ def to_int_or_pad(tok: str) -> int:
 class PredictDataset(JsonLineDataset):
     def __getitem__(self, idx):
         row     = super().__getitem__(idx)
-        seq_raw = row["AggregateInput"]
+        seq_raw = row["LTO_PreviousDecision"]
 
         if isinstance(seq_raw, list):
             seq_str = (" ".join(map(str, seq_raw))

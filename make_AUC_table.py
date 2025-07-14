@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 # =============================================================
-#  make_AUC_table.py  –  AUC table + ROC curves
+#  make_AUC_table.py  –  tolerant ROC‑AUC table builder
 # =============================================================
-import json, gzip
+from __future__ import annotations
+import json, gzip, warnings, os, re
 from pathlib import Path
 from collections import defaultdict
-import numpy as np
-from sklearn.metrics import roc_auc_score
-from torch.utils.data import random_split
-import torch
-import pandas as pd
 
+import numpy as np
+import pandas as pd
+import torch
+from torch.utils.data import random_split
+from sklearn.metrics import roc_auc_score
+
+# Uncomment next two lines once; silences OpenMP clash crash
+# os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 # ------------------------------------------------------------------
 # 0. EDIT YOUR FILE LOCATIONS
@@ -20,7 +24,8 @@ LABEL_PATH = Path("/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/Data/c
 SEED       = 33
 # ------------------------------------------------------------------
 
-# ---------------------- helper: robust int-vector -----------------
+
+# ---------------------- helper: robust int‑vector -----------------
 def to_int_vec(x):
     """Return list[int] from str, list[str], list[int], or ['1 2 3']."""
     if isinstance(x, str):
@@ -37,76 +42,51 @@ def to_int_vec(x):
         return out
     raise TypeError(f"Unsupported field type: {type(x)}")
 
+
 def flat_uid(u):
-    """uid may be 'abc' or ['abc']; always return str."""
     return str(u[0] if isinstance(u, list) else u)
 
-# ---------------------- 1. load predictions -----------------------
-pred_rows = []
-with PRED_PATH.open() as f:
-    for line in f:
-        rec = json.loads(line)
-        uid = flat_uid(rec["uid"])
-        
-        for t, p in enumerate(rec["probs"]):          # 9-way probs
-            pred_rows.append(
-                {"uid": uid, "t": t, **{f"p{i+1}": p[i] for i in range(9)}})
-pred_df = pd.DataFrame(pred_rows)
 
-# ---------------------- 2. load labels & explode ------------------
+# ---------------------- 1. load labels ---------------------------
 raw_json = json.loads(LABEL_PATH.read_text())
 
-# raw_records: list‑of‑dicts (one per uid)
 raw_records = (
     list(raw_json)
     if isinstance(raw_json, list)
     else [{k: raw_json[k][i] for k in raw_json} for i in range(len(raw_json["uid"]))]
 )
 
-# label_dict  uid -> dict of lists {label[], idx_h[], feat_h[]}
 label_dict = {}
 for rec in raw_records:
     uid = flat_uid(rec["uid"])
     label_dict[uid] = {
-        "label"  : to_int_vec(rec["Decision"]),
-        "idx_h"  : to_int_vec(rec["IndexBasedHoldout"]),
-        "feat_h" : to_int_vec(rec["FeatureBasedHoldout"]),
+        "label":  to_int_vec(rec["Decision"]),
+        "idx_h":  to_int_vec(rec["IndexBasedHoldout"]),
+        "feat_h": to_int_vec(rec["FeatureBasedHoldout"]),
     }
 
-# ---------------------- 2. rebuild 80‑10‑10 split ---------------
-train_sz   = int(0.8 * len(raw_records))
-val_sz     = int(0.1 * len(raw_records))
-test_sz    = len(raw_records) - train_sz - val_sz
-g = torch.Generator().manual_seed(SEED)
-train_idx, val_idx, test_idx = random_split(
-    range(len(raw_records)), [train_sz, val_sz, test_sz], generator=g
-)
-train_uid = {flat_uid(raw_records[i]["uid"]) for i in train_idx.indices}
-val_uid   = {flat_uid(raw_records[i]["uid"]) for i in val_idx.indices}
-test_uid  = {flat_uid(raw_records[i]["uid"]) for i in test_idx.indices}
+# ------------- 1b. rebuild 80‑10‑10 split ------------------------
+train_sz = int(0.8 * len(raw_records))
+val_sz   = int(0.1 * len(raw_records))
+test_sz  = len(raw_records) - train_sz - val_sz
+g        = torch.Generator().manual_seed(SEED)
+tr_i, va_i, te_i = random_split(range(len(raw_records)),
+                                [train_sz, val_sz, test_sz], generator=g)
+val_uid  = {flat_uid(raw_records[i]["uid"]) for i in va_i.indices}
+test_uid = {flat_uid(raw_records[i]["uid"]) for i in te_i.indices}
 
-def which_split(uid):
-    if uid in val_uid:
-        return "val"
-    if uid in test_uid:
-        return "test"
-    return "train"
+which_split = lambda u: "val" if u in val_uid else "test" if u in test_uid else "train"
 
-# ---------------------- 3. bucket definitions --------------------
+# ---------------------- 2. task / group defs ---------------------
 BIN_TASKS = {
-    "BuyNone"   : [9],
-    "BuyOne"    : [1, 3, 5, 7],
-    "BuyTen"    : [2, 4, 6, 8],
+    "BuyNone":   [9],
+    "BuyOne":    [1, 3, 5, 7],
+    "BuyTen":    [2, 4, 6, 8],
     "BuyRegular": [1, 2],
-    "BuyFigure" : [3, 4, 5, 6],
-    "BuyWeapon" : [7, 8],
+    "BuyFigure":  [3, 4, 5, 6],
+    "BuyWeapon":  [7, 8],
 }
-# fast membership lookup
 TASK_POSSETS = {k: set(v) for k, v in BIN_TASKS.items()}
-
-# ---------------------- 4. accumulators --------------------------
-# scores[(task, group, split)] -> {"y":[], "p":[]}
-scores = defaultdict(lambda: {"y": [], "p": []})
 
 def period_group(idx_h, feat_h):
     if feat_h == 0:
@@ -117,36 +97,76 @@ def period_group(idx_h, feat_h):
         return "HoldoutB"
     return "UNASSIGNED"
 
-# ---------------------- 5. stream predictions --------------------
+
+# ---------------------- 3. stream predictions --------------------
+scores = defaultdict(lambda: {"y": [], "p": []})
+accept, reject = 0, 0                                   # counters
+
 open_pred = gzip.open if PRED_PATH.suffix == ".gz" else open
-with open_pred(PRED_PATH, "rt") as f:
-    for line in f:
-        rec = json.loads(line)
-        uid = flat_uid(rec["uid"])
+brace_re  = re.compile(r"\{.*\}")                       # greedy, last '}' keeps most json
+
+with open_pred(PRED_PATH, "rt", errors="replace") as f:
+    for n, raw_line in enumerate(f, 1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line[0] not in "{[":
+            # not a JSON line – likely log text
+            reject += 1
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            # salvage attempt: take substring between first '{' and last '}'
+            m = brace_re.search(line)
+            if not m:
+                warnings.warn(f"Line {n}: no JSON object found – skipped")
+                reject += 1
+                continue
+            try:
+                rec = json.loads(m.group())
+            except json.JSONDecodeError:
+                warnings.warn(f"Line {n}: corrupted JSON – skipped")
+                reject += 1
+                continue
+
+        uid = flat_uid(rec.get("uid", ""))
         if uid not in label_dict:
-            continue  # skip if uid missing in labels
+            warnings.warn(f"uid {uid} not in labels – skipped")
+            reject += 1
+            continue
 
         lbl_info = label_dict[uid]
         split    = which_split(uid)
 
-        for t, probs in enumerate(rec["probs"]):  # probs is length‑9 list
+        probs_field = rec["probs"]
+        # old (list‑of‑lists) or new (single list)
+        probs_iter = probs_field if probs_field and isinstance(probs_field[0], list) \
+                               else [probs_field] * len(lbl_info["label"])
+
+        for t, probs in enumerate(probs_iter):
             try:
-                y      = lbl_info["label"][t]
-                idx_h  = lbl_info["idx_h"][t]
-                feat_h = lbl_info["feat_h"][t]
+                y, idx_h, feat_h = (lbl_info["label"][t],
+                                    lbl_info["idx_h"][t],
+                                    lbl_info["feat_h"][t])
             except IndexError:
-                continue  # mismatch in sequence length → ignore
+                warnings.warn(f"uid {uid}: shorter labels than preds – truncated")
+                break
 
             group = period_group(idx_h, feat_h)
 
             for task, pos in BIN_TASKS.items():
                 y_bin = int(y in TASK_POSSETS[task])
-                p_bin = sum(probs[i - 1] for i in pos)  # probs are 1‑indexed
+                p_bin = sum(probs[i - 1] for i in pos)  # 1‑indexed
                 key   = (task, group, split)
                 scores[key]["y"].append(y_bin)
                 scores[key]["p"].append(p_bin)
 
-# ---------------------- 6. compute AUC table ---------------------
+        accept += 1
+
+print(f"[INFO] Parsed prediction file: {accept} records accepted, {reject} skipped.")
+
+# ---------------------- 4. compute AUC table ---------------------
 rows = []
 for task in BIN_TASKS:
     for group in ["Calibration", "HoldoutA", "HoldoutB"]:
@@ -154,20 +174,14 @@ for task in BIN_TASKS:
             key = (task, group, split)
             y   = scores[key]["y"]
             p   = scores[key]["p"]
-            auc_val = (
-                np.nan
-                if len(set(y)) < 2
-                else roc_auc_score(y, p)
-            )
-            rows.append(
-                {"Task": task, "Group": group, "Split": split, "AUC": auc_val}
-            )
+            auc = np.nan if len(set(y)) < 2 else roc_auc_score(y, p)
+            rows.append({"Task": task, "Group": group, "Split": split, "AUC": auc})
 
 auc_tbl = (
     pd.DataFrame(rows)
-    .pivot(index=["Task", "Group"], columns="Split", values="AUC")
-    .round(4)
-    .sort_index()
+      .pivot(index=["Task", "Group"], columns="Split", values="AUC")
+      .round(4)
+      .sort_index()
 )
 
 print("\n=============  BINARY ROC‑AUC TABLE  =======================")
