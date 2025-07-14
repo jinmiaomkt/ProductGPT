@@ -1,4 +1,4 @@
-# config4_index_git.py
+# config2.py
 # ————————————————————————————————————————————————————————————
 # Central place for *all* hyper-parameters.  The only knob you need to
 # touch to change the context length is  `ctx_window`  below.

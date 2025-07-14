@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """
-predict_decision_probs_decisiononly.py
+predict_decision_probs_feature_LP.py
 
-Inference for “Decision-Only” Performer model.
+Inference for “Decision + Limited-time Product” Performer model.
 Outputs one JSON line per user with the 9-way decision distribution.
 FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w2
 """
@@ -19,7 +19,7 @@ import torch
 
 from config2 import get_config
 from model2_decoderonly_feature_performer import build_transformer
-from train1_decision_only_performer_aws import _ensure_jsonl, JsonLineDataset, _build_tok
+from train2_decoderonly_performer_feature_aws import _ensure_jsonl, JsonLineDataset, _build_tok
 
 import sys, gzip
 from contextlib import nullcontext
@@ -41,7 +41,12 @@ def smart_open(path):
         return gzip.open(path, "wt")
     return open(path, "w")
 
-
+def to_int(tok: str, pad_id: int) -> int:
+    try:
+        return int(tok)
+    except ValueError:
+        return pad_id
+    
 # ───────────── CLI ─────────────
 cli = argparse.ArgumentParser()
 cli.add_argument("--data", required=True, help="ND-JSON events file")
@@ -52,7 +57,7 @@ args = cli.parse_args()
 # ─────────── Config ────────────
 cfg              = get_config()
 cfg["lp_rate"]   = 5
-cfg["batch_size"] = 8
+cfg["batch_size"] = 32
 
 # ──────── Tokenizer ────────────
 tok_path = Path(cfg["model_folder"]) / "tokenizer_tgt.json"
@@ -168,10 +173,6 @@ loader = DataLoader(
 
 # ───────── Build model ──────────
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w2
-# LP_ProductGPT_featurebased_performerfeatures32_dmodel32_ff32_N4_heads4_lr0.001_w2.pt
-
 model  = build_transformer(
             vocab_size_tgt=cfg["vocab_size_tgt"],
             vocab_size_src=cfg["vocab_size_src"],
@@ -217,7 +218,7 @@ with smart_open(out_path) as fout, torch.no_grad():
         uids = batch["uid"]
 
         probs = torch.softmax(model(x), dim=-1)
-        pos   = torch.arange(cfg["ai_rate"]-1, x.size(1), cfg["ai_rate"],
+        pos   = torch.arange(cfg["lp_rate"]-1, x.size(1), cfg["lp_rate"],
                              device=device)
 
         prob_dec_focus = probs[:, pos, :][..., focus_ids]  # (B, N, 9)
@@ -227,5 +228,3 @@ with smart_open(out_path) as fout, torch.no_grad():
                 "uid": uid,
                 "probs": np.round(prob_dec_focus[i].cpu(), 4).tolist()
             }) + "\n")
-
-print(f"[✓] predictions written → {out_path}")
