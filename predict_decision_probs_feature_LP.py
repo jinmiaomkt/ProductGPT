@@ -225,7 +225,7 @@ with smart_open(out_path) as fout, torch.no_grad():
         for i, uid in enumerate(uids):
             fout.write(json.dumps({
                 "uid": uid,
-                "probs": prob_dec_focus[i].cpu().tolist()
+                "probs": np.round(prob_dec_focus[i].cpu(), 4).tolist()
             }) + "\n")
 
 print(f"[✓] predictions written → {out_path}")
