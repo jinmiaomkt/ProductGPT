@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # =============================================================
-#  make_AUC_table.py  –  ROC‑AUC table (robust, no spam)
+#  make_AUC_table.py  –  ROC-AUC table (robust, no spam, 0-based)
 # =============================================================
 from __future__ import annotations
 import json, gzip, re, os
@@ -13,19 +13,19 @@ import torch
 from torch.utils.data import random_split
 from sklearn.metrics import roc_auc_score
 
-# Optional: silence Intel/LLVM OpenMP clash on macOS
+# silence Intel/LLVM OpenMP clash on macOS
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 # ------------------------------------------------------------------
-# EDIT YOUR FILE LOCATIONS
+#  EDIT YOUR FILE LOCATIONS
 # ------------------------------------------------------------------
-PRED_PATH  = Path('/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/TuningResult/GRU/gru_predictions.jsonl')
-LABEL_PATH = Path('/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/Data/clean_list_int_wide4_simple6.json')
+PRED_PATH  = Path("/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/TuningResult/GRU/gru_predictions.jsonl")
+LABEL_PATH = Path("/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/Data/clean_list_int_wide4_simple6.json")
 SEED       = 33
 # ------------------------------------------------------------------
 
 
-# ---------------------- tiny helpers ---------------------------------
+# ---------------------- tiny helpers --------------------------------
 def to_int_vec(x):
     if isinstance(x, str):
         return [int(v) for v in x.split()]
@@ -38,81 +38,56 @@ def to_int_vec(x):
 
 flat_uid = lambda u: str(u[0] if isinstance(u, list) else u)
 
-# ---------------------- 1. load labels -------------------------------
+# ---------------------- 1. load labels ------------------------------
 raw = json.loads(LABEL_PATH.read_text())
 records = list(raw) if isinstance(raw, list) else [
     {k: raw[k][i] for k in raw} for i in range(len(raw["uid"]))
 ]
+
+# convert Decision to 0-based first
+for rec in records:
+    rec["Decision"] = [d - 1 for d in to_int_vec(rec["Decision"])]
+
 label_dict = {
     flat_uid(rec["uid"]): {
-        "label" : to_int_vec(rec["Decision"]),
+        "label" : rec["Decision"],
         "idx_h" : to_int_vec(rec["IndexBasedHoldout"]),
         "feat_h": to_int_vec(rec["FeatureBasedHoldout"]),
-    } for rec in records
+    }
+    for rec in records
 }
 
-# ── peek at a single user ───────────────────────────────────────────
-uid0, rec0 = next(iter(label_dict.items()))
-print(uid0, rec0["label"][:5], len(rec0["label"]))
-
-with open_pred(PRED_PATH, "rt") as f:
-    for line in f:
-        if uid0 in line:
-            probs = json.loads(line)["probs"][0]
-            print("probs len =", len(probs))
-            print("arg‑max idx =", np.argmax(probs))
-            break
-
-# -------- 1b. 80‑10‑10 split (reproduce training split) --------------
+# -------- 1b. 80-10-10 split (reproduce training split) -------------
 g = torch.Generator().manual_seed(SEED)
 n      = len(records)
-tr, va = int(0.8*n), int(0.1*n)
-tr_i, va_i, te_i = random_split(range(n), [tr, va, n-tr-va], generator=g)
+tr, va = int(0.8 * n), int(0.1 * n)
+tr_i, va_i, te_i = random_split(range(n), [tr, va, n - tr - va], generator=g)
 val_uid  = {flat_uid(records[i]["uid"]) for i in va_i.indices}
 test_uid = {flat_uid(records[i]["uid"]) for i in te_i.indices}
 which_split = lambda u: "val" if u in val_uid else "test" if u in test_uid else "train"
 
-# ---------------------- 2. task definitions --------------------------
+# ---------------------- 2. task definitions -------------------------
+# NOTE: 0-based labels, so original 9 (BuyNone) → 8
 BIN_TASKS = {
-    "BuyNone":   [9],
-    "BuyOne":    [1, 3, 5, 7],
-    "BuyTen":    [2, 4, 6, 8],
-    "BuyRegular":[1, 2],
-    "BuyFigure": [3, 4, 5, 6],
-    "BuyWeapon": [7, 8],
+    "BuyNone":   [8],
+    "BuyOne":    [0, 2, 4, 6],        # 1,3,5,7 → –1
+    "BuyTen":    [1, 3, 5, 7],        # 2,4,6,8 → –1
+    "BuyRegular":[0, 1],              # 1,2      → –1
+    "BuyFigure": [2, 3, 4, 5],        # 3-6      → –1
+    "BuyWeapon": [6, 7],              # 7,8      → –1
 }
 TASK_POSSETS = {k: set(v) for k, v in BIN_TASKS.items()}
 
-# ------------------------------------------------
-#  A. convert labels to 0‑based
-# ------------------------------------------------
-for rec in records:
-    rec["Decision"] = [d-1 for d in to_int_vec(rec["Decision"])]
-
-# ------------------------------------------------
-#  B. rewrite the task definition to 0‑based
-# ------------------------------------------------
-BIN_TASKS = {
-    "BuyNone":   [0],
-    "BuyOne":    [0, 2, 4, 6],     # 1,3,5,7  → minus‑1
-    "BuyTen":    [1, 3, 5, 7],     # 2,4,6,8  → minus‑1
-    "BuyRegular":[0, 1],           # 1,2       → minus‑1
-    "BuyFigure": [2, 3, 4, 5],     # 3‑6       → minus‑1
-    "BuyWeapon": [6, 7],           # 7,8       → minus‑1
-}
-
-# ------------------------------------------------
-#  C. drop the i‑1 correction when you sum probs
-# ------------------------------------------------
-p_bin = sum(probs[i] for i in pos)     # was probs[i‑1]
-
 def period_group(idx_h, feat_h):
-    if feat_h == 0:               return "Calibration"
-    if feat_h == 1 and idx_h == 0:return "HoldoutA"
-    if idx_h == 1:                return "HoldoutB"
+    if feat_h == 0:
+        return "Calibration"
+    if feat_h == 1 and idx_h == 0:
+        return "HoldoutA"
+    if idx_h == 1:
+        return "HoldoutB"
     return "UNASSIGNED"
 
-# ---------------------- 3. stream predictions ------------------------
+# ---------------------- 3. stream predictions -----------------------
 scores       = defaultdict(lambda: {"y": [], "p": []})
 length_note  = Counter()
 accept = reject = 0
@@ -124,7 +99,7 @@ with open_pred(PRED_PATH, "rt", errors="replace") as f:
     for line in f:
         line = line.strip()
         if not line or line[0] not in "{[":
-            reject += 1               # skip log/empty lines
+            reject += 1                    # skip log/empty lines
             continue
         try:
             rec = json.loads(line)
@@ -145,9 +120,7 @@ with open_pred(PRED_PATH, "rt", errors="replace") as f:
             reject += 1
             continue
 
-        # ------------- align lengths ---------------------------------
         probs_field = rec["probs"]
-        # old format = list‑of‑lists, new = single list
         preds = probs_field if isinstance(probs_field[0], list) else [probs_field]
         L_pred, L_lbl = len(preds), len(lbl_info["label"])
         if L_pred != L_lbl:
@@ -164,7 +137,7 @@ with open_pred(PRED_PATH, "rt", errors="replace") as f:
             group = period_group(idx_h, feat_h)
             for task, pos in BIN_TASKS.items():
                 y_bin = int(y in TASK_POSSETS[task])
-                p_bin = sum(probs[i-1] for i in pos)  # 1‑indexed
+                p_bin = sum(probs[i] for i in pos)   # 0-based now
                 key   = (task, group, split)
                 scores[key]["y"].append(y_bin)
                 scores[key]["p"].append(p_bin)
@@ -175,11 +148,11 @@ print(f"[INFO] parsed: {accept} users accepted, {reject} lines skipped.")
 if length_note:
     print("[INFO] length mismatches:", dict(length_note))
 
-# ---------------------- 4. compute AUC table -------------------------
+# ---------------------- 4. compute AUC table ------------------------
 rows = []
 for task in BIN_TASKS:
-    for grp in ["Calibration","HoldoutA","HoldoutB"]:
-        for spl in ["val","test"]:
+    for grp in ["Calibration", "HoldoutA", "HoldoutB"]:
+        for spl in ["val", "test"]:
             key = (task, grp, spl)
             y, p = scores[key]["y"], scores[key]["p"]
             auc  = np.nan if len(set(y)) < 2 else roc_auc_score(y, p)
@@ -187,11 +160,18 @@ for task in BIN_TASKS:
 
 auc_tbl = (
     pd.DataFrame(rows)
-      .pivot(index=["Task","Group"], columns="Split", values="AUC")
+      .pivot(index=["Task", "Group"], columns="Split", values="AUC")
       .round(4)
       .sort_index()
 )
 
-print("\n=============  BINARY ROC‑AUC TABLE  =======================")
+print("\n=============  BINARY ROC-AUC TABLE  =======================")
 print(auc_tbl.fillna(" NA"))
 print("============================================================")
+
+# -------- optional quick sanity check (can delete) ------------------
+for task in ("BuyOne", "BuyTen"):
+    pos = sum(map(len, (scores[(task, g, s)]["y"]
+                        for g in ("Calibration","HoldoutA","HoldoutB")
+                        for s in ("train","val","test"))))
+    print(f"[INFO] total positives for {task}: {pos}")

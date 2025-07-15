@@ -2,9 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 predict_decision_probs_gru.py
-
-Loads a trained GRUClassifier and produces per‐timestep decision probabilities
-from a JSON‐array file of records.
 """
 
 import argparse
@@ -18,7 +15,6 @@ from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 from tqdm import tqdm
 
-# ──────────────────────────── 1.  Dataset ──────────────────────────────
 class PredictDataset(Dataset):
     def __init__(self, json_path: Path, input_dim: int):
         raw = json.loads(json_path.read_text())
@@ -46,7 +42,6 @@ def collate(batch):
     x_pad = pad_sequence(xs, batch_first=True, padding_value=0.0)
     return {"uid": uids, "x": x_pad}
 
-# ──────────────────────────── 2.  GRU model ─────────────────────────────
 class GRUClassifier(nn.Module):
     def __init__(self, input_dim: int, hidden_size: int, num_classes: int = 10):
         super().__init__()
@@ -57,7 +52,6 @@ class GRUClassifier(nn.Module):
         out, _ = self.gru(x)
         return self.fc(out)  # (B, T, num_classes)
 
-# ──────────────────────────── 3.  CLI ─────────────────────────────────
 parser = argparse.ArgumentParser(
     description="Predict per‐timestep decision probabilities with GRU"
 )
@@ -99,26 +93,15 @@ loader  = DataLoader(dataset,
 out_path = Path(args.out)
 with out_path.open("w") as fout, torch.no_grad():
     for batch in tqdm(loader, desc="Predict"):
-        x    = batch["x"].to(device)    # (B, T, D)
+        x    = batch["x"].to(device)
         uids = batch["uid"]
 
-        logits = model(x)               # (B, T, 10)
-        probs  = F.softmax(logits, dim=-1)  # (B, T, 10)
-
-        # ─── NEW: drop the dummy logit 0 and renormalise ──────────────────
-        probs = probs[..., 1:]                # keep columns 1-9  → (B,T,9)
-        probs = probs / probs.sum(-1, keepdim=True)
-
-        # Safe renorm
-        row_sum = torch.where(row_sum == 0,
-                            torch.ones_like(row_sum),
-                            row_sum)
-        probs   = probs / row_sum
+        logits10 = model(x)                 # (B, T, 10)
+        logits9  = logits10[..., 1:]        # drop class‑0
+        probs9   = F.softmax(logits9, dim=-1)
 
         for i, uid in enumerate(uids):
             fout.write(json.dumps({
                 "uid":   uid,
-                "probs": probs[i].cpu().tolist()
+                "probs": probs9[i].cpu().tolist()   # (T, 9)
             }) + "\n")
-
-print(f"[✓] Predictions written → {out_path}")
