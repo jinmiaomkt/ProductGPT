@@ -15,6 +15,7 @@ def run_single_fold(fold_id, spec_uri):
     cfg = get_config()
     cfg.update({"fold_id": fold_id,
                 "uids_test": test_uids,
+                
                 "uids_trainval": train_uids,
                 "mode": "train"})
     return train_model(cfg)
