@@ -2,7 +2,7 @@
 # Turns every decision in the raw JSON into *one* training sample whose
 # aggregate_input is the N tokens that precede that decision.
 # ------------------------------------------------------------------------
-import json
+import json, itertools
 from pathlib import Path
 from typing import List, Dict
 
@@ -15,14 +15,39 @@ from tokenizers import Tokenizer
 #     with open(filepath, "r") as fp:
 #         return json.load(fp)
 
-def load_json_dataset(path, keep_uids=None):
+# def load_json_dataset(path, keep_uids=None):
+#     raw = json.loads(Path(path).read_text())
+#     # … existing explode logic …
+#     if keep_uids is not None:
+#         data = [r for r in data if str(r["uid"]) in keep_uids]
+#     return data
+
+def load_json_dataset(path: str | Path,
+                      keep_uids: set[str] | None = None):
+    """
+    Return exploded list of records; optionally keep only rows whose UID
+    string is in keep_uids.
+    """
     raw = json.loads(Path(path).read_text())
-    # … existing explode logic …
+
+    # your original explode_record(...) helper here ------------
+    def explode_record(rec):
+        uid = str(rec["uid"][0] if isinstance(rec["uid"], list) else rec["uid"])
+        # …
+        # yield {"uid": uid, ...}
+
+    # build the *full* list first
+    data = list(itertools.chain.from_iterable(
+        explode_record(r) for r in (raw if isinstance(raw, list) else
+                                    [{k: raw[k][i] for k in raw} 
+                                     for i in range(len(raw["uid"]))])
+    ))
+
+    # optional filtering
     if keep_uids is not None:
-        data = [r for r in data if str(r["uid"]) in keep_uids]
+        data = [row for row in data if row["uid"] in keep_uids]
+
     return data
-
-
 class TransformerDataset(torch.utils.data.Dataset):
     def __init__(self,
                  subset,
