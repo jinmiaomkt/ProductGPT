@@ -210,7 +210,16 @@ def perplexity(logits: torch.Tensor, targets: torch.Tensor, pad: int = PAD_ID) -
 # ══════════════════════════════ 6. DataLoaders ═══════════════════════=
 
 def build_dataloaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, DataLoader, Tokenizer]:
-    raw = load_json_dataset(cfg["filepath"])
+    # raw = load_json_dataset(cfg["filepath"])
+
+    keep = None
+    if cfg.get("mode", "train") == "test":
+        keep = set(cfg["uids_test"])
+    elif "uids_trainval" in cfg:
+        keep = set(cfg["uids_trainval"])
+
+    raw = load_json_dataset(cfg["filepath"], keep_uids=keep)
+
     n = len(raw)
     tr, va = int(0.8 * n), int(0.1 * n)
     g = torch.Generator().manual_seed(33)
