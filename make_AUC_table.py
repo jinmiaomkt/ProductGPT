@@ -19,11 +19,13 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 # ------------------------------------------------------------------
 # EDIT YOUR FILE LOCATIONS
 # ------------------------------------------------------------------
-PRED_PATH  = Path('/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/TuningResult/GRU/gru_predictions.jsonl')
+# PRED_PATH  = Path('/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/TuningResult/GRU/gru_predictions.jsonl')
+# PRED_PATH  = Path('/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/TuningResult/LSTM/lstm_predictions.jsonl')
+PRED_PATH  = Path('/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/TuningResult/LSTM/lstm_predictions.jsonl')
 LABEL_PATH = Path('/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/Data/clean_list_int_wide4_simple6.json')
 SEED       = 33
+open_pred = gzip.open if PRED_PATH.suffix == ".gz" else open
 # ------------------------------------------------------------------
-
 
 # ---------------------- tiny helpers ---------------------------------
 def to_int_vec(x):
@@ -84,28 +86,8 @@ BIN_TASKS = {
 TASK_POSSETS = {k: set(v) for k, v in BIN_TASKS.items()}
 
 # ------------------------------------------------
-#  A. convert labels to 0‑based
-# ------------------------------------------------
-for rec in records:
-    rec["Decision"] = [d-1 for d in to_int_vec(rec["Decision"])]
-
-# ------------------------------------------------
-#  B. rewrite the task definition to 0‑based
-# ------------------------------------------------
-BIN_TASKS = {
-    "BuyNone":   [0],
-    "BuyOne":    [0, 2, 4, 6],     # 1,3,5,7  → minus‑1
-    "BuyTen":    [1, 3, 5, 7],     # 2,4,6,8  → minus‑1
-    "BuyRegular":[0, 1],           # 1,2       → minus‑1
-    "BuyFigure": [2, 3, 4, 5],     # 3‑6       → minus‑1
-    "BuyWeapon": [6, 7],           # 7,8       → minus‑1
-}
-
-# ------------------------------------------------
 #  C. drop the i‑1 correction when you sum probs
 # ------------------------------------------------
-p_bin = sum(probs[i] for i in pos)     # was probs[i‑1]
-
 def period_group(idx_h, feat_h):
     if feat_h == 0:               return "Calibration"
     if feat_h == 1 and idx_h == 0:return "HoldoutA"
@@ -118,7 +100,6 @@ length_note  = Counter()
 accept = reject = 0
 
 brace_re  = re.compile(r"\{.*\}")
-open_pred = gzip.open if PRED_PATH.suffix == ".gz" else open
 
 with open_pred(PRED_PATH, "rt", errors="replace") as f:
     for line in f:
