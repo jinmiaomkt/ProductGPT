@@ -7,7 +7,7 @@ from predict_decision_probs_gru import GRUClassifier                    # alread
 from model_lstm import LSTMClassifier                                   # assume you have this
 
 # ---------- tiny util ---------------------------------------------------
-def save_and_upload(obj, local_path: Path, bucket: str, key: str):
+def save_and_upload(obj, local_path: Path, bucket: str, key: str): 
     torch.save(obj, local_path)
     boto3.client("s3").upload_file(str(local_path), bucket, key)
 
