@@ -12,7 +12,7 @@ def save_and_upload(obj, local_path: Path, bucket: str, key: str):
     boto3.client("s3").upload_file(str(local_path), bucket, key)
 
 # ---------- cli ---------------------------------------------------------
-p = argparse.ArgumentParser()
+p = argparse.ArgumentParser() 
 p.add_argument("--fold", type=int, required=True)
 p.add_argument("--model", choices=["gru","lstm"], required=True)
 p.add_argument("--bucket", default="productgptbucket")
