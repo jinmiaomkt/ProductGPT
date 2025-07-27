@@ -33,10 +33,23 @@ def load_json_dataset(path: str | Path,
     raw = json.loads(Path(path).read_text())
 
     # your original explode_record(...) helper here ------------
+    # def explode_record(rec):
+    #     uid = str(rec["uid"][0] if isinstance(rec["uid"], list) else rec["uid"])
+    #     # …
+    #     # yield {"uid": uid, ...}
+
     def explode_record(rec):
-        uid = str(rec["uid"][0] if isinstance(rec["uid"], list) else rec["uid"])
-        # …
-        # yield {"uid": uid, ...}
+        """Take one session dict and yield  N  flattened rows."""
+        uid  = str(rec["uid"][0] if isinstance(rec["uid"], list) else rec["uid"])
+        agg  = rec["AggregateInput"]   # list[str]  length N (your earlier format)
+        decs = rec["Decision"]         # list[int]  length N
+        for t,(inp,lab) in enumerate(zip(agg, decs)):
+            yield {
+                "uid": uid,
+                "t": t,
+                "AggregateInput": inp,
+                "Decision": lab,
+            }
 
     # build the *full* list first
     data = list(itertools.chain.from_iterable(
