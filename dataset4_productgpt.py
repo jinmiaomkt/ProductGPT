@@ -2,6 +2,8 @@
 # Turns every decision in the raw JSON into *one* training sample whose
 # aggregate_input is the N tokens that precede that decision.
 # ------------------------------------------------------------------------
+
+from __future__ import annotations   # <-- add this as the FIRST import
 import json, itertools
 from pathlib import Path
 from typing import List, Dict
