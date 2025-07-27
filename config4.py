@@ -55,6 +55,7 @@ def _raw_config():
         "weight": 2,
 
         # ---------- logging / paths ----------
+        "exp_name": "ProductGPT",
         "model_folder":   "/home/ec2-user/output",
         "model_basename": "MyProductGPT_",
         "preload": None,               # "latest" or explicit checkpoint
