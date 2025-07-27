@@ -3,6 +3,7 @@
 # aggregate_input is the N tokens that precede that decision.
 # ------------------------------------------------------------------------
 import json
+from pathlib import Path
 from typing import List, Dict
 
 import torch
@@ -10,9 +11,17 @@ from torch.utils.data import Dataset
 from tokenizers import Tokenizer
 
 # ───────────────────────── I/O helper ────────────────────────────────────
-def load_json_dataset(filepath: str) -> List[Dict]:
-    with open(filepath, "r") as fp:
-        return json.load(fp)
+# def load_json_dataset(filepath: str) -> List[Dict]:
+#     with open(filepath, "r") as fp:
+#         return json.load(fp)
+
+def load_json_dataset(path, keep_uids=None):
+    raw = json.loads(Path(path).read_text())
+    # … existing explode logic …
+    if keep_uids is not None:
+        data = [r for r in data if str(r["uid"]) in keep_uids]
+    return data
+
 
 class TransformerDataset(torch.utils.data.Dataset):
     def __init__(self,
