@@ -31,6 +31,6 @@ print(f"[✓] Fold spec saved locally as {local_json}")
 
 # Upload to S3 (you can change the bucket and key prefix)
 bucket = "productgptbucket"
-key = "folds/productgptfolds.json"
+key    = "CV/folds.json"           # <- change this line
 boto3.client("s3").upload_file(local_json, bucket, key)
 print(f"[↑] Uploaded to s3://{bucket}/{key}")
