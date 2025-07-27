@@ -1,6 +1,6 @@
 import ray, subprocess, json, pandas as pd, boto3, os, pathlib
 
-TRAIN = "/home/ec2-user/ProductGPT/train_gru_lstm.py"
+TRAIN = "/home/ec2-user/ProductGPT/cv_scripts/train_gru_lstm.py"
 BUCKET= "productgptbucket"
 PREFIX= "CV_GRU"
 
