@@ -1,15 +1,34 @@
-import ray, pandas as pd, boto3, os, json
+import ray, subprocess, json, pandas as pd, boto3, os, pathlib
+
+TRAIN = "/home/ec2-user/ProductGPT/train_gru_lstm.py"
+BUCKET= "productgptbucket"
+PREFIX= "CV_LSTM"
 
 ray.init(address="auto")
+
 @ray.remote(num_gpus=1)
+def run_fold(k):
+    subprocess.check_call(["python3", TRAIN,
+                           "--model", "lstm", "--fold", str(k),
+                           "--bucket", BUCKET])
+    # read the metrics json we just wrote
+    name = f"lstm_h64_lr0.001_bs4_fold{k}.json"
+    local = pathlib.Path(name)
+    subprocess.check_call(["aws","s3","cp",
+                           f"s3://{BUCKET}/{PREFIX}/metrics/{name}", str(local)])
+    return json.loads(local.read_text())
 
-def _one(f): 
-    os.system(f"python3 train_gru_lstm.py --model lstm  --fold {f}")
-    return json.loads(open("m.json").read())
+metrics = ray.get([run_fold.remote(k) for k in range(10)])
+df = pd.DataFrame(metrics).set_index("fold")
+df.to_csv("cv_lstm_metrics.csv")
 
-rows = ray.get([_one.remote(f) for f in range(10)])
+# mean ± std
+summary = df.select_dtypes(float).agg(["mean","std"]).round(4)
+summary.to_csv("cv_lstm_summary.csv")
+summary.to_json("cv_lstm_summary.json", indent=2)
 
-pd.DataFrame(rows).to_csv("cv_lstm_metrics.csv", index=False)
-
-boto3.client("s3").upload_file("cv_lstm_metrics.csv",
-      "productgptbucket", "CV_LSTM/cv_lstm_metrics.csv")
+s3 = boto3.client("s3")
+s3.upload_file("cv_lstm_metrics.csv",  BUCKET, f"{PREFIX}/tables/cv_lstm_metrics.csv")
+s3.upload_file("cv_lstm_summary.csv",  BUCKET, f"{PREFIX}/tables/cv_lstm_summary.csv")
+s3.upload_file("cv_lstm_summary.json", BUCKET, f"{PREFIX}/tables/cv_lstm_summary.json")
+print("[✓] LSTM CV complete and summaries uploaded.")

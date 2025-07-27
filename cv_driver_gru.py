@@ -1,20 +1,34 @@
-import ray, pandas as pd, boto3, os, json
+import ray, subprocess, json, pandas as pd, boto3, os, pathlib
+
+TRAIN = "/home/ec2-user/ProductGPT/train_gru_lstm.py"
+BUCKET= "productgptbucket"
+PREFIX= "CV_GRU"
 
 ray.init(address="auto")
-TRAIN = "/home/ec2-user/ProductGPT/train_gru_lstm.py"   # full path
 
 @ray.remote(num_gpus=1)
+def run_fold(k):
+    subprocess.check_call(["python3", TRAIN,
+                           "--model", "gru", "--fold", str(k),
+                           "--bucket", BUCKET])
+    # read the metrics json we just wrote
+    name = f"gru_h128_lr0.0001_bs4_fold{k}.json"
+    local = pathlib.Path(name)
+    subprocess.check_call(["aws","s3","cp",
+                           f"s3://{BUCKET}/{PREFIX}/metrics/{name}", str(local)])
+    return json.loads(local.read_text())
 
-def _one(fold):
-    cmd = f"python3 {TRAIN} --model gru --fold {fold}"
-    status = os.system(cmd)
-    if status != 0:
-        raise RuntimeError(f"Training failed for fold {fold}")
-    return json.loads(open("m.json").read())
+metrics = ray.get([run_fold.remote(k) for k in range(10)])
+df = pd.DataFrame(metrics).set_index("fold")
+df.to_csv("cv_gru_metrics.csv")
 
-rows = ray.get([_one.remote(f) for f in range(10)])
+# mean ± std
+summary = df.select_dtypes(float).agg(["mean","std"]).round(4)
+summary.to_csv("cv_gru_summary.csv")
+summary.to_json("cv_gru_summary.json", indent=2)
 
-pd.DataFrame(rows).to_csv("cv_gru_metrics.csv", index=False)
-
-boto3.client("s3").upload_file("cv_gru_metrics.csv",
-      "productgptbucket", "CV_GRU/cv_gru_metrics.csv")
+s3 = boto3.client("s3")
+s3.upload_file("cv_gru_metrics.csv",  BUCKET, f"{PREFIX}/tables/cv_gru_metrics.csv")
+s3.upload_file("cv_gru_summary.csv",  BUCKET, f"{PREFIX}/tables/cv_gru_summary.csv")
+s3.upload_file("cv_gru_summary.json", BUCKET, f"{PREFIX}/tables/cv_gru_summary.json")
+print("[✓] GRU CV complete and summaries uploaded.")
