@@ -97,6 +97,7 @@ class TransformerDataset(torch.utils.data.Dataset):
         tgt_ids = self._pad(self.tok_tgt.encode(tgt_txt).ids, self.seq_tgt)
 
         return {
+            "uid": rec["uid"],
             "aggregate_input": torch.tensor(ai_ids,  dtype=torch.long),
             "label":           torch.tensor(tgt_ids, dtype=torch.long),
         }

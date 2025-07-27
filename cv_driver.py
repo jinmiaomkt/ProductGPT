@@ -1,19 +1,12 @@
-import ray, argparse, pandas as pd
+import ray, pandas as pd, boto3
 from train_fold import run_single_fold
 
-ray.init(address="auto")          # or ray.init() on a workstation
-
+ray.init(address="auto")
 @ray.remote(num_gpus=1)
-def _one(fold, spec):             # each task consumes one GPU
-    return run_single_fold(fold, spec)
+def _one(fold): return run_single_fold(fold, "s3://productgptbucket/CV/folds.json")
 
-def main(spec_uri):
-    tasks = [_one.remote(f, spec_uri) for f in range(10)]
-    results = ray.get(tasks)
-    pd.DataFrame(results).to_csv("cv_metrics.csv", index=False)
-    print("Results → cv_metrics.csv")
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--spec", required=True)
-    main(parser.parse_args().spec)
+results = ray.get([_one.remote(f) for f in range(10)])
+pd.DataFrame(results).to_csv("cv_metrics.csv", index=False)
+boto3.client("s3").upload_file("cv_metrics.csv",
+                               "productgptbucket",
+                               "CV/tables/cv_metrics.csv")

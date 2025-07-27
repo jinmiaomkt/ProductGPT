@@ -212,18 +212,28 @@ def perplexity(logits: torch.Tensor, targets: torch.Tensor, pad: int = PAD_ID) -
 def build_dataloaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, DataLoader, Tokenizer]:
     # raw = load_json_dataset(cfg["filepath"])
 
-    keep = None
-    if cfg.get("mode", "train") == "test":
-        keep = set(cfg["uids_test"])
-    elif "uids_trainval" in cfg:
-        keep = set(cfg["uids_trainval"])
+    mode = cfg.get("mode", "train")
 
-    raw = load_json_dataset(cfg["filepath"], keep_uids=keep)
+    if mode == "infer":
+        raw = load_json_dataset(cfg["test_filepath"], keep_uids=None)
+        val_dl = test_dl = None                      # not used
+    else:
+        keep = None
+        if mode == "test":
+            keep = set(cfg["uids_test"])
+        elif "uids_trainval" in cfg:
+            keep = set(cfg["uids_trainval"])
+        raw = load_json_dataset(cfg["filepath"], keep_uids=keep)
 
-    n = len(raw)
-    tr, va = int(0.8 * n), int(0.1 * n)
-    g = torch.Generator().manual_seed(33)
-    tr_ds, va_ds, te_ds = random_split(raw, [tr, va, n - tr - va], generator=g)
+    # ------------- train / val / test splits -------------
+    if mode == "infer":
+        tr_ds = raw                                   # will be wrapped once
+        va_ds = te_ds = []
+    else:
+        n = len(raw)
+        tr, va = int(0.8 * n), int(0.1 * n)
+        g = torch.Generator().manual_seed(33)
+        tr_ds, va_ds, te_ds = random_split(raw, [tr, va, n - tr - va], generator=g)
 
     tok_src = build_tokenizer_src()
     tok_tgt = build_tokenizer_tgt()
@@ -244,10 +254,12 @@ def build_dataloaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, Data
             cfg["ai_rate"],
             pad_token=PAD_ID,
         )
-
+    
     make_loader = lambda ds, sh: DataLoader(ds, batch_size=cfg["batch_size"], shuffle=sh)
-    return make_loader(_wrap(tr_ds), True), make_loader(_wrap(va_ds), False), make_loader(_wrap(te_ds), False), tok_tgt
 
+    if mode == "infer":
+        return make_loader(_wrap(tr_ds), False), None, None, tok_tgt
+    return make_loader(_wrap(tr_ds), True), make_loader(_wrap(va_ds), False), make_loader(_wrap(te_ds), False), tok_tgt
 
 # ══════════════════════════════ 7. S3 helpers ═════════════════════════
 def _json_safe(o: Any):
@@ -397,9 +409,15 @@ def train_model(cfg: Dict[str, Any]):
     print("Using device:", device)
 
     # --- artefact paths ------------------------------------------------
+    # uid = (
+    #     f"featurebased_performerfeatures{cfg['nb_features']}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_"
+    #     f"N{cfg['N']}_heads{cfg['num_heads']}_lr{cfg['lr']}_w{cfg['weight']}"
+    # )
     uid = (
-        f"featurebased_performerfeatures{cfg['nb_features']}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_"
-        f"N{cfg['N']}_heads{cfg['num_heads']}_lr{cfg['lr']}_w{cfg['weight']}"
+        f"featurebased_performerfeatures{cfg['nb_features']}"
+        f"_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}"
+        f"_heads{cfg['num_heads']}_lr{cfg['lr']}_w{cfg['weight']}"
+        f"_fold{cfg['fold_id']}"          # <-- add this
     )
 
     # --- artefact folders --------------------------------------------------
@@ -552,6 +570,21 @@ def train_model(cfg: Dict[str, Any]):
                       ("after_STOP",t_after),("transition",t_tr)):
             print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
                   f"AUPRC={d['auprc']:.4f}")
+            
+    # ------------------ inference on full 30 campaigns ------------------
+    inf_dl, _, _, _ = build_dataloaders({**cfg, "mode": "infer"})
+
+    pred_path = metrics_dir / f"{uid}_predictions.jsonl"
+    with pred_path.open("w") as fp, torch.no_grad():
+        for batch in tqdm(inf_dl, desc="Infer 30‑campaign set"):
+            x = batch["aggregate_input"].to(device)
+            uid = batch["uid"]                       # list[str] length B
+            logits = engine(x)[:, cfg["ai_rate"]-1::cfg["ai_rate"], :]
+            probs  = torch.softmax(logits, -1).cpu().numpy()   # (B, N, 60)
+            for u, p in zip(uid, probs):
+                fp.write(json.dumps({"uid": u, "probs": p.tolist()}) + "\n")
+
+    _upload(pred_path, bucket, f"CV/predictions/{pred_path.name}", s3)
 
     metadata = {
         "best_checkpoint_path": ckpt_path.name,
@@ -593,7 +626,19 @@ def train_model(cfg: Dict[str, Any]):
     #     json_path.unlink(missing_ok=True)
 
     # return {"uid": uid, "val_loss": best}
-    return {"uid": uid, "val_loss": best_val_loss, "best_checkpoint_path": str(ckpt_path)}
+    # return {"uid": uid, "val_loss": best_val_loss, "best_checkpoint_path": str(ckpt_path)}
+    return {
+        "uid": uid,
+        "fold_id": cfg["fold_id"],
+        "val_loss": best_val_loss,
+        "val_f1":  best_val_metrics["val_all_f1_score"],
+        "val_auprc": best_val_metrics["val_all_auprc"],
+        "test_f1": metadata["test_all_f1_score"],
+        "test_auprc": metadata["test_all_auprc"],
+        "ckpt": ckpt_path.name,
+        "preds": pred_path.name,
+    }
+
 
 
 # ══════════════════════════════ 11. CLI ═══════════════════════════════
