@@ -4,7 +4,51 @@ from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
 from dataset4_productgpt import load_json_dataset, TransformerDataset   # reuse tokeniser
 from predict_decision_probs_gru import GRUClassifier                    # already in repo
-from model_lstm import LSTMClassifier                                   # assume you have this
+from predict_decision_probs_lstm import LSTMClassifier                                   # assume you have this
+from tokenizers import Tokenizer, models, pre_tokenizers
+from typing import Any, Dict, List, Tuple
+
+# ══════════════════════════════ 1. Constants ═══════════════════════════
+PAD_ID = 0
+DECISION_IDS = list(range(1, 10))  # 1‑9
+SOS_DEC_ID, EOS_DEC_ID, UNK_DEC_ID = 10, 11, 12
+FIRST_PROD_ID, LAST_PROD_ID = 13, 56
+EOS_PROD_ID, SOS_PROD_ID, UNK_PROD_ID = 57, 58, 59
+SPECIAL_IDS = [
+    PAD_ID,
+    SOS_DEC_ID,
+    EOS_DEC_ID,
+    UNK_DEC_ID,
+    EOS_PROD_ID,
+    SOS_PROD_ID,
+]
+MAX_TOKEN_ID = UNK_PROD_ID  # 59
+
+def _base_tokeniser(extra_vocab: Dict[str, int] | None = None) -> Tokenizer:
+    """Word‑level tokeniser with a fixed numeric vocabulary."""
+    vocab: Dict[str, int] = {
+        "[PAD]": PAD_ID,
+        **{str(i): i for i in range(1, 10)},  # decisions
+        "[SOS]": SOS_DEC_ID,
+        "[EOS]": EOS_DEC_ID,
+        "[UNK]": UNK_DEC_ID,
+    }
+    if extra_vocab:
+        vocab.update(extra_vocab)
+    tok = Tokenizer(models.WordLevel(unk_token="[UNK]"))
+    tok.pre_tokenizer = pre_tokenizers.Whitespace()
+    tok.model = models.WordLevel(vocab=vocab, unk_token="[UNK]")
+    return tok
+
+
+def build_tokenizer_src() -> Tokenizer:  # with product IDs
+    prod_vocab = {str(i): i for i in range(FIRST_PROD_ID, UNK_PROD_ID + 1)}
+    return _base_tokeniser(prod_vocab)
+
+
+def build_tokenizer_tgt() -> Tokenizer:  # decisions only
+    return _base_tokeniser()
+
 
 # ---------- tiny util ---------------------------------------------------
 def save_and_upload(obj, local_path: Path, bucket: str, key: str): 
