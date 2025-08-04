@@ -131,7 +131,7 @@ def _subset(pred, lbl, probs, rev_err, mask, classes=np.arange(1, 10)):
 def evaluate(loader, model, device, loss_fn):
     model.eval()
     P, L, PR, RE = [], [], [], []
-    m_stop, m_after, m_tr = [], [], []
+    # m_stop, m_after, m_tr = [], [], []
     tot_loss = tot_ppl = 0.0
     rev_vec = REV_VEC.to(device)
 
@@ -165,17 +165,17 @@ def evaluate(loader, model, device, loss_fn):
             RE.append(torch.abs(exp_rev-true_rev).cpu().numpy()[mask])
 
             labs2d = yb.cpu().numpy()
-            m_stop.append((labs2d == 9).reshape(-1)[mask])
+            # m_stop.append((labs2d == 9).reshape(-1)[mask])
             prev = np.pad(labs2d, ((0,0),(1,0)), constant_values=-1)[:, :-1]
-            m_after.append((prev == 9).reshape(-1)[mask])
-            m_tr.append(transition_mask(yb).cpu().numpy().reshape(-1)[mask])
+            # m_after.append((prev == 9).reshape(-1)[mask])
+            # m_tr.append(transition_mask(yb).cpu().numpy().reshape(-1)[mask])
 
     P, L, PR, RE = map(np.concatenate, (P, L, PR, RE))
     masks = dict(
         all=np.ones_like(P, dtype=bool),
-        stop_cur=np.concatenate(m_stop),
-        after_stop=np.concatenate(m_after),
-        trans=np.concatenate(m_tr),
+        # stop_cur=np.concatenate(m_stop),
+        # after_stop=np.concatenate(m_after),
+        # trans=np.concatenate(m_tr),
     )
     out = {k: _subset(P, L, PR, RE, m) for k, m in masks.items()}
     avg_loss = tot_loss / len(loader)
