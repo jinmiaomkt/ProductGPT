@@ -144,12 +144,14 @@ def _subset(pred, lbl, probs, rev_err, mask, classes=np.arange(1, 10)):
         auprc = float("nan")
     return dict(hit=hit, f1=f1, auprc=auprc, rev_mae=re.mean())
 
+
 # ═════════ 4.  Evaluation ═══════════════
 def evaluate(loader, model, device, loss_fn):
     model.eval()
     P, L, PR, RE = [], [], [], []
-    # m_stop, m_after, m_tr = [], [], []
-    tot_loss = tot_ppl = 0.0
+    tot_loss_batch_mean = 0.0          # keeps your printed "avg_loss" behavior
+    nll_sum = 0.0                      # token-level sum NLL for PPL
+    token_count = 0
     rev_vec = REV_VEC.to(device)
 
     with torch.no_grad():
@@ -160,14 +162,20 @@ def evaluate(loader, model, device, loss_fn):
             flat_logits = logits.reshape(-1, C)
             flat_labels = yb.reshape(-1)
 
-            loss = loss_fn(flat_logits, flat_labels)
-            tot_loss += loss.item()
+            # 1) Your normal (mean) loss for logging/early stop
+            loss = loss_fn(flat_logits, flat_labels)  # ignore_index=0 inside
+            tot_loss_batch_mean += loss.item()
 
-            probs = F.softmax(flat_logits, dim=-1)
-            prob_true = probs[torch.arange(len(flat_labels)),
-                               flat_labels.clamp(max=C-1)]
-            tot_ppl += torch.exp(-torch.log(prob_true + 1e-9).mean()).item()
+            # 2) Proper PPL pieces: sum NLL over non-pad tokens
+            log_probs = F.log_softmax(flat_logits, dim=-1)
+            nll_sum += F.nll_loss(
+                log_probs, flat_labels,
+                ignore_index=0, reduction='sum'
+            ).item()
+            token_count += (flat_labels != 0).sum().item()
 
+            # --- metrics (mask out pads) ---
+            probs = log_probs.exp()
             probs_np = probs.cpu().numpy()
             preds_np = probs_np.argmax(1)
             labs_np  = flat_labels.cpu().numpy()
@@ -181,22 +189,16 @@ def evaluate(loader, model, device, loss_fn):
             true_rev = rev_vec[(flat_labels-1).clamp(min=0, max=8)]
             RE.append(torch.abs(exp_rev-true_rev).cpu().numpy()[mask])
 
-            labs2d = yb.cpu().numpy()
-            # m_stop.append((labs2d == 9).reshape(-1)[mask])
-            prev = np.pad(labs2d, ((0,0),(1,0)), constant_values=-1)[:, :-1]
-            # m_after.append((prev == 9).reshape(-1)[mask])
-            # m_tr.append(transition_mask(yb).cpu().numpy().reshape(-1)[mask])
-
     P, L, PR, RE = map(np.concatenate, (P, L, PR, RE))
-    masks = dict(
-        all=np.ones_like(P, dtype=bool),
-        # stop_cur=np.concatenate(m_stop),
-        # after_stop=np.concatenate(m_after),
-        # trans=np.concatenate(m_tr),
-    )
+    masks = dict(all=np.ones_like(P, dtype=bool))
     out = {k: _subset(P, L, PR, RE, m) for k, m in masks.items()}
-    avg_loss = tot_loss / len(loader)
-    avg_ppl  = tot_ppl  / len(loader)
+
+    # Keep your displayed avg_loss semantics (mean over batches of the mean loss)
+    avg_loss = tot_loss_batch_mean / len(loader)
+
+    # True perplexity over all non-pad tokens
+    avg_ppl = math.exp(nll_sum / max(1, token_count))
+
     return avg_loss, avg_ppl, out
 
 # ═════════ 5.  One sweep job ════════════
