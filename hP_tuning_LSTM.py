@@ -46,27 +46,54 @@ class SequenceDataset(Dataset):
         with open(json_path, "r") as f:
             rows = json.load(f)
 
+        # self.x, self.y = [], []
+        # for row in rows:
+        #     flat = [0 if t == "NA" else int(t)
+        #             for t in row["AggregateInput"][0].split()]
+        #     T = len(flat) // INPUT_DIM
+        #     x = torch.tensor(flat, dtype=torch.float32).view(T, INPUT_DIM)
+
+        #     dec   = [0 if t == "NA" else int(t)
+        #              for t in row["Decision"][0].split()]
+        #     valid = min(T, len(dec)) - 1
+        #     y = torch.tensor(dec[1:valid + 1], dtype=torch.long)
+
+        #     self.x.append(x[:valid])
+        #     self.y.append(y)
+
+
         self.x, self.y = [], []
         for row in rows:
+            # 1) Parse inputs → shape [T, INPUT_DIM]
             flat = [0 if t == "NA" else int(t)
                     for t in row["AggregateInput"][0].split()]
             T = len(flat) // INPUT_DIM
             x = torch.tensor(flat, dtype=torch.float32).view(T, INPUT_DIM)
 
-            dec   = [0 if t == "NA" else int(t)
-                     for t in row["Decision"][0].split()]
-            valid = min(T, len(dec)) - 1
-            y = torch.tensor(dec[1:valid + 1], dtype=torch.long)
+            # 2) Parse decisions (already "next decision" per timestep)
+            dec = [0 if t == "NA" else int(t)
+                for t in row["Decision"][0].split()]
 
+            # 3) Align lengths WITHOUT any shift
+            valid = min(T, len(dec))
+            if valid == 0:
+                continue  # skip empty sequences just in case
+
+            y = torch.tensor(dec[:valid], dtype=torch.long)
+
+            # 4) Store aligned slices: x[t] ↔ y[t]
             self.x.append(x[:valid])
             self.y.append(y)
+
+        # (optional) quick integrity check:
+        for xi, yi in zip(self.x, self.y):
+            assert len(xi) == len(yi)
 
     def __len__(self):
         return len(self.x)
 
     def __getitem__(self, idx):
         return self.x[idx], self.y[idx]
-
 
 def collate_fn(batch):
     xs, ys = zip(*batch)
