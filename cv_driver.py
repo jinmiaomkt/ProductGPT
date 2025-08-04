@@ -7,8 +7,11 @@ S3_KEY    = "CV/tables/cv_metrics.csv"
 SPEC_URI  = "s3://productgptbucket/CV/folds.json"
 FOLDS     = list(range(2, 10))   # 2..9
 
-# Connect to an existing cluster if present; otherwise start local.
-ray.init(address="auto", ignore_reinit_error=True)
+# Try to connect to a cluster; otherwise start local
+try:
+    ray.init(address="auto", ignore_reinit_error=True)
+except Exception:
+    ray.init(ignore_reinit_error=True)
 @ray.remote(num_gpus=1)
 
 def _one(fold):
@@ -46,3 +49,5 @@ out_df.to_csv(buf, index=False)
 buf.seek(0)
 s3.upload_fileobj(buf, S3_BUCKET, S3_KEY)
 print(f"Uploaded updated metrics to s3://{S3_BUCKET}/{S3_KEY}")
+
+ray.shutdown()
