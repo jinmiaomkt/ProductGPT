@@ -19,6 +19,28 @@ import torch
 from config4 import get_config
 from train4_decoderonly_performer_feature_aws import train_model
 
+FOLD_ID  = 0
+SPEC_URI = "s3://productgptbucket/CV/folds.json"
+
+def load_fold_spec(uri: str):
+    if uri.startswith("s3://"):
+        bucket, key = uri[5:].split("/", 1)
+        body = boto3.client("s3").get_object(Bucket=bucket, Key=key)["Body"].read()
+        return json.loads(body)
+    else:
+        with open(uri, "r") as f:
+            return json.load(f)
+
+spec = load_fold_spec(SPEC_URI)
+
+# spec["assignment"] is assumed to be {uid: fold_idx, ...}
+uids_test = [u for u, f in spec["assignment"].items() if f == FOLD_ID]
+uids_trainval = [u for u in spec["assignment"] if u not in uids_test]
+
+# Sanity check
+assert len(uids_test) > 0, "No test UIDs for the requested fold."
+assert len(uids_trainval) > 0, "No train/val UIDs for the requested fold."
+
 # Hyper‑parameter grids
 nb_features_values = [16, 32]
 d_model_values     = [128]
@@ -73,8 +95,15 @@ def run_one_experiment(params):
 
     # 1) Build config
     config = get_config()
-    config["num_epochs"] = 200
 
+    config.update({
+        "mode": "train",
+        "fold_id": FOLD_ID,
+        "uids_test": uids_test,
+        "uids_trainval": uids_trainval
+    })
+
+    config["num_epochs"] = 200
     config["ai_rate"] = 15                          # <<<< FIX
     config["seq_len_ai"] = config["ai_rate"] * config["seq_len_tgt"]
 
@@ -90,7 +119,7 @@ def run_one_experiment(params):
     })
 
     # 2) Unique identifier
-    unique_id = f"featurebased_performerfeatures{config['nb_features']}dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_gamma{gamma}_lr{lr}_weight{weight}"
+    unique_id = f"featurebased_performerfeatures{config['nb_features']}_dmodel{d_model}_ff{d_ff}_N{N}_heads{num_heads}_gamma{gamma}_lr{lr}_weight{weight}"
     config['model_basename'] = f"MyProductGPT_FeatureBased_{unique_id}"
 
     if torch.cuda.device_count():
