@@ -550,8 +550,8 @@ def train_model(cfg: Dict[str, Any]):
             torch.save(ckpt, ckpt_path)
             
             json_path.write_text(json.dumps(_json_safe(best_val_metrics), indent=2))
-            # _upload(json_path, bucket, js_key, s3)
-            # _upload(ckpt_path, bucket, ck_key, s3)
+            _upload(json_path, bucket, js_key, s3)
+            _upload(ckpt_path, bucket, ck_key, s3)
         else:
             patience += 1
             if patience >= cfg["patience"]:
