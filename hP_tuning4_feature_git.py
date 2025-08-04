@@ -20,14 +20,14 @@ from config4 import get_config
 from train4_decoderonly_performer_feature_aws import train_model
 
 # Hyper‑parameter grids
-nb_features_values = [32]
-d_model_values     = [64]
-d_ff_values        = [64]
+nb_features_values = [16, 32]
+d_model_values     = [128]
+d_ff_values        = [128]
 N_values           = [6]
 num_heads_values   = [4]
-gamma_values       = [1.0]
-lr_values          = [1e-4]
-weight_values      = [16, 32]
+gamma_values       = [1]
+lr_values          = [1e-4, 5e-5]
+weight_values      = [2]
 
 # Precompute every combo
 HP_GRID = list(itertools.product(
@@ -73,7 +73,7 @@ def run_one_experiment(params):
 
     # 1) Build config
     config = get_config()
-    config["num_epochs"] = 300
+    config["num_epochs"] = 200
 
     config["ai_rate"] = 15                          # <<<< FIX
     config["seq_len_ai"] = config["ai_rate"] * config["seq_len_tgt"]

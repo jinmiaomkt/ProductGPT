@@ -1,22 +1,10 @@
 from __future__ import annotations
-
-"""ProductGPT – end‑to‑end train / evaluate script
-=================================================
-✓ Hyper‑parameters come from `config4.py`
-✓ Handles feature embeddings, data‑loading, training (DeepSpeed) and test
-✓ No duplicated functions, clean imports, full type hints
-"""
-
-# ────────────────────────────── stdlib
 import json
 import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
-
 import warnings
-
-# ────────────────────────────── third‑party
 import boto3
 import botocore
 import deepspeed
@@ -104,7 +92,6 @@ FEATURE_COLS: List[str] = [
     "LTO",
 ]
 
-
 def load_feature_tensor(xls_path: Path) -> torch.Tensor:
     """Load product‑level feature embeddings – (V, D) FloatTensor."""
     df = pd.read_excel(xls_path, sheet_name=0)
@@ -116,9 +103,7 @@ def load_feature_tensor(xls_path: Path) -> torch.Tensor:
             arr[token_id] = row[FEATURE_COLS].to_numpy(dtype=np.float32)
     return torch.from_numpy(arr)
 
-
 # ══════════════════════════════ 3. Tokenisers ═════════════════════════=
-
 def _base_tokeniser(extra_vocab: Dict[str, int] | None = None) -> Tokenizer:
     """Word‑level tokeniser with a fixed numeric vocabulary."""
     vocab: Dict[str, int] = {
@@ -135,15 +120,12 @@ def _base_tokeniser(extra_vocab: Dict[str, int] | None = None) -> Tokenizer:
     tok.model = models.WordLevel(vocab=vocab, unk_token="[UNK]")
     return tok
 
-
 def build_tokenizer_src() -> Tokenizer:  # with product IDs
     prod_vocab = {str(i): i for i in range(FIRST_PROD_ID, UNK_PROD_ID + 1)}
     return _base_tokeniser(prod_vocab)
 
-
 def build_tokenizer_tgt() -> Tokenizer:  # decisions only
     return _base_tokeniser()
-
 
 # ══════════════════════════════ 4. Losses ═════════════════════════════
 class FocalLoss(nn.Module):
@@ -189,14 +171,11 @@ class FocalLoss(nn.Module):
         loss = ((1 - pt) ** self.gamma) * ce
         return loss.mean() if loss.numel() else logits.new_tensor(0.0)
 
-
 # ══════════════════════════════ 5. Utility fns ════════════════════════
-
 def transition_mask(seq: torch.Tensor) -> torch.Tensor:  # (B, T)
     """Mask where *decision* changes wrt previous step."""
     prev = F.pad(seq, (1, 0), value=-1)[:, :-1]
     return seq != prev
-
 
 def perplexity(logits: torch.Tensor, targets: torch.Tensor, pad: int = PAD_ID) -> float:
     logp = F.log_softmax(logits, dim=-1)
@@ -206,9 +185,7 @@ def perplexity(logits: torch.Tensor, targets: torch.Tensor, pad: int = PAD_ID) -
         return float("nan")
     return torch.exp(F.nll_loss(lp2d[mask], tgt[mask], reduction="mean")).item()
 
-
 # ══════════════════════════════ 6. DataLoaders ═══════════════════════=
-
 def build_dataloaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, DataLoader, Tokenizer]:
     # raw = load_json_dataset(cfg["filepath"])
 
@@ -302,7 +279,6 @@ def _show(tag: str, metrics: Tuple[float, float, dict, dict, dict, dict]) -> Non
               f"AUPRC={d['auprc']:.4f}")
 
 # ══════════════════════════════ 8. Model builder ═════════════════════=
-
 def build_model(cfg: Dict[str, Any], feat_tensor: torch.Tensor) -> nn.Module:
     return build_transformer(
         vocab_size_tgt=cfg["vocab_size_tgt"],
@@ -319,9 +295,7 @@ def build_model(cfg: Dict[str, Any], feat_tensor: torch.Tensor) -> nn.Module:
         special_token_ids=SPECIAL_IDS,
     )
 
-
 # ══════════════════════════════ 9. Evaluation ════════════════════════
-
 def _subset(pred, lbl, probs, rev_err, mask, classes=np.arange(1, 10)):
     if mask.sum() == 0:
         return {"hit": np.nan, "f1": np.nan, "auprc": np.nan, "rev_mae": np.nan}
@@ -639,248 +613,8 @@ def train_model(cfg: Dict[str, Any]):
         "preds": pred_path.name,
     }
 
-
-
 # ══════════════════════════════ 11. CLI ═══════════════════════════════
 if __name__ == "__main__":
     cfg = get_config()
     cfg["seq_len_ai"] = cfg["ai_rate"] * cfg["seq_len_tgt"]
     train_model(cfg)
-
-
-    # best_val_loss = None
-    # best_checkpoint_path = None
-    # epochs_no_improve = 0
-
-    # for epoch in range(initial_epoch, config['num_epochs']):
-    #     model_engine.train()
-    #     torch.cuda.empty_cache()
-
-    #     cumm_ce, cumm_ctr = 0., 0.
-        
-    #     batch_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch:02d}")
-    #     # total_loss = 0.0
-
-    #     for batch in batch_iterator:
-    #         decoder_input = batch['aggregate_input'].to(device)
-    #         label         = batch['label'].to(device)
-
-    #         model_engine.zero_grad()
-    #         logits, h = model_engine(decoder_input, return_hidden = True)  # (B, seq_len, vocab_size)
-
-    #         B, T, V = logits.shape
-    #         decision_positions = torch.arange(config['ai_rate'] - 1, T, step=config['ai_rate'], device=logits.device)  # shape: (N,)
-    #         decision_logits = logits[:, decision_positions, :]  # shape: (B, N, V)
-            
-    #         loss_ce = loss_fn(
-    #             decision_logits,  # predict next token
-    #             label
-    #         )
-
-    #         # ── contrastive regulariser on *all* tokens ───────────────────────
-    #         #   every token in `inp` is guaranteed to be a product‑ID (13‑56, 59)
-    #         flat_h   = h.reshape(-1, h.size(-1))                # (B*T, D_model)
-    #         flat_ids = decoder_input.reshape(-1)                          # (B*T,)
-
-    #         z_mean, uniq_id = unique_by_id(flat_h, flat_ids)
-    #         z_proj = F.normalize(model_engine.module.proj_head(z_mean), dim=-1)
-    #         loss_ctr    = nt_xent(z_proj, uniq_id)                  
-
-    #         loss = loss_ce + lambda_ctr * loss_ctr
-
-    #         model_engine.backward(loss)
-    #         model_engine.step()
-
-    #         cumm_ce  += loss_ce.item()
-    #         cumm_ctr += loss_ctr.item()
-
-    #         # total_loss += loss.item()
-    #         global_step += 1
-
-    #     loss = loss / len(train_dataloader)
-    #     current_lr = model_engine.optimizer.param_groups[0]["lr"]
-    #     print(f"\nEpoch {epoch}: LR={current_lr:.6f}  Train Cross-Entropy Loss={cumm_ce:.4f}  Contrastive Loss={cumm_ctr:.4f}  Train Loss={loss:.4f}")
-
-    #     # Evaluate
-    #     val_loss, val_conf_mat, val_ppl, val_hit_rate, val_f1_score, val_auprc = evaluate(val_dataloader, model_engine, device, loss_fn, config['ai_rate'])
-    #     print(f"Epoch {epoch} Val Loss={val_loss:.4f}  \nVal PPL={val_ppl:.4f} \nVal Hit Rate={val_hit_rate:.4f} \nVal F1 Score={val_f1_score:.4f} \nVal Area Under Precision-Recall Curve={val_auprc:.4f}")
-    #     print("Val Confusion Matrix:\n", val_conf_mat)
-
-    #     # Early stopping or checkpoint
-    #     if best_val_loss is None or val_loss < best_val_loss:
-    #         best_val_loss = val_loss
-    #         epochs_no_improve = 0
-    #         # best_checkpoint_path = f"best_checkpoint_epoch_{epoch}.pt"
-            
-    #         best_checkpoint_path = get_weights_file_path(config, "best")
-    #         torch.save({
-    #             'epoch': epoch,
-    #             'model_state_dict': model_engine.state_dict(),
-    #             'optimizer_state_dict': model_engine.optimizer.state_dict(),
-    #             'global_step': global_step
-    #         }, best_checkpoint_path)
-    #         print(f"  [*] New best val_loss={val_loss:.4f}, saved => {best_checkpoint_path}")
-    #     else:
-    #         epochs_no_improve += 1
-    #         if epochs_no_improve >= config['patience']:
-    #             print("Early stopping!")
-    #             break
-
-    # # Test evaluation
-    # if best_checkpoint_path:
-    #     print(f"\nBest checkpoint: {best_checkpoint_path}")
-    #     state = torch.load(best_checkpoint_path, weights_only=False)
-    #     model_engine.load_state_dict(state['model_state_dict'])
-
-    # test_loss, test_conf_mat, test_ppl, test_hit_rate, test_f1_score, test_auprc = evaluate(test_dataloader, model_engine, device, loss_fn, config['ai_rate'])
-    # print(f"** Test Loss={test_loss:.4f} \nTest PPL={test_ppl:.4f} \nTest Hit Rate={test_hit_rate:.4f} \nTest F1 Score={test_f1_score:.4f} \nTest Area Under Precision-Recall Curve={test_auprc:.4f}")
-    # print("Test Confusion Matrix:\n", test_conf_mat)
-
-    # json_out_path = Path(best_checkpoint_path).with_suffix(".json")
-    # metadata = {
-    #     "best_checkpoint_path": best_checkpoint_path,
-    #     "val_loss": val_loss,
-    #     "val_ppl": val_ppl,
-    #     "val_confusion_matrix": val_conf_mat.tolist() if val_conf_mat is not None else None,
-    #     "val_hit_rate": val_hit_rate,
-    #     "val_f1_score": val_f1_score,
-    #     "val_auprc": val_auprc,
-    #     "test_loss": test_loss,
-    #     "test_ppl": test_ppl,
-    #     "test_confusion_matrix": test_conf_mat.tolist() if test_conf_mat is not None else None,
-    #     "test_hit_rate": test_hit_rate,
-    #     "test_f1_score": test_f1_score,
-    #     "test_auprc": test_auprc
-    # }
-    # with open(json_out_path, 'w') as f:
-    #     json.dump(metadata, f, indent=2)
-
-    # return {
-    #     "best_checkpoint_path": best_checkpoint_path,
-    #     "val_loss": val_loss,
-    #     "val_ppl": val_ppl,
-    #     "val_confusion_matrix": val_conf_mat.tolist() if val_conf_mat is not None else None,
-    #     "val_hit_rate": val_hit_rate,
-    #     "val_f1_score": val_f1_score,
-    #     "val_auprc": val_auprc,
-    #     "test_loss": test_loss,
-    #     "test_ppl": test_ppl,
-    #     "test_confusion_matrix": test_conf_mat.tolist() if test_conf_mat is not None else None,
-    #     "test_hit_rate": test_hit_rate,
-    #     "test_f1_score": test_f1_score,
-    #     "test_auprc": test_auprc
-    # }
-
-##############################################################################
-# The evaluate function, fixed
-##############################################################################
-# def evaluate(dataloader, model_engine, device, loss_fn, stepsize):
-#     total_loss = 0.0
-#     total_ppl  = 0.0
-
-#     all_preds      = []  # for confusion matrix & F1
-#     all_labels     = []  # for confusion matrix & F1
-#     all_probs      = []  # for AUPRC
-#     valid_labels   = []  # same as all_labels, but used for AUPRC
-
-#     model_engine.eval()
-    
-#     if len(dataloader) == 0:
-#         # Return 4 values so the caller can unpack
-#         return float('nan'), None, float('nan'), float('nan')
-
-#     # For ignoring special tokens in the *labels*
-#     tokenizer_tgt = build_tokenizer_tgt()
-#     pad_id = tokenizer_tgt.token_to_id("[PAD]")
-#     sos_id = tokenizer_tgt.token_to_id("[SOS]")
-#     unk_id = tokenizer_tgt.token_to_id("[UNK]")
-#     eos_id = tokenizer_tgt.token_to_id("[EOS]")
-#     # special_tokens = {pad_id, sos_id, unk_id, eos_id}
-#     special_tokens = {pad_id, sos_id, unk_id, eos_id, EOS_PROD_ID, SOS_PROD_ID}
-
-#     with torch.no_grad():
-#         for batch in dataloader:
-#             dec_inp = batch['aggregate_input'].to(device)
-#             label   = batch['label'].to(device)
-#             logits  = model_engine(dec_inp)
-
-#             # with torch.no_grad():
-#             #     class9_logits = logits[..., 9]  # (B, T)
-#             #     print(f"Avg logit for class 9: {class9_logits.mean().item():.4f}")
-
-#             # counts = (label == 9).sum()
-#             # print("Class 9 count at decision positions:", counts.item())
-
-#             # Gather logits at decision positions (e.g., first token of every 15-token block)
-#             decision_positions = torch.arange(stepsize - 1, logits.size(1), step=stepsize, device=logits.device)
-#             decision_logits = logits[:, decision_positions, :]  # shape: (B, N, vocab_size)
-
-#             # SHIFT for loss
-#             loss = loss_fn(decision_logits, label)
-#             total_loss += loss.item()
-
-#             # Perplexity
-#             ppl = calculate_perplexity(decision_logits, label, pad_token=pad_id)
-#             total_ppl += ppl
-
-#             # For metrics: get probabilities and predictions
-#             # decision_probs shape => (B, N, vocab_size)
-#             decision_probs = F.softmax(decision_logits, dim=-1)  # per-class probabilities
-
-#             # Flatten over (B*N)
-#             B, N, V = decision_probs.shape
-#             probs_2d  = decision_probs.view(-1, V).cpu().numpy()  # shape (B*N, V)
-#             preds_2d  = probs_2d.argmax(axis=-1)                  # argmax for confusion matrix
-#             labels_1d = label.view(-1).cpu().numpy()              # shape (B*N,)
-
-#             # SHIFT for predictions
-#             # preds  = torch.argmax(decision_logits, dim=-1)  # (B, T-1)
-#             # labels_2D = label[:, 1:]                             # (B, T-1)
-
-#             # Flatten to 1D
-#             # preds_1D  = preds.cpu().numpy().ravel()
-#             # labels_1D = label.cpu().numpy().ravel()
-
-#             # Filter out special tokens from labels
-#             valid_mask = ~np.isin(labels_1d, list(special_tokens))
-#             preds_2d   = preds_2d[valid_mask]
-#             labels_1d  = labels_1d[valid_mask]
-#             probs_2d   = probs_2d[valid_mask, :]   # keep the same positions
-
-#             # Append
-#             all_preds.append(preds_2d)
-#             all_labels.append(labels_1d)
-#             all_probs.append(probs_2d)
-#             valid_labels.append(labels_1d)
-
-#     # Merge all into single 1D arrays
-#     all_preds  = np.concatenate(all_preds)   # shape (N_total,)
-#     all_labels = np.concatenate(all_labels)  # shape (N_total,)
-#     all_probs  = np.concatenate(all_probs, axis=0)   # shape (N_total, vocab_size)
-#     valid_labels = np.concatenate(valid_labels)
-
-#     avg_loss = total_loss / len(dataloader)
-#     avg_ppl  = total_ppl  / len(dataloader)
-
-#     # Now we can do confusion_matrix and accuracy
-#     # unique_labels = np.unique(all_labels)
-#     decision_ids = np.arange(1, 10)   
-#     # conf_mat = confusion_matrix(all_labels, all_preds, labels=unique_labels)
-#     conf_mat = confusion_matrix(all_labels, all_preds, labels=decision_ids)
-#     hit_rate = accuracy_score(all_labels, all_preds)
-#     macro_f1 = f1_score(all_labels, all_preds, average='macro')
-#     # auprc = average_precision_score(all_labels, all_preds, average='macro')
-
-#     classes_for_bin = np.arange(1, 10)
-#     y_true_bin = label_binarize(valid_labels, classes=classes_for_bin)
-#     probs_for_auprc = all_probs[:, 1:10]  # keep columns 1..9
-#     auprc = average_precision_score(y_true_bin, probs_for_auprc, average='macro')
-
-#     label_mapping = {0: "[PAD]", 1: "1", 2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9"}
-#     readable_labels = [label_mapping.get(i, str(i)) for i in decision_ids]
-#     print(f"Label IDs: {decision_ids}")
-#     print(f"Label meanings: {readable_labels}")
-#     print(f"Unique values in predictions: {np.unique(all_preds, return_counts=True)}")
-#     print(f"Unique values in labels: {np.unique(all_labels, return_counts=True)}")
-
-#     return avg_loss, conf_mat, avg_ppl, hit_rate, macro_f1, auprc
