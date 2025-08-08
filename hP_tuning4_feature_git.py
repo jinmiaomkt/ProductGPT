@@ -43,12 +43,12 @@ assert len(uids_trainval) > 0, "No train/val UIDs for the requested fold."
 
 # Hyper‑parameter grids
 nb_features_values = [16, 32]
-d_model_values     = [128]
-d_ff_values        = [128]
+d_model_values     = [256]
+d_ff_values        = [256]
 N_values           = [6]
 num_heads_values   = [4]
 gamma_values       = [1]
-lr_values          = [1e-4, 5e-5]
+lr_values          = [1e-4]
 weight_values      = [2]
 
 # Precompute every combo
