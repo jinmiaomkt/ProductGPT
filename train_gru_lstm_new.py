@@ -1,60 +1,355 @@
-import ray, subprocess, json, pandas as pd, boto3, pathlib, os
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+Train ONE GRU fold and upload metrics JSON to S3.
 
-# ───────── CONFIG ────────────────────────────────────────────────────
-TRAIN  = "/home/ec2-user/ProductGPT/train_gru_lstm_new.py"
-BUCKET = "productgptbucket"
-PREFIX = "CV_GRU"
+Usage (example):
+python3 train_gru_lstm_new.py \
+  --model gru --fold 2 --bucket productgptbucket --prefix CV_GRU \
+  --data /home/ec2-user/data/clean_list_int_wide4_simple6_FeatureBasedTrain.json \
+  --ckpt /tmp/ckpt_fold2.pt --out /tmp/out_fold2.txt \
+  --hidden_size 128 --input_dim 15 --batch_size 4 --lr 1e-4 \
+  --uids_trainval '["uid_a","uid_b", ...]' \
+  --uids_test     '["uid_x","uid_y", ...]'
+"""
+import argparse, json, math, os, random, pathlib
+from typing import List, Dict, Optional, Tuple
 
-# single location for common paths
-DATA_TRAIN = "/home/ec2-user/data/clean_list_int_wide4_simple6_FeatureBasedTrain.json"
-CKPT_DUMMY = "/tmp/ckpt_dummy.pt"                       # never read, but flag needed
-OUT_DUMMY  = "/tmp/out_dummy.txt"                      # never read, but flag needed
-HIDDEN     = "128"                                     # matches gru_h128_…
-INPUT_DIM  = "15"
-BATCH_SIZE = "4"
+import boto3
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from sklearn.metrics import accuracy_score, average_precision_score, f1_score
+from sklearn.preprocessing import label_binarize
+from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import DataLoader, Dataset, random_split
 
-# ───────── RAY SETUP ─────────────────────────────────────────────────
-ray.init(address="auto")
+# ───────── Repro ─────────────────────────────────────────────────────
+def set_seed(seed: int = 42):
+    random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
+    if torch.cuda.is_available(): torch.cuda.manual_seed_all(seed)
 
-@ray.remote(num_gpus=1)
-def run_fold(k: int):
-    """Train and upload one fold; return its metrics dict."""
-    cmd = [
-        "python3", TRAIN,
-        "--model",       "gru",
-        "--fold",        str(k),
-        "--bucket",      BUCKET,
-        "--data",        DATA_TRAIN,     # ↓ four required legacy flags
-        "--ckpt",        CKPT_DUMMY,
-        "--hidden_size", HIDDEN,
-        "--out",         OUT_DUMMY,
-        "--input_dim",   INPUT_DIM,
-        "--batch_size",  BATCH_SIZE,
-    ]
-    subprocess.check_call(cmd)
+# ───────── Dataset ───────────────────────────────────────────────────
+NUM_CLASSES = 10        # 0 = PAD, 1-9 = real classes
 
-    # download the metrics JSON that the training script uploaded
-    name   = f"gru_h{HIDDEN}_lr0.0001_bs{BATCH_SIZE}_fold{k}.json"
-    local  = pathlib.Path(name)
-    subprocess.check_call(
-        ["aws", "s3", "cp",
-         f"s3://{BUCKET}/{PREFIX}/metrics/{name}", str(local)]
+class SequenceDataset(Dataset):
+    """
+    Expects each row like:
+      {
+        "AggregateInput": ["<space-separated ints or 'NA'>"],
+        "Decision":       ["<space-separated ints or 'NA'>"],
+        "uid": "abc"  # or "UID"
+      }
+    If no uid in rows, filtering by UID is skipped.
+    """
+    def __init__(self, rows: List[Dict], input_dim: int,
+                 allowed_uids: Optional[set] = None):
+        self.x, self.y = [], []
+
+        # Filter by UID if possible
+        contains_uid = any(("uid" in r) or ("UID" in r) for r in rows)
+        if allowed_uids is not None and contains_uid:
+            def _uid(r): return r.get("uid", r.get("UID"))
+            rows = [r for r in rows if _uid(r) in allowed_uids]
+            if not rows:
+                print("[WARN] No rows kept after UID filtering; "
+                      "falling back to empty dataset.")
+
+        for row in rows:
+            flat = [0 if t == "NA" else int(t)
+                    for t in row["AggregateInput"][0].split()]
+            T = len(flat) // input_dim
+            if T <= 0: 
+                continue
+            x = torch.tensor(flat, dtype=torch.float32).view(T, input_dim)
+
+            dec = [0 if t == "NA" else int(t)
+                   for t in row["Decision"][0].split()]
+            valid = min(T, len(dec))
+            if valid <= 0:
+                continue
+            y = torch.tensor(dec[:valid], dtype=torch.long)
+
+            self.x.append(x[:valid])
+            self.y.append(y)
+
+        # Integrity check
+        for xi, yi in zip(self.x, self.y):
+            assert len(xi) == len(yi), "Input/label length mismatch."
+
+    def __len__(self):
+        return len(self.x)
+
+    def __getitem__(self, idx):
+        return self.x[idx], self.y[idx]
+
+def collate_fn(batch):
+    xs, ys = zip(*batch)
+    x_pad = pad_sequence(xs, batch_first=True, padding_value=0.0)
+    y_pad = pad_sequence(ys, batch_first=True, padding_value=0)
+    return x_pad, y_pad
+
+# ───────── Model ─────────────────────────────────────────────────────
+class GRUClassifier(nn.Module):
+    def __init__(self, input_dim: int, hidden_size: int):
+        super().__init__()
+        self.gru = nn.GRU(input_dim, hidden_size, batch_first=True)
+        self.fc  = nn.Linear(hidden_size, NUM_CLASSES)
+
+    def forward(self, x):
+        out, _ = self.gru(x)          # (B, T, H)
+        return self.fc(out)           # (B, T, C)
+
+# ───────── Metrics / Eval ────────────────────────────────────────────
+REV_VEC = torch.tensor([1, 10, 1, 10, 1, 10, 1, 10, 0], dtype=torch.float32)
+
+def _subset(pred, lbl, probs, rev_err, mask, classes=np.arange(1, 10)):
+    if mask.sum() == 0:
+        nan = float("nan")
+        return dict(hit=nan, f1=nan, auprc=nan, rev_mae=nan)
+
+    p, l, pr, re = pred[mask], lbl[mask], probs[mask], rev_err[mask]
+    hit = accuracy_score(l, p)
+    f1  = f1_score(l, p, average="macro")
+    try:
+        auprc = average_precision_score(
+            label_binarize(l, classes=classes), pr[:, 1:10], average="macro")
+    except ValueError:
+        auprc = float("nan")
+    return dict(hit=hit, f1=f1, auprc=auprc, rev_mae=re.mean())
+
+@torch.no_grad()
+def evaluate(loader, model, device, loss_fn):
+    model.eval()
+    P, L, PR, RE = [], [], [], []
+    tot_loss_batch_mean = 0.0
+    nll_sum = 0.0
+    token_count = 0
+    rev_vec = REV_VEC.to(device)
+
+    for xb, yb in loader:
+        xb, yb = xb.to(device), yb.to(device)
+        logits = model(xb)                       # (B, T, C)
+        B, T, C = logits.shape
+        flat_logits = logits.reshape(-1, C)
+        flat_labels = yb.reshape(-1)
+
+        # Mean CE (ignore PAD=0) — for logging
+        loss = loss_fn(flat_logits, flat_labels)
+        tot_loss_batch_mean += loss.item()
+
+        # Token-level NLL sum for proper perplexity
+        log_probs = F.log_softmax(flat_logits, dim=-1)
+        nll_sum += F.nll_loss(
+            log_probs, flat_labels, ignore_index=0, reduction='sum'
+        ).item()
+        token_count += (flat_labels != 0).sum().item()
+
+        # Other metrics on non-pad tokens
+        probs = log_probs.exp()
+        probs_np = probs.cpu().numpy()
+        preds_np = probs_np.argmax(1)
+        labs_np  = flat_labels.cpu().numpy()
+        mask     = labs_np != 0
+
+        P.append(preds_np[mask])
+        L.append(labs_np[mask])
+        PR.append(probs_np[mask])
+
+        exp_rev  = (probs[:, 1:10] * rev_vec).sum(-1)
+        true_rev = rev_vec[(flat_labels-1).clamp(min=0, max=8)]
+        RE.append(torch.abs(exp_rev-true_rev).cpu().numpy()[mask])
+
+    if len(P) == 0:
+        # empty loader
+        out = {"all": dict(hit=float("nan"), f1=float("nan"),
+                           auprc=float("nan"), rev_mae=float("nan"))}
+        avg_loss = float("nan")
+        avg_ppl  = float("nan")
+        return avg_loss, avg_ppl, out
+
+    P, L, PR, RE = map(np.concatenate, (P, L, PR, RE))
+    masks = dict(all=np.ones_like(P, dtype=bool))
+    out = {k: _subset(P, L, PR, RE, m) for k, m in masks.items()}
+
+    avg_loss = tot_loss_batch_mean / max(1, len(loader))
+    avg_ppl  = math.exp(nll_sum / max(1, token_count))
+    return avg_loss, avg_ppl, out
+
+# ───────── Training loop ────────────────────────────────────────────
+def train_one_gru_fold(*,
+                       data_path: str,
+                       input_dim: int,
+                       hidden_size: int,
+                       batch_size: int,
+                       lr: float,
+                       uids_trainval: Optional[List[str]],
+                       uids_test: Optional[List[str]],
+                       epochs: int = 80,
+                       class_9_weight: float = 5.0,
+                       seed: int = 33,
+                       device: Optional[torch.device] = None
+                       ) -> Tuple[Dict, Dict]:
+    set_seed(seed)
+    dev = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Load rows
+    rows = json.loads(pathlib.Path(data_path).read_text())
+
+    # Build datasets
+    # Split train/val using uids_trainval if possible; otherwise random row split
+    contains_uid = any(("uid" in r) or ("UID" in r) for r in rows)
+    train_ds = val_ds = test_ds = None
+
+    if uids_trainval and contains_uid:
+        u_trainval = set(uids_trainval)
+        u_test     = set(uids_test or [])
+        # Further split trainval uids into train/val (90/10)
+        u_trainval = list(u_trainval)
+        u_trainval.sort()
+        rng = random.Random(seed)
+        rng.shuffle(u_trainval)
+        k = max(1, int(0.9 * len(u_trainval)))
+        u_train = set(u_trainval[:k])
+        u_val   = set(u_trainval[k:])
+        train_ds = SequenceDataset(rows, input_dim, allowed_uids=u_train)
+        val_ds   = SequenceDataset(rows, input_dim, allowed_uids=u_val)
+        test_ds  = SequenceDataset(rows, input_dim, allowed_uids=u_test)
+    else:
+        # Fallback: random split rows (80/10/10)
+        print("[WARN] UID split not applied (no UID keys or no lists provided). "
+              "Using random row split.")
+        full = SequenceDataset(rows, input_dim, allowed_uids=None)
+        n = len(full)
+        tr_n, va_n = int(.8*n), int(.1*n)
+        train_ds, val_ds, test_ds = random_split(
+            full, [tr_n, va_n, n-tr_n-va_n],
+            generator=torch.Generator().manual_seed(seed)
+        )
+
+    # DataLoaders
+    LD = lambda d, sh: DataLoader(d, batch_size, shuffle=sh,
+                                  collate_fn=collate_fn, num_workers=2,
+                                  pin_memory=torch.cuda.is_available())
+    tr_ld, va_ld, te_ld = LD(train_ds, True), LD(val_ds, False), LD(test_ds, False)
+
+    # Model / loss / opt
+    model = GRUClassifier(input_dim, hidden_size).to(dev)
+    w = torch.ones(NUM_CLASSES, device=dev)
+    w[9] = class_9_weight
+    loss_fn = nn.CrossEntropyLoss(weight=w, ignore_index=0)
+    optim   = torch.optim.Adam(model.parameters(), lr=lr)
+
+    # Train with early stopping on val loss
+    best_loss, best_snapshot = None, None
+    patience = 0
+    PATIENCE_LIMIT = 10
+
+    for ep in range(1, epochs+1):
+        model.train(); run_loss = 0.0
+        for xb, yb in tr_ld:
+            xb, yb = xb.to(dev), yb.to(dev)
+            logits = model(xb).reshape(-1, NUM_CLASSES)
+            labels = yb.reshape(-1)
+            loss   = loss_fn(logits, labels)
+
+            optim.zero_grad(); loss.backward(); optim.step()
+            run_loss += loss.item()
+
+        v_loss, v_ppl, v = evaluate(va_ld, model, dev, loss_fn)
+        print(f"[GRU h{hidden_size} lr{lr} bs{batch_size}] "
+              f"Ep{ep:02d} Train={run_loss/max(1,len(tr_ld)):.4f} "
+              f"Val={v_loss:.4f} PPL={v_ppl:.4f}")
+
+        if best_loss is None or v_loss < best_loss:
+            best_loss, patience = v_loss, 0
+            best_snapshot = {
+                "state_dict": {k: v.cpu() if isinstance(v, torch.Tensor) else v
+                               for k, v in model.state_dict().items()},
+                "val": {"loss": v_loss, "ppl": v_ppl, "metrics": v}
+            }
+            print("  [*] new best saved (in memory)")
+        else:
+            patience += 1
+            if patience >= PATIENCE_LIMIT:
+                print("  [early-stop]")
+                break
+
+    # Load best and evaluate on test
+    if best_snapshot is not None:
+        model.load_state_dict({k: v for k, v in best_snapshot["state_dict"].items()})
+    t_loss, t_ppl, t = evaluate(te_ld, model, dev, loss_fn)
+
+    val_metrics = {
+        "val_loss": best_snapshot["val"]["loss"] if best_snapshot else float("nan"),
+        "val_ppl":  best_snapshot["val"]["ppl"] if best_snapshot else float("nan"),
+        **{f"val_{k}_{m}": best_snapshot["val"]["metrics"][k][m]
+           for k in (best_snapshot["val"]["metrics"] if best_snapshot else {"all":{}}) 
+           for m in (best_snapshot["val"]["metrics"][k] if best_snapshot else {})}
+    }
+    test_metrics = {
+        "test_loss": t_loss, "test_ppl": t_ppl,
+        **{f"test_{k}_{m}": t[k][m] for k in t for m in t[k]}
+    }
+    return val_metrics, test_metrics, model
+
+# ───────── CLI / Main ───────────────────────────────────────────────
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model", required=True, choices=["gru"])
+    ap.add_argument("--fold", required=True, type=int)
+    ap.add_argument("--bucket", required=True)
+    ap.add_argument("--prefix", default="CV_GRU")
+    ap.add_argument("--data", required=True)
+    ap.add_argument("--ckpt", required=False, default="")
+    ap.add_argument("--out",  required=False, default="")
+    ap.add_argument("--hidden_size", required=True, type=int)
+    ap.add_argument("--input_dim",   required=True, type=int)
+    ap.add_argument("--batch_size",  required=True, type=int)
+    ap.add_argument("--lr",          required=True, type=float)
+    ap.add_argument("--uids_trainval", required=True)
+    ap.add_argument("--uids_test",     required=True)
+    args = ap.parse_args()
+
+    uids_trainval = json.loads(args.uids_trainval) if args.uids_trainval else None
+    uids_test     = json.loads(args.uids_test)     if args.uids_test     else None
+
+    val, test, model = train_one_gru_fold(
+        data_path=args.data,
+        input_dim=args.input_dim,
+        hidden_size=args.hidden_size,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        uids_trainval=uids_trainval,
+        uids_test=uids_test
     )
-    return json.loads(local.read_text())
 
-# ───────── SCHEDULE 10 FOLDS ────────────────────────────────────────
-metrics = ray.get([run_fold.remote(k) for k in range(10)])
+    # Save checkpoint if requested
+    if args.ckpt:
+        ckpt_path = pathlib.Path(args.ckpt)
+        ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(model.state_dict(), ckpt_path)
+        print(f"[ckpt] saved -> {ckpt_path}")
 
-# ───────── AGGREGATE & UPLOAD TABLES ─────────────────────────────────
-df = pd.DataFrame(metrics).set_index("fold")
-df.to_csv("cv_gru_metrics.csv")
+    # Build metrics dict
+    metrics = {
+        "fold": args.fold,
+        "hidden_size": args.hidden_size,
+        "batch_size": args.batch_size,
+        "lr": args.lr,
+        **val, **test
+    }
 
-summary = df.select_dtypes(float).agg(["mean", "std"]).round(4)
-summary.to_csv("cv_gru_summary.csv")
-summary.to_json("cv_gru_summary.json", indent=2)
+    # Write local metrics JSON and upload to S3
+    name  = f"gru_h{args.hidden_size}_lr{args.lr}_bs{args.batch_size}_fold{args.fold}.json"
+    local = pathlib.Path(name)
+    local.write_text(json.dumps(metrics, indent=2))
+    print(f"[metrics] wrote -> {local}")
 
-s3 = boto3.client("s3")
-s3.upload_file("cv_gru_metrics.csv",  BUCKET, f"{PREFIX}/tables/cv_gru_metrics.csv")
-s3.upload_file("cv_gru_summary.csv",  BUCKET, f"{PREFIX}/tables/cv_gru_summary.csv")
-s3.upload_file("cv_gru_summary.json", BUCKET, f"{PREFIX}/tables/cv_gru_summary.json")
-print("[✓] GRU CV complete and summaries uploaded.")
+    s3 = boto3.client("s3")
+    s3.upload_file(str(local), args.bucket, f"{args.prefix}/metrics/{name}")
+    print(f"[s3] uploaded -> s3://{args.bucket}/{args.prefix}/metrics/{name}")
+
+if __name__ == "__main__":
+    main()
