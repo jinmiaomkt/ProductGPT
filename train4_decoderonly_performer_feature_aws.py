@@ -481,7 +481,8 @@ def train_model(cfg: Dict[str, Any]):
             "params": {"lr": cfg["lr"], "eps": cfg["eps"], "weight_decay": cfg["weight_decay"]},
         },
         "zero_optimization": {"stage": 1},
-        "fp16": {"enabled": True, "loss_scale": 0, "hysteresis": 2, "min_loss_scale": 1},
+        # "fp16": {"enabled": True, "loss_scale": 0, "hysteresis": 2, "min_loss_scale": 1},
+        "fp16": {"enabled": False},
         "lr_scheduler": {
             "type": "WarmupDecayLR",
             "params": {
