@@ -29,7 +29,7 @@ def _raw_config():
 
         # ---------- training ----------
         "k": 4096,
-        "batch_size": 4,
+        "batch_size": 2,
         "num_epochs": 200,
         "warmup_steps": 5,
         "lr": 1e-4,
