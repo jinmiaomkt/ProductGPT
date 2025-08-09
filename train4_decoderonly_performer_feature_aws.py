@@ -248,21 +248,53 @@ def _json_safe(o: Any):
     if isinstance(o, (list, tuple)): return [_json_safe(v) for v in o]
     return o
 
+# def _s3_client():
+#     try:
+#         return boto3.client("s3")
+#     except botocore.exceptions.BotoCoreError:
+#         return None
+
+# def _upload(local: Path, bucket: str, key: str, s3) -> bool:
+#     if s3 is None or not local.exists():
+#         return False
+#     try:
+#         s3.upload_file(str(local), bucket, key)
+#         print(f"[S3] {local.name} → s3://{bucket}/{key}")
+#         return True
+#     except botocore.exceptions.BotoCoreError as e:
+#         print(f"[S3‑ERR] {e}")
+#         return False
+
+# ───────────────────────── S3 helpers ─────────────────────────
 def _s3_client():
     try:
         return boto3.client("s3")
     except botocore.exceptions.BotoCoreError:
         return None
 
-def _upload(local: Path, bucket: str, key: str, s3) -> bool:
+def _upload_and_unlink(local: Path, bucket: str, key: str, s3, *, gzip_json: bool=False) -> bool:
+    """
+    Uploads `local` to s3://bucket/key and unlinks local on success.
+    If gzip_json=True, sets JSON + gzip headers.
+    """
     if s3 is None or not local.exists():
         return False
+    extra = {}
+    if gzip_json:
+        extra["ExtraArgs"] = {"ContentType": "application/json", "ContentEncoding": "gzip"}
     try:
-        s3.upload_file(str(local), bucket, key)
-        print(f"[S3] {local.name} → s3://{bucket}/{key}")
+        if extra:
+            s3.upload_file(str(local), bucket, key, **extra)
+        else:
+            s3.upload_file(str(local), bucket, key)
+        print(f"[S3] {local} → s3://{bucket}/{key}")
+        try:
+            local.unlink()
+        except Exception:
+            pass
         return True
     except botocore.exceptions.BotoCoreError as e:
-        print(f"[S3‑ERR] {e}")
+        print(f"[S3-ERR] {e}")
         return False
 
 # ─────────────────── pretty-printer for metric blocks ───────────────────
@@ -521,11 +553,15 @@ def train_model(cfg: Dict[str, Any]):
                 "best_val_loss": best_val_loss,
                 "model_state_dict": engine.module.state_dict(),
             }
+
+            # when you save the best checkpoint & metrics:
             torch.save(ckpt, ckpt_path)
-            
             json_path.write_text(json.dumps(_json_safe(best_val_metrics), indent=2))
-            _upload(json_path, bucket, js_key, s3)
-            _upload(ckpt_path, bucket, ck_key, s3)
+
+            # upload & unlink
+            _upload_and_unlink(json_path, bucket, js_key, s3)
+            _upload_and_unlink(ckpt_path, bucket, ck_key, s3)
+
         else:
             patience += 1
             if patience >= cfg["patience"]:
@@ -548,17 +584,22 @@ def train_model(cfg: Dict[str, Any]):
     # ------------------ inference on full 30 campaigns ------------------
     inf_dl, _, _, _ = build_dataloaders({**cfg, "mode": "infer"})
 
-    pred_path = metrics_dir / f"{uid}_predictions.jsonl"
-    with pred_path.open("w") as fp, torch.no_grad():
-        for batch in tqdm(inf_dl, desc="Infer 30‑campaign set"):
-            x = batch["aggregate_input"].to(device)
-            uid = batch["uid"]                       # list[str] length B
+    # Write to a gzipped temp file in /tmp to keep root disk small
+    tmp_pred = Path("/tmp") / f"{uid}_predictions.jsonl.gz"
+    import gzip, io
+
+    with gzip.open(tmp_pred, "wt", encoding="utf-8") as fp, torch.no_grad():
+        for batch in tqdm(inf_dl, desc="Infer 30-campaign set"):
+            x   = batch["aggregate_input"].to(device)
+            uids = batch["uid"]  # list[str] length B
             logits = engine(x)[:, cfg["ai_rate"]-1::cfg["ai_rate"], :]
             probs  = torch.softmax(logits, -1).cpu().numpy()   # (B, N, 60)
-            for u, p in zip(uid, probs):
+            for u, p in zip(uids, probs):
                 fp.write(json.dumps({"uid": u, "probs": p.tolist()}) + "\n")
 
-    _upload(pred_path, bucket, f"CV/predictions/{pred_path.name}", s3)
+    # Upload gzipped predictions and delete local temp
+    pred_s3_key = f"CV/predictions/{tmp_pred.name}"
+    _upload_and_unlink(tmp_pred, bucket, pred_s3_key, s3, gzip_json=True)
 
     metadata = {
         "best_checkpoint_path": ckpt_path.name,
@@ -585,8 +626,16 @@ def train_model(cfg: Dict[str, Any]):
     json_path.write_text(json.dumps(_json_safe(metadata), indent=2))
     print(f"[INFO] Metrics written → {json_path}")    
 
-    _upload(ckpt_path, bucket, ck_key, s3)
-    _upload(json_path, bucket, js_key, s3)
+    # when you save the best checkpoint & metrics:
+    torch.save(ckpt, ckpt_path)
+    json_path.write_text(json.dumps(_json_safe(best_val_metrics), indent=2))
+
+    # upload & unlink
+    _upload_and_unlink(json_path, bucket, js_key, s3)
+    _upload_and_unlink(ckpt_path, bucket, ck_key, s3)
+
+    # _upload(ckpt_path, bucket, ck_key, s3)
+    # _upload(json_path, bucket, js_key, s3)
 
     ckpt_path.unlink(missing_ok=True)
     json_path.unlink(missing_ok=True)
@@ -610,7 +659,7 @@ def train_model(cfg: Dict[str, Any]):
         "test_f1": metadata["test_all_f1_score"],
         "test_auprc": metadata["test_all_auprc"],
         "ckpt": ckpt_path.name,
-        "preds": pred_path.name,
+        "preds": json_path.name,
     }
 
 # ══════════════════════════════ 11. CLI ═══════════════════════════════
