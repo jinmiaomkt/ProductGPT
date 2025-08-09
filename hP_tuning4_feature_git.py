@@ -12,7 +12,7 @@ import os
 import json
 import uuid
 
-import itertools, json, os, socket
+import itertools, json, os, socket 
 import boto3, botocore, torch
 import torch
 
