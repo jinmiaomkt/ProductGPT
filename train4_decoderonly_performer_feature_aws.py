@@ -8,6 +8,7 @@ import warnings
 import boto3
 import botocore
 import gzip
+import torch
 
 # --- runtime knobs (before import deepspeed) ---
 os.environ.setdefault("DS_BUILD_OPS", "0")                    # no fused kernels
