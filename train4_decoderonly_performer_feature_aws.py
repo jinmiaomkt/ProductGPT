@@ -7,7 +7,15 @@ from typing import Any, Dict, List, Tuple
 import warnings
 import boto3
 import botocore
+import gzip
+
+# --- runtime knobs (before import deepspeed) ---
+os.environ.setdefault("DS_BUILD_OPS", "0")                    # no fused kernels
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+torch.backends.cuda.matmul.allow_tf32 = True                  # safer perf on Ampere+
+torch.set_float32_matmul_precision("high")
 import deepspeed
+
 import numpy as np
 import pandas as pd
 import torch
@@ -167,9 +175,14 @@ class FocalLoss(nn.Module):
 
         mask = targets != self.ignore_index
         ce = ce[mask]
+
+        if ce.numel() == 0:
+            # return a zero with a live graph so backward() won’t crash
+            return logits.sum() * 0.0
+        
         pt = torch.exp(-ce)
         loss = ((1 - pt) ** self.gamma) * ce
-        return loss.mean() if loss.numel() else logits.new_tensor(0.0)
+        return loss.mean() 
 
 # ══════════════════════════════ 5. Utility fns ════════════════════════
 def transition_mask(seq: torch.Tensor) -> torch.Tensor:  # (B, T)
@@ -407,9 +420,7 @@ def evaluate(loader: DataLoader, model: nn.Module, dev: torch.device, loss_fn, p
         _subset(P_, L_, PR_, RE_, np.concatenate(m_tr)),
     )
 
-
 # ══════════════════════════════ 10. Training loop ════════════════════
-
 def train_model(cfg: Dict[str, Any]):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
@@ -463,12 +474,13 @@ def train_model(cfg: Dict[str, Any]):
         "train_micro_batch_size_per_gpu": cfg["batch_size"],
         "zero_allow_untested_optimizer": True,
         "gradient_accumulation_steps": 2,
+        "gradient_clipping": 1.0,
         "optimizer": {
             "type": "Lamb",
             "params": {"lr": cfg["lr"], "eps": cfg["eps"], "weight_decay": cfg["weight_decay"]},
         },
         "zero_optimization": {"stage": 1},
-        "fp16": {"enabled": True},
+        "fp16": {"enabled": True, "loss_scale": 8192, "hysteresis": 2, "min_loss_scale": 1},
         "lr_scheduler": {
             "type": "WarmupDecayLR",
             "params": {
@@ -504,13 +516,20 @@ def train_model(cfg: Dict[str, Any]):
             pos = torch.arange(cfg["ai_rate"] - 1, cfg["seq_len_ai"], cfg["ai_rate"], device=device)
             logits = engine(x)[:, pos, :]
             tgt_ = tgt.clone()
+            
             # tgt_[transition_mask(tgt)] = pad_id
+
+            # Skip batches with no labels (optional; FocalLoss is already safe)
+            if not (tgt_ != pad_id).any():
+                continue
+
             loss = loss_fn(logits, tgt_)
 
             engine.zero_grad()
             engine.backward(loss)
             engine.step()
             running += loss.item()
+        
         # print(f"Train loss {running / len(train_dl):.4f}")
 
         # ---- validation ----------------------------------------------
@@ -586,7 +605,6 @@ def train_model(cfg: Dict[str, Any]):
 
     # Write to a gzipped temp file in /tmp to keep root disk small
     tmp_pred = Path("/tmp") / f"{uid}_predictions.jsonl.gz"
-    import gzip, io
 
     with gzip.open(tmp_pred, "wt", encoding="utf-8") as fp, torch.no_grad():
         for batch in tqdm(inf_dl, desc="Infer 30-campaign set"):
@@ -601,65 +619,49 @@ def train_model(cfg: Dict[str, Any]):
     pred_s3_key = f"CV/predictions/{tmp_pred.name}"
     _upload_and_unlink(tmp_pred, bucket, pred_s3_key, s3, gzip_json=True)
 
-    metadata = {
+    # ------------------ Final metadata (optional) ------------------
+    final_meta = {
         "best_checkpoint_path": ckpt_path.name,
         **best_val_metrics,
-        "test_loss"            : t_loss,
-        "test_ppl"             : t_ppl,
-        "test_all_hit_rate"     : t_all["hit"],
-        "test_all_f1_score"     : t_all["f1"],
-        "test_all_auprc"        : t_all["auprc"],
-        "test_all_rev_mae"      : t_all["rev_mae"],
-        "test_stop_hit_rate"    : t_stop["hit"],
-        "test_stop_f1_score"    : t_stop["f1"],
-        "test_stop_auprc"       : t_stop["auprc"],
-        "test_stop_rev_mae"     : t_stop["rev_mae"],
-        "test_after_hit_rate"     : t_after["hit"],
-        "test_after_f1_score"     : t_after["f1"],
-        "test_after_auprc"        : t_after["auprc"],
-        "test_after_rev_mae"      : t_after["rev_mae"],
-        "test_transition_hit_rate"     : t_tr["hit"],
-        "test_transition_f1_score"     : t_tr["f1"],
-        "test_transition_auprc"        : t_tr["auprc"],
-        "test_transition_rev_mae"      : t_tr["rev_mae"],
+        "test_loss" : t_loss,
+        "test_ppl"  : t_ppl,
+        "test_all_hit_rate" : t_all["hit"],
+        "test_all_f1_score" : t_all["f1"],
+        "test_all_auprc"    : t_all["auprc"],
+        "test_all_rev_mae"  : t_all["rev_mae"],
+        "test_stop_hit_rate": t_stop["hit"],
+        "test_stop_f1_score": t_stop["f1"],
+        "test_stop_auprc"   : t_stop["auprc"],
+        "test_stop_rev_mae" : t_stop["rev_mae"],
+        "test_after_hit_rate": t_after["hit"],
+        "test_after_f1_score": t_after["f1"],
+        "test_after_auprc"   : t_after["auprc"],
+        "test_after_rev_mae" : t_after["rev_mae"],
+        "test_transition_hit_rate": t_tr["hit"],
+        "test_transition_f1_score": t_tr["f1"],
+        "test_transition_auprc"   : t_tr["auprc"],
+        "test_transition_rev_mae" : t_tr["rev_mae"],
     }
-    json_path.write_text(json.dumps(_json_safe(metadata), indent=2))
-    print(f"[INFO] Metrics written → {json_path}")    
 
-    # when you save the best checkpoint & metrics:
-    torch.save(ckpt, ckpt_path)
-    json_path.write_text(json.dumps(_json_safe(best_val_metrics), indent=2))
+    final_meta_path = metrics_dir / f"FullProductGPT_{uid}_final.json"
+    final_meta_path.write_text(json.dumps(_json_safe(final_meta), indent=2))
+    _upload_and_unlink(final_meta_path, bucket, f"FullProductGPT/performer/FeatureBased/metrics/{final_meta_path.name}", s3)
 
-    # upload & unlink
-    _upload_and_unlink(json_path, bucket, js_key, s3)
-    _upload_and_unlink(ckpt_path, bucket, ck_key, s3)
-
-    # _upload(ckpt_path, bucket, ck_key, s3)
-    # _upload(json_path, bucket, js_key, s3)
-
+    # Nothing else to save locally; the "best" ckpt & metrics were already sent to S3
     ckpt_path.unlink(missing_ok=True)
     json_path.unlink(missing_ok=True)
 
-    # if _upload(ckpt_path, bucket,
-    #            f"FullProductGPT/performer/FeatureBased/checkpoints/{ckpt_path.name}", s3):
-    #     ckpt_path.unlink(missing_ok=True)
-    
-    # if _upload(json_path, bucket,
-    #            f"FullProductGPT/performer/FeatureBased/metrics/{json_path.name}", s3):
-    #     json_path.unlink(missing_ok=True)
-
-    # return {"uid": uid, "val_loss": best}
-    # return {"uid": uid, "val_loss": best_val_loss, "best_checkpoint_path": str(ckpt_path)}
+    # Return correct S3 object names
     return {
         "uid": uid,
         "fold_id": cfg["fold_id"],
         "val_loss": best_val_loss,
         "val_f1":  best_val_metrics["val_all_f1_score"],
         "val_auprc": best_val_metrics["val_all_auprc"],
-        "test_f1": metadata["test_all_f1_score"],
-        "test_auprc": metadata["test_all_auprc"],
-        "ckpt": ckpt_path.name,
-        "preds": json_path.name,
+        "test_f1": t_all["f1"],
+        "test_auprc": t_all["auprc"],
+        "ckpt": ck_key.split("/")[-1],                   # name in checkpoints/
+        "preds": f"{uid}_predictions.jsonl.gz",          # uploaded filename in CV/predictions/
     }
 
 # ══════════════════════════════ 11. CLI ═══════════════════════════════
