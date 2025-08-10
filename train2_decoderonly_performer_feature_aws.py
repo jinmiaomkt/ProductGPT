@@ -1,25 +1,22 @@
 from __future__ import annotations
-
-"""ProductGPT – end‑to‑end train / evaluate script
-=================================================
-✓ Hyper‑parameters come from `config4.py`
-✓ Handles feature embeddings, data‑loading, training (DeepSpeed) and test
-✓ No duplicated functions, clean imports, full type hints
-"""
-
-# ────────────────────────────── stdlib
 import json
 import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
-
 import warnings
-
-# ────────────────────────────── third‑party
 import boto3
 import botocore
+import gzip
+import torch
+
+# --- runtime knobs (before import deepspeed) ---
+os.environ.setdefault("DS_BUILD_OPS", "0")                    # no fused kernels
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+torch.backends.cuda.matmul.allow_tf32 = True                  # safer perf on Ampere+
+torch.set_float32_matmul_precision("high")
 import deepspeed
+
 import numpy as np
 import pandas as pd
 import torch
@@ -205,11 +202,28 @@ def perplexity(logits: torch.Tensor, targets: torch.Tensor, pad: int = PAD_ID) -
 
 # ══════════════════════════════ 6. DataLoaders ═══════════════════════=
 def build_dataloaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, DataLoader, Tokenizer]:
-    raw = load_json_dataset(cfg["filepath"])
-    n = len(raw)
-    tr, va = int(0.8 * n), int(0.1 * n)
-    g = torch.Generator().manual_seed(33)
-    tr_ds, va_ds, te_ds = random_split(raw, [tr, va, n - tr - va], generator=g)
+    
+    mode = cfg.get("mode", "train")
+
+    if mode == "infer":
+        raw = load_json_dataset(cfg["test_filepath"], keep_uids=None)
+    else:
+        keep = None
+        if mode == "test":
+            keep = set(cfg["uids_test"])
+        elif "uids_trainval" in cfg:
+            keep = set(cfg["uids_trainval"])
+        raw = load_json_dataset(cfg["filepath"], keep_uids=keep)
+    
+    # ------------- train / val / test splits -------------
+    if mode == "infer":
+        tr_ds = raw                                   # will be wrapped once
+        va_ds = te_ds = []
+    else:
+        n = len(raw)
+        tr, va = int(0.8 * n), int(0.1 * n)
+        g = torch.Generator().manual_seed(33)
+        tr_ds, va_ds, te_ds = random_split(raw, [tr, va, n - tr - va], generator=g)
 
     tok_src = build_tokenizer_src()
     tok_tgt = build_tokenizer_tgt()
@@ -232,6 +246,10 @@ def build_dataloaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, Data
         )
 
     make_loader = lambda ds, sh: DataLoader(ds, batch_size=cfg["batch_size"], shuffle=sh)
+
+    if mode == "infer":
+        return make_loader(_wrap(tr_ds), False), None, None, tok_tgt
+   
     return make_loader(_wrap(tr_ds), True), make_loader(_wrap(va_ds), False), make_loader(_wrap(te_ds), False), tok_tgt
 
 
@@ -251,15 +269,29 @@ def _s3_client():
     except botocore.exceptions.BotoCoreError:
         return None
 
-def _upload(local: Path, bucket: str, key: str, s3) -> bool:
+def _upload_and_unlink(local: Path, bucket: str, key: str, s3, *, gzip_json: bool=False) -> bool:
+    """
+    Uploads `local` to s3://bucket/key and unlinks local on success.
+    If gzip_json=True, sets JSON + gzip headers.
+    """
     if s3 is None or not local.exists():
         return False
+    extra = {}
+    if gzip_json:
+        extra["ExtraArgs"] = {"ContentType": "application/json", "ContentEncoding": "gzip"}
     try:
-        s3.upload_file(str(local), bucket, key)
-        print(f"[S3] {local.name} → s3://{bucket}/{key}")
+        if extra:
+            s3.upload_file(str(local), bucket, key, **extra)
+        else:
+            s3.upload_file(str(local), bucket, key)
+        print(f"[S3] {local} → s3://{bucket}/{key}")
+        try:
+            local.unlink()
+        except Exception:
+            pass
         return True
     except botocore.exceptions.BotoCoreError as e:
-        print(f"[S3‑ERR] {e}")
+        print(f"[S3-ERR] {e}")
         return False
 
 # ─────────────────── pretty-printer for metric blocks ───────────────────
@@ -422,12 +454,13 @@ def train_model(cfg: Dict[str, Any]):
         "train_micro_batch_size_per_gpu": cfg["batch_size"],
         "zero_allow_untested_optimizer": True,
         "gradient_accumulation_steps": 2,
+        "gradient_clipping": 1.0,
         "optimizer": {
             "type": "Lamb",
             "params": {"lr": cfg["lr"], "eps": cfg["eps"], "weight_decay": cfg["weight_decay"]},
         },
         "zero_optimization": {"stage": 1},
-        "fp16": {"enabled": True},
+        "fp16": {"enabled": False},
         "lr_scheduler": {
             "type": "WarmupDecayLR",
             "params": {
@@ -463,14 +496,17 @@ def train_model(cfg: Dict[str, Any]):
             pos = torch.arange(cfg["lp_rate"] - 1, cfg["seq_len_lp"], cfg["lp_rate"], device=device)
             logits = engine(x)[:, pos, :]
             tgt_ = tgt.clone()
-            # tgt_[transition_mask(tgt)] = pad_id
+
+            # Skip batches with no labels (optional; FocalLoss is already safe)
+            if not (tgt_ != pad_id).any():
+                continue
+            
             loss = loss_fn(logits, tgt_)
 
             engine.zero_grad()
             engine.backward(loss)
             engine.step()
             running += loss.item()
-        # print(f"Train loss {running / len(train_dl):.4f}")
 
         # ---- validation ----------------------------------------------
         v_loss,v_ppl,v_all,v_stop,v_after,v_tr = evaluate(val_dl, engine, device, loss_fn, pad_id, tok_tgt, cfg["lp_rate"])
@@ -515,8 +551,11 @@ def train_model(cfg: Dict[str, Any]):
             torch.save(ckpt, ckpt_path)
             
             json_path.write_text(json.dumps(_json_safe(best_val_metrics), indent=2))
-            # _upload(json_path, bucket, js_key, s3)
-            # _upload(ckpt_path, bucket, ck_key, s3)
+
+            # upload & unlink
+            _upload_and_unlink(json_path, bucket, js_key, s3)
+            _upload_and_unlink(ckpt_path, bucket, ck_key, s3)
+
         else:
             patience += 1
             if patience >= cfg["patience"]:
@@ -535,6 +574,26 @@ def train_model(cfg: Dict[str, Any]):
                       ("after_STOP",t_after),("transition",t_tr)):
             print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
                   f"AUPRC={d['auprc']:.4f}")
+
+
+    # ------------------ inference on full 30 campaigns ------------------
+    inf_dl, _, _, _ = build_dataloaders({**cfg, "mode": "infer"})
+
+    # Write to a gzipped temp file in /tmp to keep root disk small
+    tmp_pred = Path("/tmp") / f"{uid}_predictions.jsonl.gz"
+
+    with gzip.open(tmp_pred, "wt", encoding="utf-8") as fp, torch.no_grad():
+        for batch in tqdm(inf_dl, desc="Infer 30-campaign set"):
+            x   = batch["LTO_PreviousDecision"].to(device)
+            uids = batch["uid"]  # list[str] length B
+            logits = engine(x)[:, cfg["lp_rate"]-1::cfg["lp_rate"], :]
+            probs  = torch.softmax(logits, -1).cpu().numpy()   # (B, N, 60)
+            for u, p in zip(uids, probs):
+                fp.write(json.dumps({"uid": u, "probs": p.tolist()}) + "\n")
+
+    # Upload gzipped predictions and delete local temp
+    pred_s3_key = f"CV/predictions/{tmp_pred.name}"
+    _upload_and_unlink(tmp_pred, bucket, pred_s3_key, s3, gzip_json=True)
 
     metadata = {
         "best_checkpoint_path": ckpt_path.name,
@@ -558,267 +617,29 @@ def train_model(cfg: Dict[str, Any]):
         "test_transition_auprc"        : t_tr["auprc"],
         "test_transition_rev_mae"      : t_tr["rev_mae"],
     }
-    json_path.write_text(json.dumps(_json_safe(metadata), indent=2))
-    print(f"[INFO] Metrics written → {json_path}")    
 
-    _upload(ckpt_path, bucket, ck_key, s3)
-    _upload(json_path, bucket, js_key, s3)
+    metadata_path = metrics_dir / f"LP_ProductGPT_{uid}_final.json"
+    metadata_path.write_text(json.dumps(_json_safe(metadata), indent=2))
+    _upload_and_unlink(metadata_path, bucket, f"LP_ProductGPT/performer/FeatureBased/metrics/{metadata_path.name}", s3)
 
     ckpt_path.unlink(missing_ok=True)
     json_path.unlink(missing_ok=True)
 
-    # if _upload(ckpt_path, bucket,
-    #            f"FullProductGPT/performer/FeatureBased/checkpoints/{ckpt_path.name}", s3):
-    #     ckpt_path.unlink(missing_ok=True)
-    
-    # if _upload(json_path, bucket,
-    #            f"FullProductGPT/performer/FeatureBased/metrics/{json_path.name}", s3):
-    #     json_path.unlink(missing_ok=True)
-
-    # return {"uid": uid, "val_loss": best}
-    return {"uid": uid, "val_loss": best_val_loss, "best_checkpoint_path": str(ckpt_path)}
-
+    # Return correct S3 object names
+    return {
+        "uid": uid,
+        "fold_id": cfg["fold_id"],
+        "val_loss": best_val_loss,
+        "val_f1":  best_val_metrics["val_all_f1_score"],
+        "val_auprc": best_val_metrics["val_all_auprc"],
+        "test_f1": t_all["f1"],
+        "test_auprc": t_all["auprc"],
+        "ckpt": ck_key.split("/")[-1],                   # name in checkpoints/
+        "preds": f"{uid}_predictions.jsonl.gz",          # uploaded filename in CV/predictions/
+    }
 
 # ══════════════════════════════ 11. CLI ═══════════════════════════════
 if __name__ == "__main__":
     cfg = get_config()
     cfg["seq_len_lp"] = cfg["lp_rate"] * cfg["seq_len_tgt"]
     train_model(cfg)
-
-
-    # best_val_loss = None
-    # best_checkpoint_path = None
-    # epochs_no_improve = 0
-
-    # for epoch in range(initial_epoch, config['num_epochs']):
-    #     model_engine.train()
-    #     torch.cuda.empty_cache()
-
-    #     cumm_ce, cumm_ctr = 0., 0.
-        
-    #     batch_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch:02d}")
-    #     # total_loss = 0.0
-
-    #     for batch in batch_iterator:
-    #         decoder_input = batch['aggregate_input'].to(device)
-    #         label         = batch['label'].to(device)
-
-    #         model_engine.zero_grad()
-    #         logits, h = model_engine(decoder_input, return_hidden = True)  # (B, seq_len, vocab_size)
-
-    #         B, T, V = logits.shape
-    #         decision_positions = torch.arange(config['ai_rate'] - 1, T, step=config['ai_rate'], device=logits.device)  # shape: (N,)
-    #         decision_logits = logits[:, decision_positions, :]  # shape: (B, N, V)
-            
-    #         loss_ce = loss_fn(
-    #             decision_logits,  # predict next token
-    #             label
-    #         )
-
-    #         # ── contrastive regulariser on *all* tokens ───────────────────────
-    #         #   every token in `inp` is guaranteed to be a product‑ID (13‑56, 59)
-    #         flat_h   = h.reshape(-1, h.size(-1))                # (B*T, D_model)
-    #         flat_ids = decoder_input.reshape(-1)                          # (B*T,)
-
-    #         z_mean, uniq_id = unique_by_id(flat_h, flat_ids)
-    #         z_proj = F.normalize(model_engine.module.proj_head(z_mean), dim=-1)
-    #         loss_ctr    = nt_xent(z_proj, uniq_id)                  
-
-    #         loss = loss_ce + lambda_ctr * loss_ctr
-
-    #         model_engine.backward(loss)
-    #         model_engine.step()
-
-    #         cumm_ce  += loss_ce.item()
-    #         cumm_ctr += loss_ctr.item()
-
-    #         # total_loss += loss.item()
-    #         global_step += 1
-
-    #     loss = loss / len(train_dataloader)
-    #     current_lr = model_engine.optimizer.param_groups[0]["lr"]
-    #     print(f"\nEpoch {epoch}: LR={current_lr:.6f}  Train Cross-Entropy Loss={cumm_ce:.4f}  Contrastive Loss={cumm_ctr:.4f}  Train Loss={loss:.4f}")
-
-    #     # Evaluate
-    #     val_loss, val_conf_mat, val_ppl, val_hit_rate, val_f1_score, val_auprc = evaluate(val_dataloader, model_engine, device, loss_fn, config['ai_rate'])
-    #     print(f"Epoch {epoch} Val Loss={val_loss:.4f}  \nVal PPL={val_ppl:.4f} \nVal Hit Rate={val_hit_rate:.4f} \nVal F1 Score={val_f1_score:.4f} \nVal Area Under Precision-Recall Curve={val_auprc:.4f}")
-    #     print("Val Confusion Matrix:\n", val_conf_mat)
-
-    #     # Early stopping or checkpoint
-    #     if best_val_loss is None or val_loss < best_val_loss:
-    #         best_val_loss = val_loss
-    #         epochs_no_improve = 0
-    #         # best_checkpoint_path = f"best_checkpoint_epoch_{epoch}.pt"
-            
-    #         best_checkpoint_path = get_weights_file_path(config, "best")
-    #         torch.save({
-    #             'epoch': epoch,
-    #             'model_state_dict': model_engine.state_dict(),
-    #             'optimizer_state_dict': model_engine.optimizer.state_dict(),
-    #             'global_step': global_step
-    #         }, best_checkpoint_path)
-    #         print(f"  [*] New best val_loss={val_loss:.4f}, saved => {best_checkpoint_path}")
-    #     else:
-    #         epochs_no_improve += 1
-    #         if epochs_no_improve >= config['patience']:
-    #             print("Early stopping!")
-    #             break
-
-    # # Test evaluation
-    # if best_checkpoint_path:
-    #     print(f"\nBest checkpoint: {best_checkpoint_path}")
-    #     state = torch.load(best_checkpoint_path, weights_only=False)
-    #     model_engine.load_state_dict(state['model_state_dict'])
-
-    # test_loss, test_conf_mat, test_ppl, test_hit_rate, test_f1_score, test_auprc = evaluate(test_dataloader, model_engine, device, loss_fn, config['ai_rate'])
-    # print(f"** Test Loss={test_loss:.4f} \nTest PPL={test_ppl:.4f} \nTest Hit Rate={test_hit_rate:.4f} \nTest F1 Score={test_f1_score:.4f} \nTest Area Under Precision-Recall Curve={test_auprc:.4f}")
-    # print("Test Confusion Matrix:\n", test_conf_mat)
-
-    # json_out_path = Path(best_checkpoint_path).with_suffix(".json")
-    # metadata = {
-    #     "best_checkpoint_path": best_checkpoint_path,
-    #     "val_loss": val_loss,
-    #     "val_ppl": val_ppl,
-    #     "val_confusion_matrix": val_conf_mat.tolist() if val_conf_mat is not None else None,
-    #     "val_hit_rate": val_hit_rate,
-    #     "val_f1_score": val_f1_score,
-    #     "val_auprc": val_auprc,
-    #     "test_loss": test_loss,
-    #     "test_ppl": test_ppl,
-    #     "test_confusion_matrix": test_conf_mat.tolist() if test_conf_mat is not None else None,
-    #     "test_hit_rate": test_hit_rate,
-    #     "test_f1_score": test_f1_score,
-    #     "test_auprc": test_auprc
-    # }
-    # with open(json_out_path, 'w') as f:
-    #     json.dump(metadata, f, indent=2)
-
-    # return {
-    #     "best_checkpoint_path": best_checkpoint_path,
-    #     "val_loss": val_loss,
-    #     "val_ppl": val_ppl,
-    #     "val_confusion_matrix": val_conf_mat.tolist() if val_conf_mat is not None else None,
-    #     "val_hit_rate": val_hit_rate,
-    #     "val_f1_score": val_f1_score,
-    #     "val_auprc": val_auprc,
-    #     "test_loss": test_loss,
-    #     "test_ppl": test_ppl,
-    #     "test_confusion_matrix": test_conf_mat.tolist() if test_conf_mat is not None else None,
-    #     "test_hit_rate": test_hit_rate,
-    #     "test_f1_score": test_f1_score,
-    #     "test_auprc": test_auprc
-    # }
-
-##############################################################################
-# The evaluate function, fixed
-##############################################################################
-# def evaluate(dataloader, model_engine, device, loss_fn, stepsize):
-#     total_loss = 0.0
-#     total_ppl  = 0.0
-
-#     all_preds      = []  # for confusion matrix & F1
-#     all_labels     = []  # for confusion matrix & F1
-#     all_probs      = []  # for AUPRC
-#     valid_labels   = []  # same as all_labels, but used for AUPRC
-
-#     model_engine.eval()
-    
-#     if len(dataloader) == 0:
-#         # Return 4 values so the caller can unpack
-#         return float('nan'), None, float('nan'), float('nan')
-
-#     # For ignoring special tokens in the *labels*
-#     tokenizer_tgt = build_tokenizer_tgt()
-#     pad_id = tokenizer_tgt.token_to_id("[PAD]")
-#     sos_id = tokenizer_tgt.token_to_id("[SOS]")
-#     unk_id = tokenizer_tgt.token_to_id("[UNK]")
-#     eos_id = tokenizer_tgt.token_to_id("[EOS]")
-#     # special_tokens = {pad_id, sos_id, unk_id, eos_id}
-#     special_tokens = {pad_id, sos_id, unk_id, eos_id, EOS_PROD_ID, SOS_PROD_ID}
-
-#     with torch.no_grad():
-#         for batch in dataloader:
-#             dec_inp = batch['aggregate_input'].to(device)
-#             label   = batch['label'].to(device)
-#             logits  = model_engine(dec_inp)
-
-#             # with torch.no_grad():
-#             #     class9_logits = logits[..., 9]  # (B, T)
-#             #     print(f"Avg logit for class 9: {class9_logits.mean().item():.4f}")
-
-#             # counts = (label == 9).sum()
-#             # print("Class 9 count at decision positions:", counts.item())
-
-#             # Gather logits at decision positions (e.g., first token of every 15-token block)
-#             decision_positions = torch.arange(stepsize - 1, logits.size(1), step=stepsize, device=logits.device)
-#             decision_logits = logits[:, decision_positions, :]  # shape: (B, N, vocab_size)
-
-#             # SHIFT for loss
-#             loss = loss_fn(decision_logits, label)
-#             total_loss += loss.item()
-
-#             # Perplexity
-#             ppl = calculate_perplexity(decision_logits, label, pad_token=pad_id)
-#             total_ppl += ppl
-
-#             # For metrics: get probabilities and predictions
-#             # decision_probs shape => (B, N, vocab_size)
-#             decision_probs = F.softmax(decision_logits, dim=-1)  # per-class probabilities
-
-#             # Flatten over (B*N)
-#             B, N, V = decision_probs.shape
-#             probs_2d  = decision_probs.view(-1, V).cpu().numpy()  # shape (B*N, V)
-#             preds_2d  = probs_2d.argmax(axis=-1)                  # argmax for confusion matrix
-#             labels_1d = label.view(-1).cpu().numpy()              # shape (B*N,)
-
-#             # SHIFT for predictions
-#             # preds  = torch.argmax(decision_logits, dim=-1)  # (B, T-1)
-#             # labels_2D = label[:, 1:]                             # (B, T-1)
-
-#             # Flatten to 1D
-#             # preds_1D  = preds.cpu().numpy().ravel()
-#             # labels_1D = label.cpu().numpy().ravel()
-
-#             # Filter out special tokens from labels
-#             valid_mask = ~np.isin(labels_1d, list(special_tokens))
-#             preds_2d   = preds_2d[valid_mask]
-#             labels_1d  = labels_1d[valid_mask]
-#             probs_2d   = probs_2d[valid_mask, :]   # keep the same positions
-
-#             # Append
-#             all_preds.append(preds_2d)
-#             all_labels.append(labels_1d)
-#             all_probs.append(probs_2d)
-#             valid_labels.append(labels_1d)
-
-#     # Merge all into single 1D arrays
-#     all_preds  = np.concatenate(all_preds)   # shape (N_total,)
-#     all_labels = np.concatenate(all_labels)  # shape (N_total,)
-#     all_probs  = np.concatenate(all_probs, axis=0)   # shape (N_total, vocab_size)
-#     valid_labels = np.concatenate(valid_labels)
-
-#     avg_loss = total_loss / len(dataloader)
-#     avg_ppl  = total_ppl  / len(dataloader)
-
-#     # Now we can do confusion_matrix and accuracy
-#     # unique_labels = np.unique(all_labels)
-#     decision_ids = np.arange(1, 10)   
-#     # conf_mat = confusion_matrix(all_labels, all_preds, labels=unique_labels)
-#     conf_mat = confusion_matrix(all_labels, all_preds, labels=decision_ids)
-#     hit_rate = accuracy_score(all_labels, all_preds)
-#     macro_f1 = f1_score(all_labels, all_preds, average='macro')
-#     # auprc = average_precision_score(all_labels, all_preds, average='macro')
-
-#     classes_for_bin = np.arange(1, 10)
-#     y_true_bin = label_binarize(valid_labels, classes=classes_for_bin)
-#     probs_for_auprc = all_probs[:, 1:10]  # keep columns 1..9
-#     auprc = average_precision_score(y_true_bin, probs_for_auprc, average='macro')
-
-#     label_mapping = {0: "[PAD]", 1: "1", 2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9"}
-#     readable_labels = [label_mapping.get(i, str(i)) for i in decision_ids]
-#     print(f"Label IDs: {decision_ids}")
-#     print(f"Label meanings: {readable_labels}")
-#     print(f"Unique values in predictions: {np.unique(all_preds, return_counts=True)}")
-#     print(f"Unique values in labels: {np.unique(all_labels, return_counts=True)}")
-
-#     return avg_loss, conf_mat, avg_ppl, hit_rate, macro_f1, auprc
