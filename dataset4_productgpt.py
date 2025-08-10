@@ -63,6 +63,7 @@ def load_json_dataset(path: str | Path,
         data = [row for row in data if row["uid"] in keep_uids]
 
     return data
+
 class TransformerDataset(torch.utils.data.Dataset):
     def __init__(self,
                  subset,
