@@ -42,7 +42,7 @@ assert len(uids_test) > 0, "No test UIDs for the requested fold."
 assert len(uids_trainval) > 0, "No train/val UIDs for the requested fold."
 
 # Hyper‑parameter grids
-nb_features_values = [32, 64]
+nb_features_values = [32]
 d_model_values     = [128]
 d_ff_values        = [128]
 N_values           = [6, 8]
