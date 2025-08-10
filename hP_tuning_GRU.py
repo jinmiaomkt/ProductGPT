@@ -23,9 +23,9 @@ from torch.utils.data import DataLoader, Dataset, random_split
 from tqdm import tqdm
 
 # ═════════ 0.  Hyper-params ═════════════
-HIDDEN_SIZES = [32, 64, 128]
-LR_VALUES    = [1e-3, 1e-4, 1e-5]
-BATCH_SIZES  = [2, 4]
+HIDDEN_SIZES = [128, 256, 512, 1024]
+LR_VALUES    = [1e-3]
+BATCH_SIZES  = [2, 4, 8, 16]
 HP_GRID      = list(itertools.product(HIDDEN_SIZES, LR_VALUES, BATCH_SIZES))
 
 INPUT_DIM      = 15          # feature dim per timestep
