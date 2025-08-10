@@ -207,7 +207,6 @@ def build_dataloaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, Data
 
     if mode == "infer":
         raw = load_json_dataset(cfg["test_filepath"], keep_uids=None)
-        val_dl = test_dl = None                      # not used
     else:
         keep = None
         if mode == "test":
@@ -262,24 +261,6 @@ def _json_safe(o: Any):
     if isinstance(o, (list, tuple)): return [_json_safe(v) for v in o]
     return o
 
-# def _s3_client():
-#     try:
-#         return boto3.client("s3")
-#     except botocore.exceptions.BotoCoreError:
-#         return None
-
-# def _upload(local: Path, bucket: str, key: str, s3) -> bool:
-#     if s3 is None or not local.exists():
-#         return False
-#     try:
-#         s3.upload_file(str(local), bucket, key)
-#         print(f"[S3] {local.name} → s3://{bucket}/{key}")
-#         return True
-#     except botocore.exceptions.BotoCoreError as e:
-#         print(f"[S3‑ERR] {e}")
-#         return False
-
-# ───────────────────────── S3 helpers ─────────────────────────
 def _s3_client():
     try:
         return boto3.client("s3")
@@ -426,11 +407,6 @@ def train_model(cfg: Dict[str, Any]):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    # --- artefact paths ------------------------------------------------
-    # uid = (
-    #     f"featurebased_performerfeatures{cfg['nb_features']}_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_"
-    #     f"N{cfg['N']}_heads{cfg['num_heads']}_lr{cfg['lr']}_w{cfg['weight']}"
-    # )
     uid = (
         f"featurebased_performerfeatures{cfg['nb_features']}"
         f"_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}"
@@ -518,8 +494,6 @@ def train_model(cfg: Dict[str, Any]):
             pos = torch.arange(cfg["ai_rate"] - 1, cfg["seq_len_ai"], cfg["ai_rate"], device=device)
             logits = engine(x)[:, pos, :]
             tgt_ = tgt.clone()
-            
-            # tgt_[transition_mask(tgt)] = pad_id
 
             # Skip batches with no labels (optional; FocalLoss is already safe)
             if not (tgt_ != pad_id).any():
@@ -532,8 +506,6 @@ def train_model(cfg: Dict[str, Any]):
             engine.step()
             running += loss.item()
         
-        # print(f"Train loss {running / len(train_dl):.4f}")
-
         # ---- validation ----------------------------------------------
         v_loss,v_ppl,v_all,v_stop,v_after,v_tr = evaluate(val_dl, engine, device, loss_fn, pad_id, tok_tgt, cfg["ai_rate"])
         
