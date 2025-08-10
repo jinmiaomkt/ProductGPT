@@ -20,7 +20,7 @@ import pandas as pd
 # ════════════════════════════════════════════════════════════════════════
 ROOT = Path(
     "/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/"
-    "TuningResult/LSTM/new"
+    "TuningResult/GRU/new"
 )
 
 # ════════════════════════════════════════════════════════════════════════
