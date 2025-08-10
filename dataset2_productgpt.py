@@ -2,17 +2,58 @@
 # Turns every decision in the raw JSON into *one* training sample whose
 # aggregate_input is the N tokens that precede that decision.
 # ------------------------------------------------------------------------
-import json
+import json, itertools
 from typing import List, Dict
+from pathlib import Path
 
 import torch
 from torch.utils.data import Dataset
 from tokenizers import Tokenizer
 
 # ───────────────────────── I/O helper ────────────────────────────────────
-def load_json_dataset(filepath: str) -> List[Dict]:
-    with open(filepath, "r") as fp:
-        return json.load(fp)
+# def load_json_dataset(filepath: str) -> List[Dict]:
+#     with open(filepath, "r") as fp:
+#         return json.load(fp)
+
+def load_json_dataset(path: str | Path,
+                      keep_uids: set[str] | None = None):
+    """
+    Return exploded list of records; optionally keep only rows whose UID
+    string is in keep_uids.
+    """
+    raw = json.loads(Path(path).read_text())
+
+    # your original explode_record(...) helper here ------------
+    # def explode_record(rec):
+    #     uid = str(rec["uid"][0] if isinstance(rec["uid"], list) else rec["uid"])
+    #     # …
+    #     # yield {"uid": uid, ...}
+
+    def explode_record(rec):
+        """Take one session dict and yield  N  flattened rows."""
+        uid  = str(rec["uid"][0] if isinstance(rec["uid"], list) else rec["uid"])
+        agg  = rec["LTO_PreviousDecision"]   # list[str]  length N (your earlier format)
+        decs = rec["Decision"]         # list[int]  length N
+        for t,(inp,lab) in enumerate(zip(agg, decs)):
+            yield {
+                "uid": uid,
+                "t": t,
+                "LTO_PreviousDecision": inp,
+                "Decision": lab,
+            }
+
+    # build the *full* list first
+    data = list(itertools.chain.from_iterable(
+        explode_record(r) for r in (raw if isinstance(raw, list) else
+                                    [{k: raw[k][i] for k in raw} 
+                                     for i in range(len(raw["uid"]))])
+    ))
+
+    # optional filtering
+    if keep_uids is not None:
+        data = [row for row in data if row["uid"] in keep_uids]
+
+    return data
 
 class TransformerDataset(torch.utils.data.Dataset):
     def __init__(self,
@@ -38,8 +79,8 @@ class TransformerDataset(torch.utils.data.Dataset):
         rec = self.data[idx]
 
         # ------------- INPUT -----------------
-        src_txt = " ".join(map(str, rec["AggregateInput"])) \
-                if isinstance(rec["AggregateInput"], (list, tuple)) else str(rec["AggregateInput"])
+        src_txt = " ".join(map(str, rec["LTO_PreviousDecision"])) \
+                if isinstance(rec["LTO_PreviousDecision"], (list, tuple)) else str(rec["LTO_PreviousDecision"])
         lp_ids  = self._pad(self.tok_lp.encode(src_txt).ids,self.seq_lp)
 
         # ------------- TARGET ----------------
