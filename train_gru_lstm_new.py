@@ -44,49 +44,27 @@ def set_seed(seed: int = 42):
 NUM_CLASSES = 10        # 0 = PAD, 1-9 = real classes
 
 class SequenceDataset(Dataset):
-    """
-    Expects each row like:
-      {
-        "AggregateInput": ["<space-separated ints or 'NA'>"],
-        "Decision":       ["<space-separated ints or 'NA'>"],
-        "uid": "abc"  # or "UID"
-      }
-    If no uid in rows, filtering by UID is skipped.
-    """
     def __init__(self, rows: List[Dict], input_dim: int,
                  allowed_uids: Optional[set] = None):
         self.x, self.y = [], []
 
-        # Filter by UID if possible
+        def _norm_uid_val(v):
+            # rows may store uid as ["abc"] or "abc" or numeric
+            if isinstance(v, (list, tuple)):
+                v = v[0] if len(v) else ""
+            return str(v)
+
+        # Detect whether rows have a uid/UID key at all
         contains_uid = any(("uid" in r) or ("UID" in r) for r in rows)
+
+        # If we were given a filter, normalize both sides to strings
         if allowed_uids is not None and contains_uid:
-            def _uid(r): return r.get("uid", r.get("UID"))
-            rows = [r for r in rows if _uid(r) in allowed_uids]
+            norm_allowed = { _norm_uid_val(u) for u in allowed_uids }
+            def _uid(r):
+                return _norm_uid_val(r.get("uid", r.get("UID")))
+            rows = [r for r in rows if _uid(r) in norm_allowed]
             if not rows:
-                print("[WARN] No rows kept after UID filtering; "
-                      "falling back to empty dataset.")
-
-        for row in rows:
-            flat = [0 if t == "NA" else int(t)
-                    for t in row["AggregateInput"][0].split()]
-            T = len(flat) // input_dim
-            if T <= 0:
-                continue
-            x = torch.tensor(flat, dtype=torch.float32).view(T, input_dim)
-
-            dec = [0 if t == "NA" else int(t)
-                   for t in row["Decision"][0].split()]
-            valid = min(T, len(dec))
-            if valid <= 0:
-                continue
-            y = torch.tensor(dec[:valid], dtype=torch.long)
-
-            self.x.append(x[:valid])
-            self.y.append(y)
-
-        # Integrity check
-        for xi, yi in zip(self.x, self.y):
-            assert len(xi) == len(yi), "Input/label length mismatch."
+                print("[WARN] No rows kept after UID filtering; falling back to empty dataset.")
 
     def __len__(self):
         return len(self.x)
@@ -211,6 +189,18 @@ def train_one_gru_fold(*,
     # Split train/val using uids_trainval if possible; otherwise random row split
     contains_uid = any(("uid" in r) or ("UID" in r) for r in rows)
     train_ds = val_ds = test_ds = None
+
+    # ... after: uids_trainval, uids_test are loaded lists ...
+    def _norm_uid_list(L):
+        out = []
+        for v in (L or []):
+            if isinstance(v, (list, tuple)):
+                v = v[0] if len(v) else ""
+            out.append(str(v))
+        return out
+
+    uids_trainval = _norm_uid_list(uids_trainval)
+    uids_test     = _norm_uid_list(uids_test)
 
     if uids_trainval and contains_uid:
         u_trainval = set(uids_trainval)
@@ -388,3 +378,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+#
