@@ -9,9 +9,19 @@ python3 train_gru_lstm_new.py \
   --data /home/ec2-user/data/clean_list_int_wide4_simple6_FeatureBasedTrain.json \
   --ckpt /tmp/ckpt_fold2.pt --out /tmp/out_fold2.txt \
   --hidden_size 128 --input_dim 15 --batch_size 4 --lr 1e-4 \
-  --uids_trainval '["uid_a","uid_b", ...]' \
-  --uids_test     '["uid_x","uid_y", ...]'
+  --uids_trainval '["uid_a","uid_b"]' \
+  --uids_test     '["uid_x","uid_y"]'
+# or (recommended for large UID lists):
+python3 train_gru_lstm_new.py \
+  --model gru --fold 2 --bucket productgptbucket --prefix CV_GRU \
+  --data /home/ec2-user/data/clean_list_int_wide4_simple6_FeatureBasedTrain.json \
+  --ckpt /tmp/ckpt_fold2.pt --out /tmp/out_fold2.txt \
+  --hidden_size 128 --input_dim 15 --batch_size 4 --lr 1e-4 \
+  --uids_trainval_file /tmp/trainval_uids.json \
+  --uids_test_file     /tmp/test_uids.json
 """
+from __future__ import annotations
+
 import argparse, json, math, os, random, pathlib
 from typing import List, Dict, Optional, Tuple
 
@@ -60,7 +70,7 @@ class SequenceDataset(Dataset):
             flat = [0 if t == "NA" else int(t)
                     for t in row["AggregateInput"][0].split()]
             T = len(flat) // input_dim
-            if T <= 0: 
+            if T <= 0:
                 continue
             x = torch.tensor(flat, dtype=torch.float32).view(T, input_dim)
 
@@ -190,7 +200,7 @@ def train_one_gru_fold(*,
                        class_9_weight: float = 5.0,
                        seed: int = 33,
                        device: Optional[torch.device] = None
-                       ) -> Tuple[Dict, Dict]:
+                       ) -> Tuple[Dict, Dict, nn.Module]:
     set_seed(seed)
     dev = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -285,7 +295,7 @@ def train_one_gru_fold(*,
         "val_loss": best_snapshot["val"]["loss"] if best_snapshot else float("nan"),
         "val_ppl":  best_snapshot["val"]["ppl"] if best_snapshot else float("nan"),
         **{f"val_{k}_{m}": best_snapshot["val"]["metrics"][k][m]
-           for k in (best_snapshot["val"]["metrics"] if best_snapshot else {"all":{}}) 
+           for k in (best_snapshot["val"]["metrics"] if best_snapshot else {"all": {}})
            for m in (best_snapshot["val"]["metrics"][k] if best_snapshot else {})}
     }
     test_metrics = {
@@ -308,12 +318,37 @@ def main():
     ap.add_argument("--input_dim",   required=True, type=int)
     ap.add_argument("--batch_size",  required=True, type=int)
     ap.add_argument("--lr",          required=True, type=float)
-    ap.add_argument("--uids_trainval", required=True)
-    ap.add_argument("--uids_test",     required=True)
+
+    # Old inline JSON args (now optional)
+    ap.add_argument("--uids_trainval", type=str, default=None,
+                    help="JSON string of train/val UIDs")
+    ap.add_argument("--uids_test",     type=str, default=None,
+                    help="JSON string of test UIDs")
+
+    # NEW: file-based args (preferred when provided)
+    ap.add_argument("--uids_trainval_file", type=str, default=None,
+                    help="Path to JSON file of train/val UIDs")
+    ap.add_argument("--uids_test_file",     type=str, default=None,
+                    help="Path to JSON file of test UIDs")
+
     args = ap.parse_args()
 
-    uids_trainval = json.loads(args.uids_trainval) if args.uids_trainval else None
-    uids_test     = json.loads(args.uids_test)     if args.uids_test     else None
+    # Resolve UID lists (prefer *_file if provided)
+    if args.uids_trainval_file:
+        with open(args.uids_trainval_file) as f:
+            uids_trainval = json.load(f)
+    else:
+        uids_trainval = json.loads(args.uids_trainval) if args.uids_trainval else None
+
+    if args.uids_test_file:
+        with open(args.uids_test_file) as f:
+            uids_test = json.load(f)
+    else:
+        uids_test = json.loads(args.uids_test) if args.uids_test else None
+
+    # Basic checks
+    if (uids_trainval is None) or (uids_test is None):
+        raise SystemExit("Provide uids via --uids_* or --uids_*_file")
 
     val, test, model = train_one_gru_fold(
         data_path=args.data,
