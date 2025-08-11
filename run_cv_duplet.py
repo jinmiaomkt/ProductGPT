@@ -90,7 +90,7 @@ def _build_cfg(fold_id: int, spec: dict) -> dict:
         "fp16": True,                 # if your trainer reads this
         "lp_rate": 5,                # keep seq_len_ai in check
     })
-    cfg["seq_len_ai"] = cfg["lp_rate"] * cfg["seq_len_tgt"]
+    cfg["seq_len_lp"] = cfg["lp_rate"] * cfg["seq_len_tgt"]
 
     # lock best hyperparams
     cfg.update(BEST_HP)
