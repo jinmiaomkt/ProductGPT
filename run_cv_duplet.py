@@ -6,6 +6,7 @@ from pathlib import Path
 import boto3
 import pandas as pd
 import torch
+import random, os
 
 from config4 import get_config
 from train4_decoderonly_performer_feature_aws import train_model
@@ -107,6 +108,11 @@ def _build_cfg(fold_id: int, spec: dict) -> dict:
 
 def _train_one_fold(fold_id: int, spec: dict) -> dict:
     cfg = _build_cfg(fold_id, spec)
+
+    # Pick a free port in a safe range to avoid collisions
+    os.environ["MASTER_ADDR"] = "127.0.0.1"
+    os.environ["MASTER_PORT"] = str(random.randint(20000, 29999))
+
     results = train_model(cfg)   # your trainer returns dict with best_checkpoint_path, etc.
 
     # Metrics JSON lives next to the checkpoint (same basename, .json)
