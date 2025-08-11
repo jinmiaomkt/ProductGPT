@@ -3,20 +3,12 @@
 """
 Train ONE GRU fold and upload metrics JSON to S3.
 
-Usage (example):
+Examples:
 python3 train_gru_lstm_new.py \
   --model gru --fold 2 --bucket productgptbucket --prefix CV_GRU \
   --data /home/ec2-user/data/clean_list_int_wide4_simple6_FeatureBasedTrain.json \
   --ckpt /tmp/ckpt_fold2.pt --out /tmp/out_fold2.txt \
-  --hidden_size 128 --input_dim 15 --batch_size 4 --lr 1e-4 \
-  --uids_trainval '["uid_a","uid_b"]' \
-  --uids_test     '["uid_x","uid_y"]'
-# or (recommended for large UID lists):
-python3 train_gru_lstm_new.py \
-  --model gru --fold 2 --bucket productgptbucket --prefix CV_GRU \
-  --data /home/ec2-user/data/clean_list_int_wide4_simple6_FeatureBasedTrain.json \
-  --ckpt /tmp/ckpt_fold2.pt --out /tmp/out_fold2.txt \
-  --hidden_size 128 --input_dim 15 --batch_size 4 --lr 1e-4 \
+  --hidden_size 128 --input_dim 15 --batch_size 4 --lr 1e-3 \
   --uids_trainval_file /tmp/trainval_uids.json \
   --uids_test_file     /tmp/test_uids.json
 """
@@ -43,28 +35,68 @@ def set_seed(seed: int = 42):
 # ───────── Dataset ───────────────────────────────────────────────────
 NUM_CLASSES = 10        # 0 = PAD, 1-9 = real classes
 
+def _norm_uid_val(v):
+    # rows may store uid as ["abc"] or "abc" or numeric
+    if isinstance(v, (list, tuple)):
+        v = v[0] if len(v) else ""
+    return str(v)
+
 class SequenceDataset(Dataset):
+    """
+    Expects each row like:
+      {
+        "AggregateInput": ["<space-separated ints or 'NA'>"],
+        "Decision":       ["<space-separated ints or 'NA'>"],
+        "uid": "abc"  # or "UID"
+      }
+    If no uid in rows, filtering by UID is skipped.
+    """
     def __init__(self, rows: List[Dict], input_dim: int,
                  allowed_uids: Optional[set] = None):
         self.x, self.y = [], []
-
-        def _norm_uid_val(v):
-            # rows may store uid as ["abc"] or "abc" or numeric
-            if isinstance(v, (list, tuple)):
-                v = v[0] if len(v) else ""
-            return str(v)
 
         # Detect whether rows have a uid/UID key at all
         contains_uid = any(("uid" in r) or ("UID" in r) for r in rows)
 
         # If we were given a filter, normalize both sides to strings
         if allowed_uids is not None and contains_uid:
-            norm_allowed = { _norm_uid_val(u) for u in allowed_uids }
-            def _uid(r):
-                return _norm_uid_val(r.get("uid", r.get("UID")))
-            rows = [r for r in rows if _uid(r) in norm_allowed]
-            if not rows:
-                print("[WARN] No rows kept after UID filtering; falling back to empty dataset.")
+            norm_allowed = {_norm_uid_val(u) for u in allowed_uids}
+            def _uid(r): return _norm_uid_val(r.get("uid", r.get("UID")))
+            filtered = [r for r in rows if _uid(r) in norm_allowed]
+            if not filtered:
+                print("[WARN] No rows kept after UID filtering; dataset will be empty.")
+            rows = filtered
+
+        # Build tensors
+        for row in rows:
+            # Parse inputs
+            try:
+                flat = [0 if t == "NA" else int(t)
+                        for t in row["AggregateInput"][0].split()]
+            except Exception:
+                continue
+            T = len(flat) // input_dim
+            if T <= 0:
+                continue
+            x = torch.tensor(flat, dtype=torch.float32).view(T, input_dim)
+
+            # Parse labels
+            try:
+                dec = [0 if t == "NA" else int(t)
+                       for t in row["Decision"][0].split()]
+            except Exception:
+                continue
+            valid = min(T, len(dec))
+            if valid <= 0:
+                continue
+            y = torch.tensor(dec[:valid], dtype=torch.long)
+
+            self.x.append(x[:valid])
+            self.y.append(y)
+
+        # Integrity check
+        for xi, yi in zip(self.x, self.y):
+            assert len(xi) == len(yi), "Input/label length mismatch."
 
     def __len__(self):
         return len(self.x)
@@ -185,12 +217,7 @@ def train_one_gru_fold(*,
     # Load rows
     rows = json.loads(pathlib.Path(data_path).read_text())
 
-    # Build datasets
-    # Split train/val using uids_trainval if possible; otherwise random row split
-    contains_uid = any(("uid" in r) or ("UID" in r) for r in rows)
-    train_ds = val_ds = test_ds = None
-
-    # ... after: uids_trainval, uids_test are loaded lists ...
+    # Normalize incoming UID lists once
     def _norm_uid_list(L):
         out = []
         for v in (L or []):
@@ -198,53 +225,67 @@ def train_one_gru_fold(*,
                 v = v[0] if len(v) else ""
             out.append(str(v))
         return out
-
     uids_trainval = _norm_uid_list(uids_trainval)
     uids_test     = _norm_uid_list(uids_test)
 
+    # Build datasets
+    contains_uid = any(("uid" in r) or ("UID" in r) for r in rows)
     if uids_trainval and contains_uid:
-        u_trainval = set(uids_trainval)
-        u_test     = set(uids_test or [])
-        # Further split trainval uids into train/val (90/10)
-        u_trainval = list(u_trainval)
+        # Split uids_trainval into train/val (90/10)
+        u_trainval = list(set(uids_trainval))
         u_trainval.sort()
-        rng = random.Random(seed)
-        rng.shuffle(u_trainval)
+        rng = random.Random(seed); rng.shuffle(u_trainval)
         k = max(1, int(0.9 * len(u_trainval)))
-        u_train = set(u_trainval[:k])
-        u_val   = set(u_trainval[k:])
+        u_train = set(u_trainval[:k]); u_val = set(u_trainval[k:])
+        u_test  = set(uids_test or [])
+
         train_ds = SequenceDataset(rows, input_dim, allowed_uids=u_train)
         val_ds   = SequenceDataset(rows, input_dim, allowed_uids=u_val)
         test_ds  = SequenceDataset(rows, input_dim, allowed_uids=u_test)
+
+        # Fallback if any split is empty
+        if len(train_ds) == 0 or len(val_ds) == 0 or len(test_ds) == 0:
+            print("[WARN] One or more splits are empty after UID filtering; using random row split.")
+            full = SequenceDataset(rows, input_dim, allowed_uids=None)
+            n = len(full)
+            if n == 0:
+                raise SystemExit("Dataset empty after parsing.")
+            tr_n, va_n = int(.8*n), int(.1*n)
+            train_ds, val_ds, test_ds = random_split(
+                full, [tr_n, va_n, n-tr_n-va_n],
+                generator=torch.Generator().manual_seed(seed)
+            )
     else:
-        # Fallback: random split rows (80/10/10)
-        print("[WARN] UID split not applied (no UID keys or no lists provided). "
-              "Using random row split.")
+        # No usable UID info → random split
+        print("[WARN] UID split not applied (no UID keys or no lists provided); using random row split.")
         full = SequenceDataset(rows, input_dim, allowed_uids=None)
         n = len(full)
+        if n == 0:
+            raise SystemExit("Dataset empty after parsing.")
         tr_n, va_n = int(.8*n), int(.1*n)
         train_ds, val_ds, test_ds = random_split(
             full, [tr_n, va_n, n-tr_n-va_n],
             generator=torch.Generator().manual_seed(seed)
         )
 
-    # DataLoaders
-    LD = lambda d, sh: DataLoader(d, batch_size, shuffle=sh,
-                                  collate_fn=collate_fn, num_workers=2,
-                                  pin_memory=torch.cuda.is_available())
+    # DataLoaders (guard against accidental empties)
+    def LD(d, sh):
+        if hasattr(d, "__len__") and len(d) == 0:
+            raise SystemExit("A split is empty; cannot create DataLoader.")
+        return DataLoader(d, batch_size, shuffle=sh,
+                          collate_fn=collate_fn, num_workers=2,
+                          pin_memory=torch.cuda.is_available())
     tr_ld, va_ld, te_ld = LD(train_ds, True), LD(val_ds, False), LD(test_ds, False)
 
     # Model / loss / opt
     model = GRUClassifier(input_dim, hidden_size).to(dev)
-    w = torch.ones(NUM_CLASSES, device=dev)
-    w[9] = class_9_weight
+    w = torch.ones(NUM_CLASSES, device=dev); w[9] = class_9_weight
     loss_fn = nn.CrossEntropyLoss(weight=w, ignore_index=0)
     optim   = torch.optim.Adam(model.parameters(), lr=lr)
 
     # Train with early stopping on val loss
     best_loss, best_snapshot = None, None
-    patience = 0
-    PATIENCE_LIMIT = 10
+    patience = 0; PATIENCE_LIMIT = 10
 
     for ep in range(1, epochs+1):
         model.train(); run_loss = 0.0
@@ -253,7 +294,6 @@ def train_one_gru_fold(*,
             logits = model(xb).reshape(-1, NUM_CLASSES)
             labels = yb.reshape(-1)
             loss   = loss_fn(logits, labels)
-
             optim.zero_grad(); loss.backward(); optim.step()
             run_loss += loss.item()
 
@@ -309,17 +349,13 @@ def main():
     ap.add_argument("--batch_size",  required=True, type=int)
     ap.add_argument("--lr",          required=True, type=float)
 
-    # Old inline JSON args (now optional)
-    ap.add_argument("--uids_trainval", type=str, default=None,
-                    help="JSON string of train/val UIDs")
-    ap.add_argument("--uids_test",     type=str, default=None,
-                    help="JSON string of test UIDs")
+    # Inline JSON args (optional)
+    ap.add_argument("--uids_trainval", type=str, default=None)
+    ap.add_argument("--uids_test",     type=str, default=None)
 
-    # NEW: file-based args (preferred when provided)
-    ap.add_argument("--uids_trainval_file", type=str, default=None,
-                    help="Path to JSON file of train/val UIDs")
-    ap.add_argument("--uids_test_file",     type=str, default=None,
-                    help="Path to JSON file of test UIDs")
+    # File-based args (preferred)
+    ap.add_argument("--uids_trainval_file", type=str, default=None)
+    ap.add_argument("--uids_test_file",     type=str, default=None)
 
     args = ap.parse_args()
 
@@ -336,7 +372,6 @@ def main():
     else:
         uids_test = json.loads(args.uids_test) if args.uids_test else None
 
-    # Basic checks
     if (uids_trainval is None) or (uids_test is None):
         raise SystemExit("Provide uids via --uids_* or --uids_*_file")
 
@@ -378,5 +413,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-#
