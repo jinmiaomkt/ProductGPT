@@ -8,8 +8,8 @@ import pandas as pd
 import torch
 import random, os
 
-from config4 import get_config
-from train4_decoderonly_performer_feature_aws import train_model
+from config2 import get_config
+from train2_decoderonly_performer_feature_aws import train_model
 
 S3_BUCKET = "productgptbucket"
 SPEC_URI  = "s3://productgptbucket/CV/folds.json"
@@ -88,9 +88,9 @@ def _build_cfg(fold_id: int, spec: dict) -> dict:
         "num_epochs": 60,
         "patience": 5,
         "fp16": True,                 # if your trainer reads this
-        "ai_rate": 10,                # keep seq_len_ai in check
+        "lp_rate": 5,                # keep seq_len_ai in check
     })
-    cfg["seq_len_ai"] = cfg["ai_rate"] * cfg["seq_len_tgt"]
+    cfg["seq_len_ai"] = cfg["lp_rate"] * cfg["seq_len_tgt"]
 
     # lock best hyperparams
     cfg.update(BEST_HP)
