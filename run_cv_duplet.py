@@ -14,17 +14,17 @@ S3_BUCKET = "productgptbucket"
 SPEC_URI  = "s3://productgptbucket/CV/folds.json"
 
 # Per-fold metrics (JSON) will be saved here
-S3_PERFOLD_PREFIX = "CV/metrics/productgpt_full/"        # e.g., productgpt_full/fold_0.json
+S3_PERFOLD_PREFIX = "CV/metrics/productgpt_duplet/"        
 # Merged CSV of all folds
-S3_MERGED_CSV_KEY = "CV/tables/productgpt_full_cv_metrics.csv"
+S3_MERGED_CSV_KEY = "CV/tables/productgpt_duplet_cv_metrics.csv"
 
 BEST_HP = dict(
-    nb_features=16, 
+    nb_features=32, 
     d_model=128, 
     d_ff=128, 
-    N=6, 
+    N=8, 
     num_heads=4,
-    lr=1e-4, 
+    lr=1e-3, 
     weight=2, 
     gamma=1.0,   # keep gamma if your loss uses it
 )
@@ -87,7 +87,7 @@ def _build_cfg(fold_id: int, spec: dict) -> dict:
         "num_epochs": 60,
         "patience": 5,
         "fp16": True,                 # if your trainer reads this
-        "ai_rate": 15,                # keep seq_len_ai in check
+        "ai_rate": 10,                # keep seq_len_ai in check
     })
     cfg["seq_len_ai"] = cfg["ai_rate"] * cfg["seq_len_tgt"]
 
@@ -99,7 +99,7 @@ def _build_cfg(fold_id: int, spec: dict) -> dict:
         os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
     # make filenames deterministic by including fold
-    uid = (f"FullProductGPT_featurebased_performerfeatures{cfg['nb_features']}"
+    uid = (f"LP_ProductGPT_featurebased_performerfeatures{cfg['nb_features']}"
            f"_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}"
            f"_heads{cfg['num_heads']}_lr{cfg['lr']}_w{cfg['weight']}_fold{fold_id}")
     cfg["model_basename"] = uid
@@ -119,15 +119,12 @@ def _train_one_fold(fold_id: int, spec: dict) -> dict:
 
     # decorate and return (keep minimal to merge later)
     metrics["fold_id"] = fold_id
-    metrics["model"]   = "ProductGPT_Full"
+    metrics["model"]   = "ProductGPT_Duplet"
     metrics["basename"]= cfg["model_basename"]
 
     # upload per-fold metrics json (compact)
     per_fold_key = f"{S3_PERFOLD_PREFIX}fold_{fold_id}.json"
     _upload_json(metrics, S3_BUCKET, per_fold_key)
-
-    # optional: upload ckpt & delete local to save disk (your trainer may already do this)
-    # NOTE: you already handle checkpoint upload elsewhere; skipping here.
 
     # tidy local metrics json if you want
     try: metrics_path.unlink()
