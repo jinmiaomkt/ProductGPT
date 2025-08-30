@@ -173,13 +173,14 @@ loader = DataLoader(
 
 # ───────── Build model ──────────
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# LP_ProductGPT_featurebased_performerfeatures32_dmodel128_ff128_N8_heads4_lr0.001_w2.pt
 model  = build_transformer(
             vocab_size_tgt=cfg["vocab_size_tgt"],
             vocab_size_src=cfg["vocab_size_src"],
-            d_model     = 32,
-            n_layers    = 4,
+            d_model     = 128,
+            n_layers    = 8,
             n_heads     = 4,
-            d_ff        = 32,
+            d_ff        = 128,
             dropout     = 0.0,
             nb_features = 32,
             max_seq_len = 5120,

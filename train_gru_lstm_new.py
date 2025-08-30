@@ -348,6 +348,8 @@ def main():
     ap.add_argument("--input_dim",   required=True, type=int)
     ap.add_argument("--batch_size",  required=True, type=int)
     ap.add_argument("--lr",          required=True, type=float)
+    ap.add_argument("--max_seq_len", type=int, default=None,
+                help="Optional cap on sequence length after padding (e.g., 512 or 1024)")
 
     # Inline JSON args (optional)
     ap.add_argument("--uids_trainval", type=str, default=None)
@@ -382,7 +384,8 @@ def main():
         batch_size=args.batch_size,
         lr=args.lr,
         uids_trainval=uids_trainval,
-        uids_test=uids_test
+        uids_test=uids_test,
+        max_seq_len=args.max_seq_len
     )
 
     # Save checkpoint if requested
