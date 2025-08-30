@@ -382,10 +382,17 @@ def main():
     macro_period_tbl = macro_period_tbl.sort_index(axis=1, level=0)
     macro_period_tbl = macro_period_tbl[['val', 'test']]
 
-    # ---------- Print AUC table to console ----------
-    print("\n=============  BINARY ROC-AUC TABLE  =======================")
-    print(auc_tbl.fillna(" NA"))
-    print("============================================================")
+    # ---------- Print ALL tables to console ----------
+    def _p(title: str, df: pd.DataFrame):
+        print(f"\n=============  {title}  =======================")
+        print(df.fillna(" NA"))
+        print("============================================================")
+
+    _p("BINARY ROC-AUC TABLE", auc_tbl)
+    _p("HIT-RATE (ACCURACY) TABLE", hit_tbl)
+    _p("MACRO-F1 TABLE", f1_tbl)
+    _p("AUPRC TABLE", auprc_tbl)
+    _p("AGGREGATE MACRO METRICS", macro_period_tbl)
 
     # ---------- Save locally & upload to S3 ----------
     out_dir = Path("/tmp/predict_eval_outputs")
