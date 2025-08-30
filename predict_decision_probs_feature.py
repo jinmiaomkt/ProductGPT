@@ -167,11 +167,7 @@ loader = DataLoader(
 # ───────── Build model ──────────
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w2
-# FullProductGPT_featurebased_performerfeatures32_dmodel32_ff32_N6_heads4_lr0.0001_w8.pt
-# FullProductGPT_featurebased_performerfeatures32_dmodel32_ff32_N6_heads4_lr0.0001_w2.pt
-# FullProductGPT_featurebased_performerfeatures16_dmodel32_ff64_N6_heads4_lr0.0001_w2
-# FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w4
+# FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w2_fold0.pt
 model  = build_transformer(
             vocab_size_tgt=cfg["vocab_size_tgt"],
             vocab_size_src=cfg["vocab_size_src"],

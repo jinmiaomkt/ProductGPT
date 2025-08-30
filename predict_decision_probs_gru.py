@@ -71,7 +71,7 @@ args = parser.parse_args()
 
 # ──────────────────────────── 4.  Setup ───────────────────────────────
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+# gru_h128_lr0.001_bs4.pt
 model = GRUClassifier(
     input_dim   = args.input_dim,
     hidden_size = args.hidden_size,

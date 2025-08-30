@@ -16,9 +16,9 @@ import pandas as pd
 # ------------------------------------------------------------------
 # 1.  Folder with your result files
 # ------------------------------------------------------------------
-ROOT = Path('/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/TuningResult/FeatureBasedLP/new/metrics')
+ROOT = Path('/Users/jxm190071/Dropbox/Mac/Desktop/E2 Genshim Impact/TuningResult/FeatureBasedFull')
 
-# ------------------------------------------------------------------
+# --------------------------------------------FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w2_fold0----------------------
 # 2.  Map short tokens → canonical column names (from filename)
 # ------------------------------------------------------------------
 REMAP = {

@@ -78,7 +78,7 @@ def run_single_fold(fold_id: int,
         "--batch_size",  BATCH_SIZE,
         "--lr",          LR_STR,
         "--uids_trainval_file", tr_path,   # <-- pass paths
-        "--uids_test_file",     te_path,   # <--
+        "--uids_test_file",     te_path,   
     ]
     subprocess.check_call(cmd)
 
