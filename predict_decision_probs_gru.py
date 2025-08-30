@@ -14,7 +14,7 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 from tqdm import tqdm
-
+ 
 class PredictDataset(Dataset):
     def __init__(self, json_path: Path, input_dim: int):
         raw = json.loads(json_path.read_text())
