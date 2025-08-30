@@ -1,0 +1,421 @@
+#!/usr/bin/env python3
+"""
+predict_productgpt_and_eval.py
+
+End-to-end:
+  - Run inference for 9-way decision probabilities (every ai_rate steps)
+  - Compute AUC / Hit / F1 / AUPRC by (Task, PeriodGroup, Split)
+  - Print AUC table to console
+  - Save CSV tables (and optional predictions) locally and upload to S3
+
+Usage (example):
+  python predict_productgpt_and_eval.py \
+    --data /path/to/users.ndjson \
+    --ckpt /path/to/checkpoint.pt \
+    --labels '/home/ec2-user/data/clean_list_int_wide4_simple6.json' \
+    --feat-xlsx '/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx' \
+    --s3 's3://your-bucket/experiments/featurebased/run_001/' \
+    --pred-out /tmp/preds.jsonl.gz
+
+Notes:
+  - Requires IAM role or AWS creds for S3 upload.
+  - Prints the AUC table to stdout on the AWS server.
+"""
+
+from __future__ import annotations
+import argparse, json, gzip, os, re, sys
+from contextlib import nullcontext
+from pathlib import Path
+from collections import defaultdict, Counter
+from typing import List, Dict
+
+import numpy as np
+import pandas as pd
+import torch
+from torch.utils.data import DataLoader, random_split
+from tokenizers import Tokenizer
+from sklearn.metrics import (
+    roc_auc_score, accuracy_score, f1_score, average_precision_score,
+)
+
+# --- Project imports (must exist in your repo) ---
+from config4 import get_config
+from model4_decoderonly_feature_performer import build_transformer
+from train1_decision_only_performer_aws import _ensure_jsonl, JsonLineDataset, _build_tok
+
+# Optional: silence Intel/LLVM OpenMP clash on macOS
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
+# ===================== CLI ======================
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--data",   required=True, help="ND-JSON events file (1 line per user)")
+    p.add_argument("--ckpt",   required=True, help="*.pt checkpoint path")
+    p.add_argument("--labels", required=True, help="JSON label file (clean_list_int_wide4_simple6.json)")
+    p.add_argument("--s3",     required=True, help="S3 URI prefix (e.g., s3://bucket/folder/)")
+    p.add_argument("--pred-out", default="",  help="Optional: local predictions path (.jsonl or .jsonl.gz)")
+    p.add_argument("--feat-xlsx", default="/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx",
+                   help="Feature Excel path for product embeddings")
+    p.add_argument("--batch-size", type=int, default=32)
+    p.add_argument("--ai-rate", type=int, default=15, help="Stride for decision positions")
+    p.add_argument("--thresh", type=float, default=0.5, help="Threshold for Hit/F1")
+    p.add_argument("--seed",   type=int, default=33, help="Reproduce 80/10/10 split")
+    return p.parse_args()
+
+# ================== Utilities ===================
+def smart_open_w(path: str | Path):
+    """stdout if '-', gzip if *.gz, else normal text file (write)."""
+    if isinstance(path, Path):
+        path = str(path)
+    if path == "-":
+        return nullcontext(sys.stdout)
+    if path.endswith(".gz"):
+        return gzip.open(path, "wt")
+    return open(path, "w")
+
+def parse_s3_uri(s3_uri: str):
+    assert s3_uri.startswith("s3://"), f"Invalid S3 uri: {s3_uri}"
+    no_scheme = s3_uri[5:]
+    parts = no_scheme.split("/", 1)
+    bucket = parts[0]
+    key_prefix = (parts[1] + "/") if len(parts) > 1 and not no_scheme.endswith("/") else (parts[1] if len(parts) > 1 else "")
+    return bucket, key_prefix
+
+def s3_upload_bytes(s3_uri: str, data: bytes, content_type: str = "text/csv"):
+    """Upload bytes to S3 using boto3 if available; fallback to aws cli."""
+    bucket, key_prefix = parse_s3_uri(s3_uri)
+    # Choose a file name based on content type (caller should pass final key)
+    raise RuntimeError("s3_upload_bytes called with bare prefix.")
+
+def s3_upload_file(local_path: str | Path, s3_uri_full: str):
+    try:
+        import boto3
+        bucket, key = parse_s3_uri(s3_uri_full)
+        s3 = boto3.client("s3")
+        s3.upload_file(str(local_path), bucket, key)
+    except Exception as e:
+        # fallback to AWS CLI
+        rc = os.system(f"aws s3 cp '{local_path}' '{s3_uri_full}'")
+        if rc != 0:
+            print(f"[WARN] Failed to upload via boto3 and aws cli: {e}", file=sys.stderr)
+
+# ================= Data / Labels =================
+def to_int_vec(x):
+    if isinstance(x, str):
+        return [int(v) for v in x.split()]
+    if isinstance(x, list):
+        out = []
+        for item in x:
+            out.extend(int(v) if isinstance(item, str) else item for v in str(item).split())
+        return out
+    raise TypeError(type(x))
+
+def flat_uid(u):  # u can be scalar or [scalar]
+    return str(u[0] if isinstance(u, list) else u)
+
+def load_labels(label_path: Path) -> Dict[str, Dict[str, List[int]]]:
+    raw = json.loads(label_path.read_text())
+    records = list(raw) if isinstance(raw, list) else [
+        {k: raw[k][i] for k in raw} for i in range(len(raw["uid"]))
+    ]
+    label_dict = {
+        flat_uid(rec["uid"]): {
+            "label" : to_int_vec(rec["Decision"]),
+            "idx_h" : to_int_vec(rec["IndexBasedHoldout"]),
+            "feat_h": to_int_vec(rec["FeatureBasedHoldout"]),
+        } for rec in records
+    }
+    return label_dict, records
+
+def build_splits(records, seed: int):
+    g = torch.Generator().manual_seed(seed)
+    n = len(records)
+    tr, va = int(0.8*n), int(0.1*n)
+    tr_i, va_i, te_i = random_split(range(n), [tr, va, n-tr-va], generator=g)
+    val_uid  = {flat_uid(records[i]["uid"]) for i in va_i.indices}
+    test_uid = {flat_uid(records[i]["uid"]) for i in te_i.indices}
+    def which_split(u):
+        return "val" if u in val_uid else "test" if u in test_uid else "train"
+    return which_split
+
+# ================= Feature tensor ================
+FEATURE_COLS = [
+    "Rarity","MaxLife","MaxOffense","MaxDefense",
+    "WeaponTypeOneHandSword","WeaponTypeTwoHandSword","WeaponTypeArrow","WeaponTypeMagic","WeaponTypePolearm",
+    "EthnicityIce","EthnicityRock","EthnicityWater","EthnicityFire","EthnicityThunder","EthnicityWind",
+    "GenderFemale","GenderMale","CountryRuiYue","CountryDaoQi","CountryZhiDong","CountryMengDe",
+    "type_figure","MinimumAttack","MaximumAttack","MinSpecialEffect","MaxSpecialEffect","SpecialEffectEfficiency",
+    "SpecialEffectExpertise","SpecialEffectAttack","SpecialEffectSuper","SpecialEffectRatio","SpecialEffectPhysical",
+    "SpecialEffectLife","LTO",
+]
+FIRST_PROD_ID, LAST_PROD_ID = 13, 56
+UNK_PROD_ID = 59
+MAX_TOKEN_ID = UNK_PROD_ID
+
+def load_feature_tensor(xls_path: Path) -> torch.Tensor:
+    df = pd.read_excel(xls_path, sheet_name=0)
+    feat_dim = len(FEATURE_COLS)
+    arr = np.zeros((MAX_TOKEN_ID + 1, feat_dim), dtype=np.float32)
+    for _, row in df.iterrows():
+        token_id = int(row["NewProductIndex6"])
+        if FIRST_PROD_ID <= token_id <= LAST_PROD_ID:
+            arr[token_id] = row[FEATURE_COLS].to_numpy(dtype=np.float32)
+    return torch.from_numpy(arr)
+
+# ================= Dataset & Collate =============
+class PredictDataset(JsonLineDataset):
+    def __init__(self, path, pad_id: int):
+        super().__init__(path)
+        self.pad_id = pad_id
+    def to_int_or_pad(self, tok: str) -> int:
+        try:
+            return int(tok)
+        except ValueError:
+            return self.pad_id
+    def __getitem__(self, idx):
+        row     = super().__getitem__(idx)
+        seq_raw = row["AggregateInput"]
+        if isinstance(seq_raw, list):
+            seq_str = (" ".join(map(str, seq_raw))
+                       if not (len(seq_raw)==1 and isinstance(seq_raw[0], str))
+                       else seq_raw[0])
+        else:
+            seq_str = seq_raw
+        toks  = [self.to_int_or_pad(t) for t in str(seq_str).strip().split()]
+        uid   = row["uid"][0] if isinstance(row["uid"], list) else row["uid"]
+        return {"uid": flat_uid(uid), "x": torch.tensor(toks, dtype=torch.long)}
+
+def collate_fn(pad_id: int):
+    def _inner(batch):
+        uids = [b["uid"] for b in batch]
+        lens = [len(b["x"]) for b in batch]
+        Lmax = max(lens)
+        X    = torch.full((len(batch), Lmax), pad_id, dtype=torch.long)
+        for i,(item,L) in enumerate(zip(batch,lens)):
+            X[i,:L] = item["x"]
+        return {"uid": uids, "x": X}
+    return _inner
+
+# =================== Metrics Setup ===============
+BIN_TASKS = {
+    "BuyNone":   [9],
+    "BuyOne":    [1, 3, 5, 7],
+    "BuyTen":    [2, 4, 6, 8],
+    "BuyRegular":[1, 2],
+    "BuyFigure": [3, 4, 5, 6],
+    "BuyWeapon": [7, 8],
+}
+TASK_POSSETS = {k: set(v) for k, v in BIN_TASKS.items()}
+
+def period_group(idx_h, feat_h):
+    if feat_h == 0:               return "Calibration"
+    if feat_h == 1 and idx_h == 0:return "HoldoutA"
+    if idx_h == 1:                return "HoldoutB"
+    return "UNASSIGNED"
+
+# ======================= Main ====================
+def main():
+    args = parse_args()
+    data_path   = _ensure_jsonl(args.data)
+    ckpt_path   = Path(args.ckpt)
+    label_path  = Path(args.labels)
+    feat_path   = Path(args.feat_xlsx)
+    s3_prefix   = args.s3 if args.s3.endswith("/") else (args.s3 + "/")
+    pred_out    = args.pred_out
+
+    # ---------- Config ----------
+    cfg = get_config()
+    cfg["ai_rate"]   = args.ai_rate
+    cfg["batch_size"] = args.batch_size
+
+    # ---------- Tokenizer / PAD ----------
+    tok_path = Path(cfg["model_folder"]) / "tokenizer_tgt.json"
+    tok_tgt  = (Tokenizer.from_file(str(tok_path)) if tok_path.exists()
+                else _build_tok())
+    pad_id   = tok_tgt.token_to_id("[PAD]")
+    # special ids (align PAD with tokenizer)
+    SOS_DEC_ID, EOS_DEC_ID, UNK_DEC_ID = 10, 11, 12
+    EOS_PROD_ID, SOS_PROD_ID          = 57, 58
+    SPECIAL_IDS = [pad_id, SOS_DEC_ID, EOS_DEC_ID, UNK_DEC_ID, EOS_PROD_ID, SOS_PROD_ID]
+
+    # ---------- Labels + split ----------
+    label_dict, records = load_labels(label_path)
+    which_split = build_splits(records, seed=args.seed)
+
+    # ---------- DataLoader ----------
+    ds = PredictDataset(data_path, pad_id=pad_id)
+    loader = DataLoader(
+        ds, batch_size=cfg["batch_size"], shuffle=False,
+        collate_fn=collate_fn(pad_id)
+    )
+
+    # ---------- Model ----------
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model  = build_transformer(
+                vocab_size_tgt=cfg["vocab_size_tgt"],
+                vocab_size_src=cfg["vocab_size_src"],
+                d_model=32, n_layers=6, n_heads=4, d_ff=32, dropout=0.0,
+                nb_features=16, max_seq_len=15360,
+                kernel_type=cfg["kernel_type"],
+                feature_tensor=load_feature_tensor(feat_path),
+                special_token_ids=SPECIAL_IDS
+            ).to(device).eval()
+
+    # ---------- Load checkpoint ----------
+    def clean_state_dict(raw):
+        def strip_prefix(k): return k[7:] if k.startswith("module.") else k
+        ignore = ("weight_fake_quant", "activation_post_process")
+        return {strip_prefix(k): v for k, v in raw.items()
+                if not any(tok in k for tok in ignore)}
+    torch.cuda.empty_cache()
+    state = torch.load(ckpt_path, map_location=device)
+    raw_sd = state["model_state_dict"] if "model_state_dict" in state else \
+             state["module"]           if "module" in state           else state
+    model.load_state_dict(clean_state_dict(raw_sd), strict=True)
+
+    # ---------- Metric accumulators ----------
+    scores       = defaultdict(lambda: {"y": [], "p": []})
+    length_note  = Counter()
+    accept = reject = 0
+
+    # Optional predictions writer
+    pred_writer = None
+    if pred_out:
+        pred_writer = smart_open_w(pred_out)
+
+    # ---------- Inference + streaming eval ----------
+    focus_ids = torch.arange(1, 10, device=device)  # decision classes 1..9
+    with torch.no_grad():
+        for batch in loader:
+            x    = batch["x"].to(device)
+            uids = batch["uid"]
+            # logits -> probs
+            probs_all = torch.softmax(model(x), dim=-1)         # (B, L, V)
+            pos       = torch.arange(cfg["ai_rate"]-1, x.size(1), cfg["ai_rate"], device=device)
+            # pull decision probs at decision positions
+            prob_dec_focus = probs_all[:, pos, :][..., focus_ids]  # (B, N, 9)
+
+            for i, uid in enumerate(uids):
+                probs_seq = prob_dec_focus[i].detach().cpu().numpy()  # (N, 9)
+                probs_seq = np.round(probs_seq, 6).tolist()           # list[list[float]]
+                # write predictions line if requested
+                if pred_writer:
+                    pred_writer.write(json.dumps({"uid": uid, "probs": probs_seq}) + "\n")
+
+                lbl_info = label_dict.get(uid)
+                if lbl_info is None:
+                    reject += 1
+                    continue
+
+                L_pred, L_lbl = len(probs_seq), len(lbl_info["label"])
+                if L_pred != L_lbl:
+                    length_note["pred>lbl" if L_pred > L_lbl else "pred<label"] += 1
+                L = min(L_pred, L_lbl)
+
+                split_tag = which_split(uid)
+                for t in range(L):
+                    y      = lbl_info["label"][t]
+                    idx_h  = lbl_info["idx_h"][t]
+                    feat_h = lbl_info["feat_h"][t]
+                    probs  = probs_seq[t]  # length 9, corresponds to classes 1..9
+
+                    group = period_group(idx_h, feat_h)
+                    for task, pos_classes in BIN_TASKS.items():
+                        y_bin = int(y in TASK_POSSETS[task])
+                        # decisions are 1-indexed → probs[i-1]
+                        p_bin = sum(probs[j-1] for j in pos_classes)
+                        key   = (task, group, split_tag)
+                        scores[key]["y"].append(y_bin)
+                        scores[key]["p"].append(p_bin)
+
+                accept += 1
+
+    if pred_writer:
+        pred_writer.__exit__(None, None, None)  # close the context
+
+    print(f"[INFO] parsed: {accept} users accepted, {reject} users missing labels.")
+    if length_note:
+        print("[INFO] length mismatches:", dict(length_note))
+
+    # ---------- Compute tables ----------
+    rows = []
+    for task in BIN_TASKS:
+        for grp in ["Calibration","HoldoutA","HoldoutB"]:
+            for spl in ["val","test"]:
+                y, p = scores[(task, grp, spl)]["y"], scores[(task, grp, spl)]["p"]
+                if not y:
+                    continue
+                # guard: need both classes present
+                if len(set(y)) < 2:
+                    auc = acc = f1 = auprc = np.nan
+                else:
+                    auc   = roc_auc_score(y, p)
+                    y_hat = [int(prob >= args.thresh) for prob in p]
+                    acc   = accuracy_score(y, y_hat)
+                    f1    = f1_score(y, y_hat)
+                    auprc = average_precision_score(y, p)
+                rows.append({"Task": task, "Group": grp, "Split": spl,
+                             "AUC": auc, "Hit": acc, "F1": f1, "AUPRC": auprc})
+    metrics = pd.DataFrame(rows)
+
+    def pivot(metric: str) -> pd.DataFrame:
+        return (metrics
+                .pivot(index=["Task","Group"], columns="Split", values=metric)
+                .reindex(columns=["val","test"])
+                .round(4)
+                .sort_index())
+
+    auc_tbl   = pivot("AUC")
+    hit_tbl   = pivot("Hit")
+    f1_tbl    = pivot("F1")
+    auprc_tbl = pivot("AUPRC")
+
+    macro_period_tbl = (
+        metrics
+          .groupby(["Group", "Split"])[["AUC", "Hit", "F1", "AUPRC"]]
+          .mean()
+          .unstack("Split")   # columns become metric × split
+          .round(4)
+    )
+    # reorder to outer split then metric, and val before test
+    macro_period_tbl = macro_period_tbl.reorder_levels([1, 0], axis=1)
+    macro_period_tbl = macro_period_tbl.sort_index(axis=1, level=0)
+    macro_period_tbl = macro_period_tbl[['val', 'test']]
+
+    # ---------- Print AUC table to console ----------
+    print("\n=============  BINARY ROC-AUC TABLE  =======================")
+    print(auc_tbl.fillna(" NA"))
+    print("============================================================")
+
+    # ---------- Save locally & upload to S3 ----------
+    out_dir = Path("/tmp/predict_eval_outputs")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    files_to_upload = []
+
+    auc_csv   = out_dir / "auc_table.csv"
+    hit_csv   = out_dir / "hit_table.csv"
+    f1_csv    = out_dir / "f1_table.csv"
+    auprc_csv = out_dir / "auprc_table.csv"
+    macro_csv = out_dir / "macro_period_table.csv"
+
+    auc_tbl.to_csv(auc_csv)
+    hit_tbl.to_csv(hit_csv)
+    f1_tbl.to_csv(f1_csv)
+    auprc_tbl.to_csv(auprc_csv)
+    macro_period_tbl.to_csv(macro_csv)
+
+    files_to_upload += [auc_csv, hit_csv, f1_csv, auprc_csv, macro_csv]
+
+    if pred_out:
+        files_to_upload.append(Path(pred_out))
+
+    # Upload each to s3 prefix
+    for pth in files_to_upload:
+        key = pth.name
+        s3_uri_full = f"{s3_prefix}{key}" if s3_prefix.endswith("/") else f"{s3_prefix}/{key}"
+        s3_upload_file(pth, s3_uri_full)
+        print(f"[S3] uploaded: {s3_uri_full}")
+
+if __name__ == "__main__":
+    main()
