@@ -15,14 +15,13 @@ S3_BUCKET = "productgptbucket"
 SPEC_URI  = "s3://productgptbucket/CV/folds.json"
 
 # Per-fold metrics (JSON) will be saved here
-S3_PERFOLD_PREFIX = "CV/metrics/productgpt_full/"        # e.g., productgpt_full/fold_0.json
-# Merged CSV of all folds
+S3_PERFOLD_PREFIX = "CV/metrics/productgpt_full/"        
 S3_MERGED_CSV_KEY = "CV/tables/productgpt_full_cv_metrics.csv"
 
 BEST_HP = dict(
     nb_features=16, 
-    d_model=128, 
-    d_ff=128, 
+    d_model=32, 
+    d_ff=32, 
     N=6, 
     num_heads=4,
     lr=1e-4, 
@@ -85,7 +84,7 @@ def _build_cfg(fold_id: int, spec: dict) -> dict:
         "uids_test": test_uids,
         "uids_trainval": train_uids,
         # speed + stability knobs
-        "num_epochs": 60,
+        "num_epochs": 200,
         "patience": 5,
         "fp16": True,                 # if your trainer reads this
         "ai_rate": 15,                # keep seq_len_ai in check
