@@ -19,6 +19,7 @@ S3_PERFOLD_PREFIX = "CV/metrics/productgpt_duplet/"
 # Merged CSV of all folds
 S3_MERGED_CSV_KEY = "CV/tables/productgpt_duplet_cv_metrics.csv"
 
+# LP_ProductGPT_featurebased_performerfeatures32_dmodel128_ff128_N8_heads4_lr0.001_w2.pt
 BEST_HP = dict(
     nb_features=32, 
     d_model=128, 
