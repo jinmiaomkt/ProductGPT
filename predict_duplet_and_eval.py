@@ -63,7 +63,7 @@ def parse_args():
     p.add_argument("--feat-xlsx", default="/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx",
                    help="Feature Excel path for product embeddings")
     p.add_argument("--batch-size", type=int, default=2)
-    p.add_argument("--ai-rate", type=int, default=15, help="Stride for decision positions")
+    p.add_argument("--lp-rate", type=int, default=5, help="Stride for decision positions")
     p.add_argument("--thresh", type=float, default=0.5, help="Threshold for Hit/F1")
     p.add_argument("--seed",   type=int, default=33, help="Reproduce 80/10/10 split when no UID files are provided")
 
@@ -227,7 +227,7 @@ class PredictDataset(JsonLineDataset):
             return self.pad_id
     def __getitem__(self, idx):
         row     = super().__getitem__(idx)
-        seq_raw = row["AggregateInput"]
+        seq_raw = row["LTO_PreviousDecision"]
         if isinstance(seq_raw, list):
             if len(seq_raw) == 1 and isinstance(seq_raw[0], str):
                 seq_str = seq_raw[0]
