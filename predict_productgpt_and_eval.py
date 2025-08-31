@@ -52,6 +52,8 @@ from train1_decision_only_performer_aws import _ensure_jsonl, JsonLineDataset, _
 # Optional: silence Intel/LLVM OpenMP clash on macOS
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
+# FullProductGPT_featurebased_performerfeatures16_dmodel128_ff128_N6_heads4_lr0.0001_w2_fold0.pt .
+
 # ===================== CLI ======================
 def parse_args():
     p = argparse.ArgumentParser()
@@ -62,7 +64,7 @@ def parse_args():
     p.add_argument("--pred-out", default="",  help="Optional: local predictions path (.jsonl or .jsonl.gz)")
     p.add_argument("--feat-xlsx", default="/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx",
                    help="Feature Excel path for product embeddings")
-    p.add_argument("--batch-size", type=int, default=32)
+    p.add_argument("--batch-size", type=int, default=2)
     p.add_argument("--ai-rate", type=int, default=15, help="Stride for decision positions")
     p.add_argument("--thresh", type=float, default=0.5, help="Threshold for Hit/F1")
     p.add_argument("--seed",   type=int, default=33, help="Reproduce 80/10/10 split when no UID files are provided")
@@ -334,13 +336,19 @@ def main():
     model  = build_transformer(
                 vocab_size_tgt=cfg["vocab_size_tgt"],
                 vocab_size_src=cfg["vocab_size_src"],
-                d_model=32, n_layers=6, n_heads=4, d_ff=32, dropout=0.0,
-                nb_features=16, max_seq_len=15360,
+                d_model=128, 
+                n_layers=6, 
+                n_heads=4, 
+                d_ff=128, 
+                dropout=0.0,
+                nb_features=16, 
+                max_seq_len=15360,
                 kernel_type=cfg["kernel_type"],
                 feature_tensor=load_feature_tensor(feat_path),
                 special_token_ids=SPECIAL_IDS
             ).to(device).eval()
 
+    # FullProductGPT_featurebased_performerfeatures16_dmodel128_ff128_N6_heads4_lr0.0001_w2_fold0.pt
     # ---------- Load checkpoint ----------
     def clean_state_dict(raw):
         def strip_prefix(k): return k[7:] if k.startswith("module.") else k
