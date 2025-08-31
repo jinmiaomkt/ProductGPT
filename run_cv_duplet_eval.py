@@ -36,6 +36,26 @@ try:
 except Exception:
     boto3 = None
 
+import re
+
+def _parse_hparams_from_ckpt_name(name: str):
+    """
+    Parse things like:
+      LP_ProductGPT_featurebased_performerfeatures32_dmodel128_ff128_N8_heads4_lr0.001_w2.pt
+    Returns dict with any keys it finds; missing ones are left out.
+    """
+    m = re.search(r"features(\d+)_dmodel(\d+)_ff(\d+)_N(\d+)_heads(\d+)", name)
+    if not m:
+        return {}
+    feats, dmodel, dff, N, heads = map(int, m.groups())
+    return {
+        "nb_features": feats,
+        "d_model": dmodel,
+        "d_ff": dff,
+        "N": N,
+        "num_heads": heads,
+    }
+
 # ───────────────────────── S3 helpers ─────────────────────────
 def parse_s3_uri(uri: str) -> Tuple[str, str]:
     assert uri.startswith("s3://"), f"Invalid S3 uri: {uri}"
