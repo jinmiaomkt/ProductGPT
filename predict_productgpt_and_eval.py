@@ -53,7 +53,7 @@ from train1_decision_only_performer_aws import _ensure_jsonl, JsonLineDataset, _
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 # FullProductGPT_featurebased_performerfeatures16_dmodel128_ff128_N6_heads4_lr0.0001_w2_fold0.pt .
-
+# FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w2_fold0.pt
 # ===================== CLI ======================
 def parse_args():
     p = argparse.ArgumentParser()
@@ -336,10 +336,10 @@ def main():
     model  = build_transformer(
                 vocab_size_tgt=cfg["vocab_size_tgt"],
                 vocab_size_src=cfg["vocab_size_src"],
-                d_model=128, 
+                d_model=32, 
                 n_layers=6, 
                 n_heads=4, 
-                d_ff=128, 
+                d_ff=32, 
                 dropout=0.0,
                 nb_features=16, 
                 max_seq_len=15360,
@@ -347,7 +347,7 @@ def main():
                 feature_tensor=load_feature_tensor(feat_path),
                 special_token_ids=SPECIAL_IDS
             ).to(device).eval()
-
+    # FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w2_fold0.pt
     # FullProductGPT_featurebased_performerfeatures16_dmodel128_ff128_N6_heads4_lr0.0001_w2_fold0.pt
     # ---------- Load checkpoint ----------
     def clean_state_dict(raw):
