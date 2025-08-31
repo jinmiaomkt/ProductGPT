@@ -15,19 +15,23 @@ Usage (example):
     --labels '/home/ec2-user/data/clean_list_int_wide4_simple6.json' \
     --feat-xlsx '/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx' \
     --s3 's3://your-bucket/experiments/featurebased/run_001/' \
-    --pred-out /tmp/preds.jsonl.gz
+    --pred-out /tmp/preds.jsonl.gz \
+    --uids-val /tmp/fold3_val_uids.txt \
+    --uids-test /tmp/fold3_test_uids.txt
 
 Notes:
   - Requires IAM role or AWS creds for S3 upload.
   - Prints the AUC table to stdout on the AWS server.
+  - If --uids-val and --uids-test are supplied (local path or s3://...), the script
+    will EXACT MATCH those users for 'val' and 'test' splits and will NOT do 80/10/10.
 """
 
 from __future__ import annotations
-import argparse, json, gzip, os, re, sys
+import argparse, json, gzip, os, re, sys, subprocess
 from contextlib import nullcontext
 from pathlib import Path
 from collections import defaultdict, Counter
-from typing import List, Dict
+from typing import List, Dict, Set
 
 import numpy as np
 import pandas as pd
@@ -59,7 +63,11 @@ def parse_args():
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--ai-rate", type=int, default=15, help="Stride for decision positions")
     p.add_argument("--thresh", type=float, default=0.5, help="Threshold for Hit/F1")
-    p.add_argument("--seed",   type=int, default=33, help="Reproduce 80/10/10 split")
+    p.add_argument("--seed",   type=int, default=33, help="Reproduce 80/10/10 split when no UID files are provided")
+
+    # NEW: exact-match overrides (local path or s3://bucket/key, one UID per line)
+    p.add_argument("--uids-val",  default="", help="Text file (or s3://...) with validation UIDs, one per line")
+    p.add_argument("--uids-test", default="", help="Text file (or s3://...) with test UIDs, one per line")
     return p.parse_args()
 
 # ================== Utilities ===================
@@ -73,7 +81,7 @@ def smart_open_w(path: str | Path):
         return gzip.open(path, "wt")
     return open(path, "w")
 
-# --- replace your parse_s3_uri with this ---
+# --- S3 helpers ---
 def parse_s3_uri(uri: str):
     assert uri.startswith("s3://"), f"Invalid S3 uri: {uri}"
     no_scheme = uri[5:]
@@ -105,10 +113,36 @@ def s3_upload_file(local_path: str | Path, s3_uri_full: str):
         if rc != 0:
             raise RuntimeError(f"Failed to upload {local_path} to {s3_uri_full}: {e}")
 
+def s3_read_text(s3_uri: str) -> str:
+    """Read small text file from S3 to memory (try boto3, fallback to AWS CLI)."""
+    bucket, key = parse_s3_uri(s3_uri)
+    try:
+        import boto3
+        obj = boto3.client("s3").get_object(Bucket=bucket, Key=key)
+        return obj["Body"].read().decode("utf-8")
+    except Exception:
+        data = subprocess.check_output(["aws", "s3", "cp", s3_uri, "-"])
+        return data.decode("utf-8")
+
+def load_uid_set(path_or_s3: str) -> Set[str]:
+    """Load a UID set from a local path or s3://bucket/key (one UID per line)."""
+    if not path_or_s3:
+        return set()
+    if path_or_s3.startswith("s3://"):
+        text = s3_read_text(path_or_s3)
+    else:
+        text = Path(path_or_s3).read_text()
+    uids = set()
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        uids.add(line)
+    return uids
+
 def s3_upload_bytes(s3_uri: str, data: bytes, content_type: str = "text/csv"):
     """Upload bytes to S3 using boto3 if available; fallback to aws cli."""
     bucket, key_prefix = parse_s3_uri(s3_uri)
-    # Choose a file name based on content type (caller should pass final key)
     raise RuntimeError("s3_upload_bytes called with bare prefix.")
 
 # ================= Data / Labels =================
@@ -193,7 +227,8 @@ class PredictDataset(JsonLineDataset):
                        else seq_raw[0])
         else:
             seq_str = seq_raw
-        toks  = [self.to_int_or_pad(t) for t in str(seq_str).strip().split()]
+        toks  = [self.to_int_or_pad(t) for t in str(seq_raw).strip().split()] if isinstance(seq_raw, list) \
+                else [self.to_int_or_pad(t) for t in str(seq_str).strip().split()]
         uid   = row["uid"][0] if isinstance(row["uid"], list) else row["uid"]
         return {"uid": flat_uid(uid), "x": torch.tensor(toks, dtype=torch.long)}
 
@@ -237,7 +272,7 @@ def main():
 
     # ---------- Config ----------
     cfg = get_config()
-    cfg["ai_rate"]   = args.ai_rate
+    cfg["ai_rate"]    = args.ai_rate
     cfg["batch_size"] = args.batch_size
 
     # ---------- Tokenizer / PAD ----------
@@ -250,9 +285,28 @@ def main():
     EOS_PROD_ID, SOS_PROD_ID          = 57, 58
     SPECIAL_IDS = [pad_id, SOS_DEC_ID, EOS_DEC_ID, UNK_DEC_ID, EOS_PROD_ID, SOS_PROD_ID]
 
-    # ---------- Labels + split ----------
+    # ---------- Labels ----------
     label_dict, records = load_labels(label_path)
-    which_split = build_splits(records, seed=args.seed)
+
+    # ---------- EXACT MATCH OVERRIDE or fallback 80/10/10 ----------
+    uids_val_override  = load_uid_set(args.uids_val)  if args.uids_val  else set()
+    uids_test_override = load_uid_set(args.uids_test) if args.uids_test else set()
+
+    if uids_val_override or uids_test_override:
+        # Must provide BOTH
+        if not (uids_val_override and uids_test_override):
+            raise ValueError("Provide BOTH --uids-val and --uids-test (or neither).")
+        overlap = uids_val_override & uids_test_override
+        if overlap:
+            raise ValueError(f"UIDs present in BOTH val and test: {sorted(list(overlap))[:5]} ...")
+
+        def which_split(u):
+            return "val" if u in uids_val_override else "test" if u in uids_test_override else "train"
+
+        print(f"[INFO] Using EXACT UID lists: val={len(uids_val_override)}, test={len(uids_test_override)}")
+    else:
+        which_split = build_splits(records, seed=args.seed)
+        print(f"[INFO] Using fallback 80/10/10 split with seed={args.seed}")
 
     # ---------- DataLoader ----------
     ds = PredictDataset(data_path, pad_id=pad_id)
@@ -289,6 +343,7 @@ def main():
     scores       = defaultdict(lambda: {"y": [], "p": []})
     length_note  = Counter()
     accept = reject = 0
+    accept_users = {"val": set(), "test": set(), "train": set()}
 
     # Optional predictions writer
     pred_writer = None
@@ -325,6 +380,7 @@ def main():
                 L = min(L_pred, L_lbl)
 
                 split_tag = which_split(uid)
+                accept_users.setdefault(split_tag, set()).add(uid)
                 for t in range(L):
                     y      = lbl_info["label"][t]
                     idx_h  = lbl_info["idx_h"][t]
@@ -348,6 +404,10 @@ def main():
     print(f"[INFO] parsed: {accept} users accepted, {reject} users missing labels.")
     if length_note:
         print("[INFO] length mismatches:", dict(length_note))
+    # Report exact-match coverage if overrides were provided
+    if args.uids_val and args.uids_test:
+        print(f"[INFO] coverage: val={len(accept_users.get('val', set()))} / {len(load_uid_set(args.uids_val))}, "
+              f"test={len(accept_users.get('test', set()))} / {len(load_uid_set(args.uids_test))}")
 
     # ---------- Compute tables ----------
     rows = []
@@ -410,8 +470,6 @@ def main():
     out_dir = Path("/tmp/predict_eval_outputs")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    files_to_upload = []
-
     auc_csv   = out_dir / "auc_table.csv"
     hit_csv   = out_dir / "hit_table.csv"
     f1_csv    = out_dir / "f1_table.csv"
@@ -423,8 +481,6 @@ def main():
     f1_tbl.to_csv(f1_csv)
     auprc_tbl.to_csv(auprc_csv)
     macro_period_tbl.to_csv(macro_csv)
-
-    files_to_upload += [auc_csv, hit_csv, f1_csv, auprc_csv, macro_csv]
 
     for pth in [auc_csv, hit_csv, f1_csv, auprc_csv, macro_csv]:
         dest = s3_join(args.s3, pth.name)
