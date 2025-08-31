@@ -3,7 +3,7 @@
 predict_duplet_and_eval.py
 
 End-to-end:
-  - Run inference for 9-way decision probabilities (every ai_rate steps)
+  - Run inference for 9-way decision probabilities (every lp_rate steps)
   - Compute AUC / Hit / F1 / AUPRC by (Task, PeriodGroup, Split)
   - Print AUC table to console
   - Save CSV tables (and optional predictions) locally and upload to S3
@@ -286,7 +286,7 @@ def main():
 
     # ---------- Config ----------
     cfg = get_config()
-    cfg["ai_rate"]    = args.ai_rate
+    cfg["lp_rate"]    = args.lp_rate
     cfg["batch_size"] = args.batch_size
 
     # ---------- Tokenizer / PAD ----------
@@ -377,7 +377,7 @@ def main():
             uids = batch["uid"]
             # logits -> probs
             probs_all = torch.softmax(model(x), dim=-1)         # (B, L, V)
-            pos       = torch.arange(cfg["ai_rate"]-1, x.size(1), cfg["ai_rate"], device=device)
+            pos       = torch.arange(cfg["lp_rate"]-1, x.size(1), cfg["lp_rate"], device=device)
             # pull decision probs at decision positions
             prob_dec_focus = probs_all[:, pos, :][..., focus_ids]  # (B, N, 9)
 
