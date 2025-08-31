@@ -17,17 +17,19 @@ Usage (example):
     --s3 's3://your-bucket/experiments/featurebased/run_001/' \
     --pred-out /tmp/preds.jsonl.gz \
     --uids-val /tmp/fold3_val_uids.txt \
-    --uids-test /tmp/fold3_test_uids.txt
+    --uids-test /tmp/fold3_test_uids.txt \
+    --fold-id 3
 
 Notes:
   - Requires IAM role or AWS creds for S3 upload.
   - Prints the AUC table to stdout on the AWS server.
   - If --uids-val and --uids-test are supplied (local path or s3://...), the script
     will EXACT MATCH those users for 'val' and 'test' splits and will NOT do 80/10/10.
+  - If --fold-id is provided, all uploaded outputs go under .../fold{ID}/ on S3.
 """
 
 from __future__ import annotations
-import argparse, json, gzip, os, re, sys, subprocess
+import argparse, json, gzip, os, sys, subprocess
 from contextlib import nullcontext
 from pathlib import Path
 from collections import defaultdict, Counter
@@ -65,9 +67,12 @@ def parse_args():
     p.add_argument("--thresh", type=float, default=0.5, help="Threshold for Hit/F1")
     p.add_argument("--seed",   type=int, default=33, help="Reproduce 80/10/10 split when no UID files are provided")
 
-    # NEW: exact-match overrides (local path or s3://bucket/key, one UID per line)
+    # EXACT-MATCH UID overrides (local path or s3://bucket/key, one UID per line)
     p.add_argument("--uids-val",  default="", help="Text file (or s3://...) with validation UIDs, one per line")
     p.add_argument("--uids-test", default="", help="Text file (or s3://...) with test UIDs, one per line")
+
+    # Optional fold index to route outputs under .../fold{ID}/
+    p.add_argument("--fold-id", type=int, default=-1, help="If >=0, upload outputs under .../fold{ID}/")
     return p.parse_args()
 
 # ================== Utilities ===================
@@ -100,6 +105,13 @@ def s3_join(prefix: str, filename: str) -> str:
     if not prefix.endswith("/"):
         prefix += "/"
     return prefix + filename  # NO trailing slash after filename
+
+def s3_join_folder(prefix: str, folder: str) -> str:
+    """Join a folder to an S3 prefix, ensuring exactly one slash."""
+    if not prefix.endswith("/"):
+        prefix += "/"
+    folder = folder.strip("/")
+    return prefix + folder + "/"
 
 def s3_upload_file(local_path: str | Path, s3_uri_full: str):
     # Assert we didn't accidentally create a "folder" key
@@ -139,11 +151,6 @@ def load_uid_set(path_or_s3: str) -> Set[str]:
             continue
         uids.add(line)
     return uids
-
-def s3_upload_bytes(s3_uri: str, data: bytes, content_type: str = "text/csv"):
-    """Upload bytes to S3 using boto3 if available; fallback to aws cli."""
-    bucket, key_prefix = parse_s3_uri(s3_uri)
-    raise RuntimeError("s3_upload_bytes called with bare prefix.")
 
 # ================= Data / Labels =================
 def to_int_vec(x):
@@ -222,13 +229,13 @@ class PredictDataset(JsonLineDataset):
         row     = super().__getitem__(idx)
         seq_raw = row["AggregateInput"]
         if isinstance(seq_raw, list):
-            seq_str = (" ".join(map(str, seq_raw))
-                       if not (len(seq_raw)==1 and isinstance(seq_raw[0], str))
-                       else seq_raw[0])
+            if len(seq_raw) == 1 and isinstance(seq_raw[0], str):
+                seq_str = seq_raw[0]
+            else:
+                seq_str = " ".join(map(str, seq_raw))
         else:
-            seq_str = seq_raw
-        toks  = [self.to_int_or_pad(t) for t in str(seq_raw).strip().split()] if isinstance(seq_raw, list) \
-                else [self.to_int_or_pad(t) for t in str(seq_str).strip().split()]
+            seq_str = str(seq_raw)
+        toks  = [self.to_int_or_pad(t) for t in seq_str.strip().split()]
         uid   = row["uid"][0] if isinstance(row["uid"], list) else row["uid"]
         return {"uid": flat_uid(uid), "x": torch.tensor(toks, dtype=torch.long)}
 
@@ -269,6 +276,13 @@ def main():
     feat_path   = Path(args.feat_xlsx)
     s3_prefix   = args.s3 if args.s3.endswith("/") else (args.s3 + "/")
     pred_out    = args.pred_out
+
+    # If fold-id provided, nest under that folder
+    if args.fold_id is not None and args.fold_id >= 0:
+        s3_prefix_effective = s3_join_folder(s3_prefix, f"fold{args.fold_id}")
+    else:
+        s3_prefix_effective = s3_prefix
+    print(f"[INFO] S3 upload prefix: {s3_prefix_effective}")
 
     # ---------- Config ----------
     cfg = get_config()
@@ -390,7 +404,7 @@ def main():
                     group = period_group(idx_h, feat_h)
                     for task, pos_classes in BIN_TASKS.items():
                         y_bin = int(y in TASK_POSSETS[task])
-                        # decisions are 1-indexed → probs[i-1]
+                        # decisions are 1-indexed → probs[j-1]
                         p_bin = sum(probs[j-1] for j in pos_classes)
                         key   = (task, group, split_tag)
                         scores[key]["y"].append(y_bin)
@@ -482,13 +496,14 @@ def main():
     auprc_tbl.to_csv(auprc_csv)
     macro_period_tbl.to_csv(macro_csv)
 
+    # Choose effective S3 prefix (with fold subfolder if provided)
     for pth in [auc_csv, hit_csv, f1_csv, auprc_csv, macro_csv]:
-        dest = s3_join(args.s3, pth.name)
+        dest = s3_join(s3_prefix_effective, pth.name)
         s3_upload_file(pth, dest)
         print(f"[S3] uploaded: {dest}")
 
     if pred_out:
-        dest = s3_join(args.s3, Path(pred_out).name)
+        dest = s3_join(s3_prefix_effective, Path(pred_out).name)
         s3_upload_file(pred_out, dest)
         print(f"[S3] uploaded: {dest}")
     
