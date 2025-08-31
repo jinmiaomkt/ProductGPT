@@ -73,31 +73,43 @@ def smart_open_w(path: str | Path):
         return gzip.open(path, "wt")
     return open(path, "w")
 
-def parse_s3_uri(s3_uri: str):
-    assert s3_uri.startswith("s3://"), f"Invalid S3 uri: {s3_uri}"
-    no_scheme = s3_uri[5:]
-    parts = no_scheme.split("/", 1)
-    bucket = parts[0]
-    key_prefix = (parts[1] + "/") if len(parts) > 1 and not no_scheme.endswith("/") else (parts[1] if len(parts) > 1 else "")
-    return bucket, key_prefix
+# --- replace your parse_s3_uri with this ---
+def parse_s3_uri(uri: str):
+    assert uri.startswith("s3://"), f"Invalid S3 uri: {uri}"
+    no_scheme = uri[5:]
+    if "/" in no_scheme:
+        bucket, key = no_scheme.split("/", 1)
+    else:
+        bucket, key = no_scheme, ""
+    return bucket, key  # key may be '' (prefix), but NEVER add a '/'
+
+def s3_join(prefix: str, filename: str) -> str:
+    # prefix = 's3://bucket/path' or 's3://bucket/path/'
+    if not prefix.startswith("s3://"):
+        raise ValueError(f"Not an S3 URI: {prefix}")
+    if not filename:
+        raise ValueError("filename is empty")
+    if not prefix.endswith("/"):
+        prefix += "/"
+    return prefix + filename  # NO trailing slash after filename
+
+def s3_upload_file(local_path: str | Path, s3_uri_full: str):
+    # Assert we didn't accidentally create a "folder" key
+    assert not s3_uri_full.endswith("/"), f"S3 object key must not end with '/': {s3_uri_full}"
+    try:
+        import boto3
+        bucket, key = parse_s3_uri(s3_uri_full)
+        boto3.client("s3").upload_file(str(local_path), bucket, key)
+    except Exception as e:
+        rc = os.system(f"aws s3 cp '{local_path}' '{s3_uri_full}'")
+        if rc != 0:
+            raise RuntimeError(f"Failed to upload {local_path} to {s3_uri_full}: {e}")
 
 def s3_upload_bytes(s3_uri: str, data: bytes, content_type: str = "text/csv"):
     """Upload bytes to S3 using boto3 if available; fallback to aws cli."""
     bucket, key_prefix = parse_s3_uri(s3_uri)
     # Choose a file name based on content type (caller should pass final key)
     raise RuntimeError("s3_upload_bytes called with bare prefix.")
-
-def s3_upload_file(local_path: str | Path, s3_uri_full: str):
-    try:
-        import boto3
-        bucket, key = parse_s3_uri(s3_uri_full)
-        s3 = boto3.client("s3")
-        s3.upload_file(str(local_path), bucket, key)
-    except Exception as e:
-        # fallback to AWS CLI
-        rc = os.system(f"aws s3 cp '{local_path}' '{s3_uri_full}'")
-        if rc != 0:
-            print(f"[WARN] Failed to upload via boto3 and aws cli: {e}", file=sys.stderr)
 
 # ================= Data / Labels =================
 def to_int_vec(x):
@@ -414,15 +426,15 @@ def main():
 
     files_to_upload += [auc_csv, hit_csv, f1_csv, auprc_csv, macro_csv]
 
+    for pth in [auc_csv, hit_csv, f1_csv, auprc_csv, macro_csv]:
+        dest = s3_join(args.s3, pth.name)
+        s3_upload_file(pth, dest)
+        print(f"[S3] uploaded: {dest}")
+
     if pred_out:
-        files_to_upload.append(Path(pred_out))
-
-    # Upload each to s3 prefix
-    for pth in files_to_upload:
-        key = pth.name
-        s3_uri_full = f"{s3_prefix}{key}" if s3_prefix.endswith("/") else f"{s3_prefix}/{key}"
-        s3_upload_file(pth, s3_uri_full)
-        print(f"[S3] uploaded: {s3_uri_full}")
-
+        dest = s3_join(args.s3, Path(pred_out).name)
+        s3_upload_file(pred_out, dest)
+        print(f"[S3] uploaded: {dest}")
+    
 if __name__ == "__main__":
     main()
