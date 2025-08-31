@@ -132,9 +132,7 @@ def parse_args():
     p.add_argument("--N", type=int, default=8)
     p.add_argument("--num-heads", type=int, default=4)
 
-    # Set ai_rate so seq_len_ai = ai_rate * seq_len_tgt matches training.
-    # Default 10 → if seq_len_tgt=512 then seq_len_ai=5120.
-    p.add_argument("--ai-rate", type=int, default=10)
+    p.add_argument("--lp-rate", type=int, default=5, help="Duplet stride; replaces ai_rate for training")
 
     p.add_argument("--s3-bucket", type=str, required=True)
     p.add_argument("--s3-prefix", type=str, required=True,
@@ -157,10 +155,8 @@ def main():
         "num_heads": args.num_heads,
     })
 
-    # Ensure ai_rate/seq length are consistent with training recipe
-    cfg["ai_rate"] = args.ai_rate
-    # most repos use: seq_len_ai = ai_rate * seq_len_tgt
-    cfg["seq_len_ai"] = cfg.get("seq_len_ai", cfg["ai_rate"] * cfg["seq_len_tgt"])
+    cfg["lp_rate"] = args.lp_rate
+    cfg["seq_len_lp"] = cfg.get("seq_len_lp", cfg["lp_rate"] * cfg["seq_len_tgt"])
 
     # Paths & S3 layout
     bucket = args.s3_bucket
@@ -180,7 +176,7 @@ def main():
     print(f"[INFO] S3 eval  root: {s3_eval_root}")
     print(f"[INFO] Locked model spec → features={cfg['nb_features']} d_model={cfg['d_model']} "
           f"d_ff={cfg['d_ff']} N={cfg['N']} heads={cfg['num_heads']}  ai_rate={cfg['ai_rate']}  "
-          f"seq_len_ai={cfg['seq_len_ai']}")
+          f"seq_len_lp={cfg['seq_len_lp']}")
 
     # Trainer (duplet)
     from train2_decoderonly_performer_feature_aws import train_model  # noqa: E402
