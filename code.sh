@@ -77,7 +77,7 @@ python3 predict_gru_and_eval.py \
   --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
   --ckpt /home/ec2-user/ProductGPT/lstm_h128_lr0.0001_bs4.pt \
   --hidden-size 128 \
-  --input-dim 15 \
+  --embed-dim 128 \
   --batch-size 128 \
   --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
   --s3 s3://productgptbucket/LSTM/eval/h128_lr0.001_bs4/
