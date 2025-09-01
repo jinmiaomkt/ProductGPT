@@ -54,4 +54,11 @@ python3 run_cv_duplet_eval.py \
   --s3-bucket productgptbucket \
   --s3-prefix DupletCV/exp_001
 
-python3 predict_gru_and_eval.py
+python3 predict_gru_and_eval.py \
+  --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --ckpt /home/ec2-user/ProductGPT/gru_h128_lr0.001_bs4.pt \
+  --hidden-size 128 \
+  --input-dim 15 \
+  --batch-size 128 \
+  --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --s3 s3://productgptbucket/GRU/eval/h128_lr0.001_bs4/
