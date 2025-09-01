@@ -72,7 +72,7 @@ python3 predict_gru_and_eval.py \
     --hidden-size 128 --lr 0.001 --train-batch-size 4 --eval-batch-size 128 \
     --epochs 80 --class9-weight 5.0 --input-dim 15
 
-python3 predict_lstm_and_eval_raw.py \
+python3 predict_lstm_and_eval.py \
   --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
   --ckpt /home/ec2-user/ProductGPT/lstm_h128_lr0.0001_bs4.pt \
   --hidden-size 128 \
@@ -82,3 +82,14 @@ python3 predict_lstm_and_eval_raw.py \
   --s3 s3://productgptbucket/LSTM/eval/h128_lr0.0001_bs4/ \
   --pred-out /tmp/lstm_raw_preds.jsonl.gz
 
+python3 run_cv_lstm_eval.py \
+  --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --data   /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --predict-eval-script /home/ec2-user/ProductGPT/predict_lstm_and_eval_raw.py \
+  --s3-bucket productgptbucket \
+  --s3-prefix LSTM/CV/h128_lr0.0001_bs4 \
+  --hidden-size 128 --lr 0.0001 --epochs 80 \
+  --train-batch-size 4 --eval-batch-size 128 \
+  --class9-weight 5.0 --input-dim 15 \
+  --num-folds 10 --seed 33 \
+  --upload-ckpt --pred-out
