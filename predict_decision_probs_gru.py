@@ -52,6 +52,7 @@ class GRUClassifier(nn.Module):
         out, _ = self.gru(x)
         return self.fc(out)  # (B, T, num_classes)
 
+# gru_h128_lr0.001_bs4.pt
 parser = argparse.ArgumentParser(
     description="Predict per‐timestep decision probabilities with GRU"
 )

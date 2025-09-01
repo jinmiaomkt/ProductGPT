@@ -431,6 +431,30 @@ def main():
         print(f"[INFO] coverage: val={len(accept_users.get('val', set()))} / {len(load_uid_set(args.uids_val))}, "
               f"test={len(accept_users.get('test', set()))} / {len(load_uid_set(args.uids_test))}")
 
+    # After computing `scores` and before rows = []
+    bucket_stats = []  # list of dicts for counts and prevalence
+
+    for task in BIN_TASKS:
+        for grp in ["Calibration","HoldoutA","HoldoutB"]:
+            for spl in ["val","test"]:
+                y = scores[(task, grp, spl)]["y"]
+                p = scores[(task, grp, spl)]["p"]
+                if not y: 
+                    continue
+                n = len(y)
+                pos = sum(y)
+                neg = n - pos
+                prev = pos / n if n else float('nan')
+                bucket_stats.append({
+                    "Task": task, "Group": grp, "Split": spl,
+                    "N": n, "Pos": pos, "Neg": neg, "Prev": round(prev, 4)
+                })
+
+    stats_df = pd.DataFrame(bucket_stats).sort_values(["Split","Group","Task"])
+    print("\n=============  BUCKET SIZES & PREVALENCE  =======================")
+    print(stats_df.to_string(index=False))
+    print("============================================================")
+
     # ---------- Compute tables ----------
     rows = []
     for task in BIN_TASKS:
