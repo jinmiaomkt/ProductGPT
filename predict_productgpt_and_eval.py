@@ -336,10 +336,10 @@ def main():
     model  = build_transformer(
                 vocab_size_tgt=cfg["vocab_size_tgt"],
                 vocab_size_src=cfg["vocab_size_src"],
-                d_model=32, 
+                d_model=128, 
                 n_layers=6, 
                 n_heads=4, 
-                d_ff=32, 
+                d_ff=128, 
                 dropout=0.0,
                 nb_features=16, 
                 max_seq_len=15360,
