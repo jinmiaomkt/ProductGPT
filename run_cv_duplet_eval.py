@@ -152,7 +152,7 @@ def parse_args():
     p.add_argument("--N", type=int, default=8)
     p.add_argument("--num-heads", type=int, default=4)
 
-    p.add_argument("--lp-rate", type=int, default=5, help="Duplet stride; replaces ai_rate for training")
+    p.add_argument("--lp-rate", type=int, default=5, help="Duplet stride; replaces lp_rate for training")
 
     p.add_argument("--s3-bucket", type=str, required=True)
     p.add_argument("--s3-prefix", type=str, required=True,
@@ -195,7 +195,7 @@ def main():
     print(f"[INFO] S3 train root: {s3_train_root}")
     print(f"[INFO] S3 eval  root: {s3_eval_root}")
     print(f"[INFO] Locked model spec → features={cfg['nb_features']} d_model={cfg['d_model']} "
-          f"d_ff={cfg['d_ff']} N={cfg['N']} heads={cfg['num_heads']}  ai_rate={cfg['ai_rate']}  "
+          f"d_ff={cfg['d_ff']} N={cfg['N']} heads={cfg['num_heads']}  lp_rate={cfg['lp_rate']}  "
           f"seq_len_lp={cfg['seq_len_lp']}")
 
     # Trainer (duplet)
@@ -238,7 +238,7 @@ def main():
         basename = (f"LP_ProductGPT_featurebased_performer"
                     f"features{cfg_k['nb_features']}_dmodel{cfg_k['d_model']}"
                     f"_ff{cfg_k['d_ff']}_N{cfg_k['N']}_heads{cfg_k['num_heads']}"
-                    f"_ai{cfg_k['ai_rate']}_fold{k}")
+                    f"_ai{cfg_k['lp_rate']}_fold{k}")
         cfg_k["model_basename"] = basename
 
         summary = train_model(cfg_k)
@@ -271,7 +271,7 @@ def main():
             "--fold-id",   str(k),
             "--batch-size", str(args.eval_batch_size),
             "--thresh", str(args.thresh),
-            "--ai-rate", str(cfg_k["ai_rate"]),   # keep seq length in sync
+            "--lp-rate", str(cfg_k["lp_rate"]),   # keep seq length in sync
         ]
         print("[CMD]", " ".join(cmd))
         rc = subprocess.call(cmd)
@@ -296,7 +296,7 @@ def main():
             "ckpt": ckpt_ref,
             "val_uids_s3": s3_val_uri,
             "test_uids_s3": s3_test_uri,
-            "model_spec": f"feat{cfg_k['nb_features']}_dm{cfg_k['d_model']}_ff{cfg_k['d_ff']}_N{cfg_k['N']}_h{cfg_k['num_heads']}_ai{cfg_k['ai_rate']}",
+            "model_spec": f"feat{cfg_k['nb_features']}_dm{cfg_k['d_model']}_ff{cfg_k['d_ff']}_N{cfg_k['N']}_h{cfg_k['num_heads']}_lp{cfg_k['lp_rate']}",
         }
         all_rows.append(row)
 

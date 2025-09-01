@@ -582,10 +582,21 @@ def train_model(cfg: Dict[str, Any]):
     # Write to a gzipped temp file in /tmp to keep root disk small
     tmp_pred = Path("/tmp") / f"{uid}_predictions.jsonl.gz"
 
+    uid_counter = 0
     with gzip.open(tmp_pred, "wt", encoding="utf-8") as fp, torch.no_grad():
         for batch in tqdm(inf_dl, desc="Infer 30-campaign set"):
             x   = batch["LTO_PreviousDecision"].to(device)
-            uids = batch["uid"]  # list[str] length B
+            # uids = batch["uid"]  # list[str] length B
+
+            # Use real UIDs if provided; otherwise synthesize placeholders
+            if "uid" in batch and batch["uid"] is not None:
+                uids = batch["uid"]
+            else:
+                B = x.size(0)
+                # Make deterministic placeholders per batch to keep files readable
+                uids = [f"ex_{i:08d}" for i in range(uid_counter, uid_counter + B)]
+                uid_counter += B
+
             logits = engine(x)[:, cfg["lp_rate"]-1::cfg["lp_rate"], :]
             probs  = torch.softmax(logits, -1).cpu().numpy()   # (B, N, 60)
             for u, p in zip(uids, probs):

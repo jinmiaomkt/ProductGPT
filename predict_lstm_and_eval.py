@@ -80,6 +80,7 @@ def parse_args():
     p.add_argument("--dropout",     type=float, default=0.0)
     return p.parse_args()
 
+# lstm_h128_lr0.0001_bs4.pt
 # ================== Utilities ===================
 def smart_open_w(path: str | Path):
     """stdout if '-', gzip if *.gz, else normal text file (write)."""
