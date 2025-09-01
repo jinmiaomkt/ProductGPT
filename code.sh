@@ -3,7 +3,7 @@
 
 python3 predict_productgpt_and_eval.py \
   --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
-  --ckpt FullProductGPT_featurebased_performerfeatures16_dmodel128_ff128_N6_heads4_lr0.0001_w2_fold0.pt \
+  --ckpt LP_ProductGPT_featurebased_performerfeatures32_dmodel128_ff128_N8_heads4_lr0.001_w2.pt \
   --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
   --feat-xlsx /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx \
   --s3 s3://productgptbucket/eval/FullProductGPT/ \
@@ -72,3 +72,12 @@ python3 predict_gru_and_eval.py \
     --s3-prefix GRU/CV/h128_lr0.001_bs4 \
     --hidden-size 128 --lr 0.001 --train-batch-size 4 --eval-batch-size 128 \
     --epochs 80 --class9-weight 5.0 --input-dim 15
+
+  python3 predict_lstm_and_eval.py \
+  --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --ckpt /home/ec2-user/ProductGPT/lstm_h128_lr0.0001_bs4.pt \
+  --hidden-size 128 \
+  --input-dim 15 \
+  --batch-size 128 \
+  --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --s3 s3://productgptbucket/LSTM/eval/h128_lr0.001_bs4/
