@@ -53,3 +53,5 @@ python3 run_cv_duplet_eval.py \
   --thresh 0.5 \
   --s3-bucket productgptbucket \
   --s3-prefix DupletCV/exp_001
+
+python3 predict_gru_and_eval.py
