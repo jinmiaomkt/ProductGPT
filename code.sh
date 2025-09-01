@@ -62,3 +62,13 @@ python3 predict_gru_and_eval.py \
   --batch-size 128 \
   --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
   --s3 s3://productgptbucket/GRU/eval/h128_lr0.001_bs4/
+
+
+  python3 run_cv_gru_eval.py \
+    --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+    --data   /home/ec2-user/data/clean_list_int_wide4_simple6_FeatureBasedTrain.json \
+    --predict-eval-script /home/ec2-user/ProductGPT/predict_gru_and_eval.py \
+    --s3-bucket productgptbucket \
+    --s3-prefix GRU/CV/h128_lr0.001_bs4 \
+    --hidden-size 128 --lr 0.001 --train-batch-size 4 --eval-batch-size 128 \
+    --epochs 80 --class9-weight 5.0 --input-dim 15
