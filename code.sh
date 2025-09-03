@@ -85,7 +85,7 @@ python3 predict_lstm_and_eval.py \
 python3 run_cv_lstm_eval.py \
   --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
   --data   /home/ec2-user/data/clean_list_int_wide4_simple6.json \
-  --predict-eval-script /home/ec2-user/ProductGPT/predict_lstm_and_eval_raw.py \
+  --predict-eval-script /home/ec2-user/ProductGPT/predict_lstm_and_eval.py \
   --s3-bucket productgptbucket \
   --s3-prefix LSTM/CV/h128_lr0.0001_bs4 \
   --hidden-size 128 --lr 0.0001 --epochs 80 \
@@ -93,3 +93,16 @@ python3 run_cv_lstm_eval.py \
   --class9-weight 5.0 --input-dim 15 \
   --num-folds 10 --seed 33 \
   --upload-ckpt --pred-out
+
+python3 run_cv_lstm_eval.py \
+  --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --data   /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --predict-eval-script /home/ec2-user/ProductGPT/predict_lstm_and_eval.py \
+  --s3-bucket productgptbucket \
+  --s3-prefix LSTM/CV/h128_lr0.0001_bs4 \
+  --hidden-size 128 --lr 0.0001 --epochs 80 \
+  --train-batch-size 4 --eval-batch-size 8 \
+  --class9-weight 5.0 --input-dim 15 \
+  --num-folds 10 --seed 33 \
+  --upload-ckpt --pred-out
+
