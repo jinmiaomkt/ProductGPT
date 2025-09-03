@@ -350,7 +350,6 @@ def main():
             ).to(device).eval()
     # FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w2_fold0.pt
     # FullProductGPT_featurebased_performerfeatures16_dmodel128_ff128_N6_heads4_lr0.0001_w2_fold0.pt
-    # LP_ProductGPT_featurebased_performerfeatures32_dmodel128_ff128_N8_heads4_lr0.001_w2.pt \
     # ---------- Load checkpoint ----------
     def clean_state_dict(raw):
         def strip_prefix(k): return k[7:] if k.startswith("module.") else k
