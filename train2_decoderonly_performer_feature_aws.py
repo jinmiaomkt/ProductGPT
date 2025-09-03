@@ -22,6 +22,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from tqdm.auto import tqdm
 
 # --- runtime knobs (before import deepspeed) ---
 os.environ.setdefault("DS_BUILD_OPS", "0")                    # no fused kernels
