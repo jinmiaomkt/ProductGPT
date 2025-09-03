@@ -119,3 +119,63 @@ python3 /home/ec2-user/ProductGPT/predict_duplet_and_eval.py \
   --batch-size 32 \
   --thresh 0.5 \
   --lp-rate 5
+
+python3 run_cv_duplet_eval.py \
+  --num-folds 10 \
+  --seed 33 \
+  --predict-eval-script /home/ec2-user/ProductGPT/predict_duplet_and_eval.py \
+  --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --data   /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --feat-xlsx /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx \
+  --lp-rate 5 \
+  --eval-batch-size 32 \
+  --thresh 0.5 \
+  --s3-bucket productgptbucket \
+  --s3-prefix DupletCV/exp_001
+
+python3 /home/ec2-user/ProductGPT/predict_productgpt_and_eval.py \
+  --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --ckpt /tmp/fold0.pt \
+  --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --feat-xlsx /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx \
+  --s3 s3://productgptbucket/FullProductGPT/CV/exp_001/eval/fold0 \
+  --pred-out /tmp/fold0_preds.jsonl.gz \
+  --uids-val  s3://productgptbucket/FullProductGPT/CV/exp_001/train/fold0/uids_val.txt \
+  --uids-test s3://productgptbucket/FullProductGPT/CV/exp_001/train/fold0/uids_test.txt \
+  --fold-id 0 \
+  --batch-size 32 \
+  --thresh 0.5 \
+  --ai-rate 15
+
+python3 run_cv_productgpt_eval.py \
+  --num-folds 10 \
+  --seed 33 \
+  --predict-eval-script /home/ec2-user/ProductGPT/predict_productgpt_and_eval.py \
+  --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --data   /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --feat-xlsx /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx \
+  --ai-rate 15 \
+  --eval-batch-size 32 \
+  --thresh 0.5 \
+  --s3-bucket productgptbucket \
+  --s3-prefix FullProductGPT/CV/exp_001
+
+
+python3 /home/ec2-user/ProductGPT/predict_productgpt_and_eval.py \
+  --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --ckpt /home/ec2-user/ProductGPT/checkpoints/FullProductGPT_featurebased_performerfeatures16_dmodel128_ff128_N6_heads4_lr0.0001_w2_fold0.pt \
+  --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --feat-xlsx /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx \
+  --s3 s3://productgptbucket/FullProductGPT/CV/exp_001/eval/fold0 \
+  --pred-out /tmp/fold0_preds.jsonl.gz \
+  --uids-val  s3://productgptbucket/FullProductGPT/CV/exp_001/train/fold0/uids_val.txt \
+  --uids-test s3://productgptbucket/FullProductGPT/CV/exp_001/train/fold0/uids_test.txt \
+  --fold-id 0 \
+  --batch-size 32 \
+  --thresh 0.5 \
+  --ai-rate 15 \
+  --nb-features 16 \
+  --d-model 128 \
+  --d-ff 128 \
+  --N 6 \
+  --num-heads 4

@@ -551,14 +551,29 @@ def train_model(cfg: Dict[str, Any]):
             json_path.write_text(json.dumps(_json_safe(best_val_metrics), indent=2))
 
             # upload & unlink
-            _upload_and_unlink(json_path, bucket, js_key, s3)
-            _upload_and_unlink(ckpt_path, bucket, ck_key, s3)
+            # _upload_and_unlink(json_path, bucket, js_key, s3)
+            # _upload_and_unlink(ckpt_path, bucket, ck_key, s3)
+
+            if s3:
+                s3.upload_file(str(json_path), bucket, js_key,
+                            ExtraArgs={"ContentType": "application/json"})
+                s3.upload_file(str(ckpt_path), bucket, ck_key)
 
         else:
             patience += 1
             if patience >= cfg["patience"]:
                 print("Early stopping")
                 break
+
+
+    # Ensure local checkpoint is present for evaluation
+    if not ckpt_path.exists() and s3 is not None:
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            s3.download_file(bucket, ck_key, str(ckpt_path))
+            print(f"[S3] downloaded best ckpt for test → s3://{bucket}/{ck_key}")
+        except Exception as e:
+            print(f"[WARN] Could not download ckpt for test: {e}")
 
     # ---- test ---------------------------------------------------------
     if ckpt_path.exists():
