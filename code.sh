@@ -106,3 +106,16 @@ python3 run_cv_lstm_eval.py \
   --num-folds 10 --seed 33 \
   --upload-ckpt --pred-out
 
+python3 /home/ec2-user/ProductGPT/predict_duplet_and_eval.py \
+  --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --ckpt /tmp/fold0.pt \
+  --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --feat-xlsx /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx \
+  --s3 s3://productgptbucket/DupletCV/exp_001/eval/fold0 \
+  --pred-out /tmp/fold0_preds.jsonl.gz \
+  --uids-val  s3://productgptbucket/DupletCV/exp_001/train/fold0/uids_val.txt \
+  --uids-test s3://productgptbucket/DupletCV/exp_001/train/fold0/uids_test.txt \
+  --fold-id 0 \
+  --batch-size 32 \
+  --thresh 0.5 \
+  --lp-rate 5
