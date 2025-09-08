@@ -65,7 +65,7 @@ python3 predict_gru_and_eval.py \
 
   python3 run_cv_gru_eval.py \
     --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
-    --data   /home/ec2-user/data/clean_list_int_wide4_simple6_FeatureBasedTrain.json \
+    --data   /home/ec2-user/data/clean_list_int_wide4_simple6.json \
     --predict-eval-script /home/ec2-user/ProductGPT/predict_gru_and_eval.py \
     --s3-bucket productgptbucket \
     --s3-prefix GRU/CV/h128_lr0.001_bs4 \
