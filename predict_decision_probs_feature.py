@@ -3,7 +3,7 @@
 predict_decision_probs_feature.py
 
 Outputs one JSON line per user with the 9-way decision distribution.
-FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w2w
+FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w2
 """
 
 import sys, gzip, json   # json was already there
