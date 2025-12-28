@@ -9,6 +9,8 @@
 from __future__ import annotations  # ← add this line
 from pathlib import Path
 
+# --ckpt /home/ec2-user/output/FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N8_heads4_lr0.0001_w4.pt \
+  
 # ─────────────────────────── core config ───────────────────────────
 def _raw_config():
     return {

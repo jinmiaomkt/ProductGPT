@@ -281,16 +281,60 @@ def main():
         special_token_ids=SPECIAL_IDS,
     ).to(device).eval()
 
-    # Load checkpoint
+    # # Load checkpoint
+    # state = torch.load(args.ckpt, map_location=device)
+    # if "model_state_dict" in state:
+    #     raw_sd = state["model_state_dict"]
+    # elif "module" in state:
+    #     raw_sd = state["module"]
+    # else:
+    #     raw_sd = state
+    # model.load_state_dict(clean_state_dict(raw_sd), strict=True)
+
+    # ─────── LOAD CHECKPOINT FIRST ───────
     state = torch.load(args.ckpt, map_location=device)
+
     if "model_state_dict" in state:
         raw_sd = state["model_state_dict"]
     elif "module" in state:
         raw_sd = state["module"]
     else:
         raw_sd = state
-    model.load_state_dict(clean_state_dict(raw_sd), strict=True)
 
+    state_dict = clean_state_dict(raw_sd)
+
+    # ---- infer n_layers from checkpoint keys ----
+    layer_idxs = []
+    for k in state_dict.keys():
+        if k.startswith("decoder.layers."):
+            parts = k.split(".")
+            # decoder.layers.{i}. ...
+            if len(parts) > 2 and parts[2].isdigit():
+                layer_idxs.append(int(parts[2]))
+    n_layers_ckpt = (max(layer_idxs) + 1) if layer_idxs else cfg["N"]
+
+    # ---- infer max_seq_len from checkpoint PE ----
+    # pos_enc.pe is a buffer, stored in state_dict
+    max_seq_len_ckpt = state_dict["pos_enc.pe"].shape[1] if "pos_enc.pe" in state_dict else cfg["seq_len_tgt"]
+
+    # ───────── Build model (MATCH CKPT) ──────────
+    model = build_transformer(
+        vocab_size_tgt=cfg["vocab_size_tgt"],
+        vocab_size_src=cfg["vocab_size_src"],
+        d_model=cfg["d_model"],
+        n_layers=n_layers_ckpt,              # IMPORTANT: match checkpoint
+        n_heads=cfg["num_heads"],
+        d_ff=cfg["d_ff"],
+        dropout=0.0,
+        nb_features=cfg["nb_features"],
+        max_seq_len=max_seq_len_ckpt,        # IMPORTANT: match checkpoint (1024)
+        kernel_type=cfg["kernel_type"],
+        feature_tensor=feature_tensor,
+        special_token_ids=SPECIAL_IDS,
+    ).to(device).eval()
+
+    model.load_state_dict(state_dict, strict=True)
+    
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
