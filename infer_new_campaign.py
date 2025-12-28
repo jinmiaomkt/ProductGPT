@@ -14,13 +14,11 @@ import torch.nn.functional as F
 # -------------------------
 # Your project imports
 # -------------------------
-from config4_index_git import get_config
+from config4 import get_config
 from model4_decoderonly_feature_performer import build_transformer  # adjust if your module name differs
-
 
 AI_RATE = 15
 DECISION_IDS = torch.tensor([1, 2, 3, 4, 5, 6, 7, 8, 9], dtype=torch.long)
-
 
 def smart_open(path: str):
     if path == "-":
@@ -28,7 +26,6 @@ def smart_open(path: str):
     if path.endswith(".gz"):
         return gzip.open(path, "wt")
     return open(path, "w")
-
 
 def _iter_rows(path: str) -> Iterable[Dict[str, Any]]:
     """
