@@ -396,7 +396,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 
-from config4_index_git import get_config
+from config4 import get_config
 from model4_decoderonly_feature_performer import build_transformer  # adjust if needed
 
 
