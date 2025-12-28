@@ -244,6 +244,11 @@ def main():
 
     parser = argparse.ArgumentParser()
 
+    parser.add_argument("--repeat", type=int, default=1,
+                        help="Repeat generation multiple times for the selected consumer(s).")
+    parser.add_argument("--seed_base", type=int, default=None,
+                        help="Base seed; run r uses seed_base + r.")
+
     parser.add_argument("--uid", type=str, default=None, help="Run inference for a single consumer uid only (exact match).")
     parser.add_argument("--first", action="store_true", help="Run inference for the first consumer in the data file.")
     parser.add_argument("--n_users", type=int, default=0, help="Run inference for the first N consumers, then stop. 0 means no limit.")
@@ -382,34 +387,75 @@ def main():
                 except Exception:
                     pass
 
-            out = generate_campaign28_step1_fixed_outcomes(
-                model=model,
-                history_tokens=history_tokens,
-                lto28_tokens=args.lto28,
-                fixed_outcomes_after_step0=args.fixed_outcomes,
-                device=device,
-                init_prev_dec=init_prev_dec,
-                max_steps28=args.max_steps28,
-                stop_decision=9,
-                temperature=args.temperature,
-                greedy=args.greedy,
-            )
+            # out = generate_campaign28_step1_fixed_outcomes(
+            #     model=model,
+            #     history_tokens=history_tokens,
+            #     lto28_tokens=args.lto28,
+            #     fixed_outcomes_after_step0=args.fixed_outcomes,
+            #     device=device,
+            #     init_prev_dec=init_prev_dec,
+            #     max_steps28=args.max_steps28,
+            #     stop_decision=9,
+            #     temperature=args.temperature,
+            #     greedy=args.greedy,
+            # )
 
-            payload = {
-                "uid": uid,
-                "Campaign28_Decisions": out["decisions28"],
-                "stopped": out["stopped"],
-                "stop_step": out["stop_step"],
-            }
+            # payload = {
+            #     "uid": uid,
+            #     "Campaign28_Decisions": out["decisions28"],
+            #     "stopped": out["stopped"],
+            #     "stop_step": out["stop_step"],
+            # }
 
-            if args.print_tokens:
-                payload["Campaign28_AggregateInput"] = out["seq_campaign28"]
-                payload["Full_AggregateInput"] = out["seq_full"]
+            # if args.print_tokens:
+            #     payload["Campaign28_AggregateInput"] = out["seq_campaign28"]
+            #     payload["Full_AggregateInput"] = out["seq_full"]
 
-            line = json.dumps(payload)
+            # line = json.dumps(payload)
 
-            # always write to file
-            fout.write(line + "\n")
+            # # always write to file
+            # fout.write(line + "\n")
+
+            repeat = max(1, args.repeat)
+
+            for r in range(repeat):
+                # Per-run seed to demonstrate randomness
+                if args.seed_base is not None:
+                    run_seed = args.seed_base + r
+                    import random
+                    random.seed(run_seed)
+                    np.random.seed(run_seed)
+                    torch.manual_seed(run_seed)
+                    if torch.cuda.is_available():
+                        torch.cuda.manual_seed_all(run_seed)
+                else:
+                    run_seed = None
+
+                out = generate_campaign28_step1_fixed_outcomes(
+                    model=model,
+                    history_tokens=history_tokens,
+                    lto28_tokens=args.lto28,
+                    fixed_outcomes_after_step0=args.fixed_outcomes,
+                    device=device,
+                    init_prev_dec=init_prev_dec,
+                    max_steps28=args.max_steps28,
+                    stop_decision=9,
+                    temperature=args.temperature,
+                    greedy=args.greedy,
+                )
+
+                payload = {
+                    "uid": uid,
+                    "run": r,
+                    "run_seed": run_seed,
+                    "Campaign28_Decisions": out["decisions28"],
+                    "stopped": out["stopped"],
+                    "stop_step": out["stop_step"],
+                }
+
+                line = json.dumps(payload)
+                fout.write(line + "\n")
+                print(line, flush=True)
 
             # optionally print to screen
             if args.do_print:
