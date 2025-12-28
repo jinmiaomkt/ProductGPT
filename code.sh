@@ -62,7 +62,6 @@ python3 predict_gru_and_eval.py \
   --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
   --s3 s3://productgptbucket/GRU/eval/h128_lr0.001_bs4/
 
-
   python3 run_cv_gru_eval.py \
     --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
     --data   /home/ec2-user/data/clean_list_int_wide4_simple6.json \
