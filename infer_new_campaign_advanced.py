@@ -22,18 +22,40 @@ class TraceCfg:
     max_steps: int = 200   # 0 means no limit
     fout: Optional[TextIO] = None
 
-def _trace_emit(
-    rec: dict,
-    do_print: bool = True,
-    fout: Optional[TextIO] = None,
-):
-    line = json.dumps(rec, ensure_ascii=False)
+# def _trace_emit(
+#     rec: dict,
+#     do_print: bool = True,
+#     fout: Optional[TextIO] = None,
+# ):
+#     line = json.dumps(rec, ensure_ascii=False)
+#     if do_print:
+#         print(line, flush=True)
+#     if fout is not None:
+#         fout.write(line + "\n")
+#         fout.flush()
+
+def _json_fallback(o):
+    # dataclasses
+    if hasattr(o, "__dataclass_fields__"):
+        return asdict(o)
+    # numpy scalars / arrays
+    if isinstance(o, (np.integer, np.floating)):
+        return o.item()
+    if isinstance(o, np.ndarray):
+        return o.tolist()
+    # torch tensors
+    if torch.is_tensor(o):
+        return o.detach().cpu().tolist()
+    # last resort
+    return str(o)
+
+def _trace_emit(rec: dict, do_print: bool = True, fout: Optional[TextIO] = None):
+    line = json.dumps(rec, ensure_ascii=False, default=_json_fallback)
     if do_print:
         print(line, flush=True)
     if fout is not None:
         fout.write(line + "\n")
         fout.flush()
-
 
 # ----------------------------
 # Constants / Token meanings
@@ -759,8 +781,8 @@ def generate_campaign28_step2_simulated_outcomes(
                 "sampled_dec": dec,
                 "sampled_dec_name": dec_name,
             }
-            _trace_emit(rec, do_print=True, fout=trace_fout)
-
+            # _trace_emit(rec, do_print=True, fout=trace_fout)
+            _trace_emit(rec, do_print=True, fout=None)
 
         decisions28.append(dec)
 
