@@ -16,6 +16,12 @@ from model4_decoderonly_feature_performer import build_transformer  # adjust if 
 
 import copy
 
+@dataclass
+class TraceCfg:
+    enabled: bool = False
+    max_steps: int = 200   # 0 means no limit
+    fout: Optional[TextIO] = None
+
 def _trace_emit(
     rec: dict,
     do_print: bool = True,
@@ -644,7 +650,7 @@ def generate_campaign28_step2_simulated_outcomes(
     rng: np.random.Generator,
     use_epitomized: bool = False,
     epitomized_target: int = 0,
-    # ---- add these ----
+    trace: Optional[TraceCfg] = None,   
     trace_enabled: bool = False,
     trace_max_steps: int = 0,
     uid: str = "",
@@ -723,7 +729,8 @@ def generate_campaign28_step2_simulated_outcomes(
         )
 
         # Trace print (limit steps if requested)
-        if trace_enabled and (trace_max_steps == 0 or t < trace_max_steps):
+        do_trace = bool(trace and trace.enabled and (trace.max_steps == 0 or t < trace.max_steps))
+        if do_trace:
             prev_name, _, _ = DECISION_META.get(prev_dec, ("UNK", "unknown", 0))
             dec_name,  _, _ = DECISION_META.get(dec,      ("UNK", "unknown", 0))
 
@@ -887,6 +894,8 @@ def main():
         Path(args.trace_out).parent.mkdir(parents=True, exist_ok=True)
         trace_fout = open(args.trace_out, "wt")
 
+    trace_cfg = TraceCfg(enabled=bool(args.trace), max_steps=int(args.trace_max_steps), fout=trace_fout)
+
     # Feature columns (keep exactly aligned with training)
     FEATURE_COLS = [
         "Rarity", "MaxLife", "MaxOffense", "MaxDefense",
@@ -1032,10 +1041,7 @@ def main():
                         rng=rng,
                         use_epitomized=args.use_epitomized,
                         epitomized_target=args.epitomized_target,
-
-                        # ---- add these ----
-                        trace_enabled=trace_enabled,
-                        trace_max_steps=trace_max_steps,
+                        trace=trace_cfg,
                         uid=uid,
                         run_id=r,
                         run_seed=run_seed,
