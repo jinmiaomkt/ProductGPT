@@ -4,7 +4,7 @@ import gzip
 import json
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple, TextIO
 
 import numpy as np
 import pandas as pd
@@ -14,12 +14,39 @@ import torch.nn.functional as F
 from config4 import get_config
 from model4_decoderonly_feature_performer import build_transformer  # adjust if needed
 
+import copy
+
+def _trace_emit(
+    rec: dict,
+    do_print: bool = True,
+    fout: Optional[TextIO] = None,
+):
+    line = json.dumps(rec, ensure_ascii=False)
+    if do_print:
+        print(line, flush=True)
+    if fout is not None:
+        fout.write(line + "\n")
+        fout.flush()
+
 
 # ----------------------------
 # Constants / Token meanings
 # ----------------------------
 AI_RATE = 15
 DECISION_IDS = torch.tensor([1, 2, 3, 4, 5, 6, 7, 8, 9], dtype=torch.long)
+
+DECISION_META = {
+    1: ("Buy 1 Regular",   "regular",  1),
+    2: ("Buy 10 Regular",  "regular", 10),
+    3: ("Buy 1 Figure-A",  "figure_a", 1),
+    4: ("Buy 10 Figure-A", "figure_a",10),
+    5: ("Buy 1 Figure-B",  "figure_b", 1),
+    6: ("Buy 10 Figure-B", "figure_b",10),
+    7: ("Buy 1 Weapon",    "weapon",   1),
+    8: ("Buy 10 Weapon",   "weapon",  10),
+    9: ("Not Buy",         "none",     0),
+}
+
 
 # Product token meanings (as you defined)
 TOK_3STAR_WEAPON = 13
@@ -573,6 +600,13 @@ def generate_campaign28_step2_simulated_outcomes(
     rng: np.random.Generator,
     use_epitomized: bool = False,
     epitomized_target: int = 0,
+    # ---- add these ----
+    trace_enabled: bool = False,
+    trace_max_steps: int = 0,
+    uid: str = "",
+    run_id: int = 0,
+    run_seed: Optional[int] = None,
+    trace_fout: Optional[TextIO] = None,
 ) -> Dict[str, Any]:
     """
     Campaign 28 generation with simulated outcomes (Step 2a+2b).
@@ -608,15 +642,27 @@ def generate_campaign28_step2_simulated_outcomes(
     for t in range(max_steps28):
         if t == 0:
             out10 = outcomes_step0
+
+            state_before = copy.deepcopy(states)
+            state_after  = copy.deepcopy(states)  # no update on t=0 if you treat it as observed
+            outcome_source = "history_c27_lastblock"
+            banner = DECISION_META.get(prev_dec, ("UNK", "unknown", 0))[1]
+            pulls  = DECISION_META.get(prev_dec, ("UNK", "unknown", 0))[2]
+
             # IMPORTANT: do NOT update states here; this outcome is already in history
         else:
-            out10 = simulate_outcomes_for_decision(
+            out10, info = simulate_outcomes_for_decision(
                 decision=prev_dec,
                 lto4=lto28_tokens,
                 states=states,
                 rng=rng,
                 use_epitomized=use_epitomized,
             )
+
+            state_after = copy.deepcopy(states)
+            outcome_source = "simulated"
+            banner = info.get("banner", DECISION_META.get(prev_dec, ("UNK","unknown",0))[1])
+            pulls  = info.get("pulls",  DECISION_META.get(prev_dec, ("UNK","unknown",0))[2])
 
         block = list(lto28_tokens) + list(out10) + [prev_dec]
         seq_full.extend(block)
@@ -629,6 +675,40 @@ def generate_campaign28_step2_simulated_outcomes(
         dec = sample_decision_from_logits(
             logits_at_decpos, DECISION_IDS, temperature=temperature, greedy=greedy
         )
+
+        # Trace print (limit steps if requested)
+        if trace_enabled and (trace_max_steps == 0 or t < trace_max_steps):
+            prev_name, _, _ = DECISION_META.get(prev_dec, ("UNK", "unknown", 0))
+            dec_name,  _, _ = DECISION_META.get(dec,      ("UNK", "unknown", 0))
+
+            rec = {
+                "uid": uid,
+                "step": 2,
+                "run": run_id,
+                "run_seed": run_seed,
+                "t": t,
+
+                # decision that generated OUT10
+                "prev_dec": prev_dec,
+                "prev_dec_name": prev_name,
+                "banner": banner,
+                "n_pulls": pulls,
+                "outcome_source": outcome_source,
+
+                # outcomes written into [OUT10]
+                "out10": out10,
+
+                # gacha states
+                "state_before": state_before,
+                "state_after": state_after,
+
+                # decision sampled for next step
+                "sampled_dec": dec,
+                "sampled_dec_name": dec_name,
+            }
+            _trace_emit(rec, do_print=True, fout=trace_fout)
+
+
         decisions28.append(dec)
 
         if dec == stop_decision:
@@ -697,6 +777,13 @@ cfgs = make_banner_cfgs()
 def main():
     cfg = get_config()
 
+    parser.add_argument("--trace", action="store_true",
+                        help="Print a per-step trace (decision/outcomes/state) to stdout.")
+    parser.add_argument("--trace_out", type=str, default=None,
+                        help="Optional path to also write trace JSONL.")
+    parser.add_argument("--trace_max_steps", type=int, default=200,
+                        help="Max number of steps to trace (to avoid huge logs). 0 = no limit.")
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--step", type=int, choices=[1, 2], default=2,
                         help="1: fixed outcomes after t=0; 2: infer counters + simulate outcomes")
@@ -743,8 +830,16 @@ def main():
 
     args = parser.parse_args()
 
+    trace_enabled = bool(args.trace)
+    trace_max_steps = int(args.trace_max_steps)
+
     if args.first:
         args.n_users = 1
+
+    trace_fout = None
+    if args.trace_out is not None:
+        Path(args.trace_out).parent.mkdir(parents=True, exist_ok=True)
+        trace_fout = open(args.trace_out, "wt")
 
     # Feature columns (keep exactly aligned with training)
     FEATURE_COLS = [
@@ -891,6 +986,14 @@ def main():
                         rng=rng,
                         use_epitomized=args.use_epitomized,
                         epitomized_target=args.epitomized_target,
+
+                        # ---- add these ----
+                        trace_enabled=trace_enabled,
+                        trace_max_steps=trace_max_steps,
+                        uid=uid,
+                        run_id=r,
+                        run_seed=run_seed,
+                        trace_fout=trace_fout,
                     )
                     payload = {
                         "uid": uid,
@@ -917,6 +1020,9 @@ def main():
                 break
             if args.n_users and processed >= args.n_users:
                 break
+
+    if trace_fout is not None:
+        trace_fout.close()
 
     if processed == 0:
         raise ValueError("No matching consumer found. Check --uid or input data.")
