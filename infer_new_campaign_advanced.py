@@ -489,33 +489,77 @@ def simulate_outcomes_for_decision(
     states: Dict[str, BannerState],
     rng: np.random.Generator,
     use_epitomized: bool = False,
-) -> List[int]:
+) -> Tuple[List[int], Dict[str, Any]]:
     """
-    Produce OUT10 for the decision (0/1/10 pulls), enforcing feasibility:
+    Produce OUT10 for the decision and an info dict.
+    Enforces feasibility:
       - 0 pulls: all zeros
       - 1 pull: exactly 1 nonzero then zeros
       - 10 pulls: up to 10 nonzero
     """
     banner, n_pulls = decision_to_banner_and_pulls(decision)
+    info = {"banner": banner, "pulls": n_pulls}
+
     out10 = [0] * 10
 
     if n_pulls == 0 or banner == "none":
-        return out10
+        return out10, info
 
     if banner not in states:
-        # unknown banner -> treat as no outcomes
-        return out10
+        return out10, info
 
     st = states[banner]
     cfg = cfgs[banner]
 
     for k in range(n_pulls):
         rarity = sample_rarity_one_pull(cfg, st, rng)
-        tok = sample_outcome_token(banner, rarity, lto4, st, rng, use_epitomized=use_epitomized)
+        tok = sample_outcome_token(
+            banner=banner,
+            rarity=rarity,
+            lto4=lto4,
+            st=st,
+            rng=rng,
+            use_epitomized=use_epitomized,
+        )
         out10[k] = int(tok)
         update_pity_after_pull(st, rarity)
 
-    return out10
+    return out10, info
+
+
+# def simulate_outcomes_for_decision(
+#     decision: int,
+#     lto4: List[int],
+#     states: Dict[str, BannerState],
+#     rng: np.random.Generator,
+#     use_epitomized: bool = False,
+# ) -> List[int]:
+#     """
+#     Produce OUT10 for the decision (0/1/10 pulls), enforcing feasibility:
+#       - 0 pulls: all zeros
+#       - 1 pull: exactly 1 nonzero then zeros
+#       - 10 pulls: up to 10 nonzero
+#     """
+#     banner, n_pulls = decision_to_banner_and_pulls(decision)
+#     out10 = [0] * 10
+
+#     if n_pulls == 0 or banner == "none":
+#         return out10
+
+#     if banner not in states:
+#         # unknown banner -> treat as no outcomes
+#         return out10
+
+#     st = states[banner]
+#     cfg = cfgs[banner]
+
+#     for k in range(n_pulls):
+#         rarity = sample_rarity_one_pull(cfg, st, rng)
+#         tok = sample_outcome_token(banner, rarity, lto4, st, rng, use_epitomized=use_epitomized)
+#         out10[k] = int(tok)
+#         update_pity_after_pull(st, rarity)
+
+#     return out10
 
 
 def infer_states_from_history(history_tokens: List[int]) -> Dict[str, BannerState]:
@@ -651,6 +695,8 @@ def generate_campaign28_step2_simulated_outcomes(
 
             # IMPORTANT: do NOT update states here; this outcome is already in history
         else:
+            state_before = copy.deepcopy(states)
+
             out10, info = simulate_outcomes_for_decision(
                 decision=prev_dec,
                 lto4=lto28_tokens,
