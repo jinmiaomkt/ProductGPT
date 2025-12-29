@@ -776,6 +776,7 @@ cfgs = make_banner_cfgs()
 # ----------------------------
 def main():
     cfg = get_config()
+    parser = argparse.ArgumentParser()
 
     parser.add_argument("--trace", action="store_true",
                         help="Print a per-step trace (decision/outcomes/state) to stdout.")
@@ -784,7 +785,6 @@ def main():
     parser.add_argument("--trace_max_steps", type=int, default=200,
                         help="Max number of steps to trace (to avoid huge logs). 0 = no limit.")
 
-    parser = argparse.ArgumentParser()
     parser.add_argument("--step", type=int, choices=[1, 2], default=2,
                         help="1: fixed outcomes after t=0; 2: infer counters + simulate outcomes")
     parser.add_argument("--repeat", type=int, default=1,
