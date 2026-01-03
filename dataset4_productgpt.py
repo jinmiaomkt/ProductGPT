@@ -60,17 +60,17 @@ class TransformerDataset(Dataset):
         num_heads,
         ai_rate,
         pad_token=0,
-        # augmentation controls
         augment_permute_obtained: bool = False,
         lto_len: int = 4,
         obtained_len: int = 10,
         prev_dec_len: int = 1,
         base_seed: int = 12345,
-        # how to locate obtained slice
-        permute_mode: str = "last_block",  # "last_block" (recommended) or "all_blocks"
-        # your caveat
+        permute_mode: str = "last_block",
         only_if_no_zero: bool = True,
+        keep_zeros_tail: bool = True,
+        **kwargs,
     ):
+        self.keep_zeros_tail = keep_zeros_tail
         self.data = data
         self.tok_src = tok_src
         self.tok_tgt = tok_tgt
