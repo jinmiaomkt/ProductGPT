@@ -68,6 +68,11 @@ def _raw_config():
         "s3_bucket":  "productgptbucket",
         "gcp_bucket": "productgptbucket",
         "s3_prefix":  "my_runs",
+
+        # ---------- augmentation ----------
+        "augment_permute_obtained": True,  # enable permutation augmentation for train split
+        "permute_repeat": 5,               # 1 = no repetition; 5 = ~5x more train samples/steps
+
     }
 
 # ─────────────────────────── public helper ─────────────────────────

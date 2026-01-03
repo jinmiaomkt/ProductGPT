@@ -1,104 +1,156 @@
-# dataset4_decision_only.py  ──────────────────────────────────────────────
-# Turns every decision in the raw JSON into *one* training sample whose
-# aggregate_input is the N tokens that precede that decision.
-# ------------------------------------------------------------------------
-
-from __future__ import annotations   # <-- add this as the FIRST import
-import json, itertools
-from pathlib import Path
-from typing import List, Dict
-
 import torch
 from torch.utils.data import Dataset
-from tokenizers import Tokenizer
 
-# ───────────────────────── I/O helper ────────────────────────────────────
-# def load_json_dataset(filepath: str) -> List[Dict]:
-#     with open(filepath, "r") as fp:
-#         return json.load(fp)
+class TransformerDataset(Dataset):
+    def __init__(
+        self,
+        data,
+        tok_src,
+        tok_tgt,
+        seq_len_ai,
+        seq_len_tgt,
+        num_heads,
+        ai_rate,
+        pad_token=0,
+        # augmentation controls
+        augment_permute_obtained: bool = False,
+        lto_len: int = 4,
+        obtained_len: int = 10,
+        prev_dec_len: int = 1,
+        base_seed: int = 12345,
+        # how to locate obtained slice
+        permute_mode: str = "last_block",  # "last_block" (recommended) or "all_blocks"
+        # your caveat
+        only_if_no_zero: bool = True,
+    ):
+        self.data = data
+        self.tok_src = tok_src
+        self.tok_tgt = tok_tgt
+        self.seq_len_ai = seq_len_ai
+        self.seq_len_tgt = seq_len_tgt
+        self.ai_rate = ai_rate
+        self.pad_id = pad_token
 
-# def load_json_dataset(path, keep_uids=None):
-#     raw = json.loads(Path(path).read_text())
-#     # … existing explode logic …
-#     if keep_uids is not None:
-#         data = [r for r in data if str(r["uid"]) in keep_uids]
-#     return data
+        self.augment_permute_obtained = augment_permute_obtained
+        self.lto_len = lto_len
+        self.obtained_len = obtained_len
+        self.prev_dec_len = prev_dec_len
+        self.base_seed = base_seed
+        self.permute_mode = permute_mode
+        self.only_if_no_zero = only_if_no_zero
 
-def load_json_dataset(path: str | Path,
-                      keep_uids: set[str] | None = None):
-    """
-    Return exploded list of records; optionally keep only rows whose UID
-    string is in keep_uids.
-    """
-    raw = json.loads(Path(path).read_text())
+        self.epoch = 0
 
-    # your original explode_record(...) helper here ------------
-    # def explode_record(rec):
-    #     uid = str(rec["uid"][0] if isinstance(rec["uid"], list) else rec["uid"])
-    #     # …
-    #     # yield {"uid": uid, ...}
+        # Basic sanity: expected block length
+        # Some setups have ai_rate == lto_len + obtained_len + prev_dec_len (+1 pad/special)
+        # We do not hard-fail here, but you should confirm offsets are correct.
+        if self.lto_len + self.obtained_len + self.prev_dec_len > self.ai_rate:
+            raise ValueError(
+                f"Invalid offsets: lto_len({lto_len}) + obtained_len({obtained_len}) + "
+                f"prev_dec_len({prev_dec_len}) > ai_rate({ai_rate})."
+            )
 
-    def explode_record(rec):
-        """Take one session dict and yield  N  flattened rows."""
-        uid  = str(rec["uid"][0] if isinstance(rec["uid"], list) else rec["uid"])
-        agg  = rec["AggregateInput"]   # list[str]  length N (your earlier format)
-        decs = rec["Decision"]         # list[int]  length N
-        for t,(inp,lab) in enumerate(zip(agg, decs)):
-            yield {
-                "uid": uid,
-                "t": t,
-                "AggregateInput": inp,
-                "Decision": lab,
-            }
-
-    # build the *full* list first
-    data = list(itertools.chain.from_iterable(
-        explode_record(r) for r in (raw if isinstance(raw, list) else
-                                    [{k: raw[k][i] for k in raw} 
-                                     for i in range(len(raw["uid"]))])
-    ))
-
-    # optional filtering
-    if keep_uids is not None:
-        data = [row for row in data if row["uid"] in keep_uids]
-
-    return data
-
-class TransformerDataset(torch.utils.data.Dataset):
-    def __init__(self,
-                 subset,
-                 tok_ai, tok_tgt,
-                 seq_len_ai, seq_len_tgt,
-                 num_heads, ai_rate,
-                 pad_token=0):
-        self.data      = subset           # reference, not materialised
-        self.tok_ai    = tok_ai
-        self.tok_tgt   = tok_tgt
-        self.seq_ai    = seq_len_ai
-        self.seq_tgt   = seq_len_tgt
-        self.pad_id    = pad_token
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = int(epoch)
 
     def __len__(self):
-        return len(self.data)             # ONE per session
+        return len(self.data)
 
     def _pad(self, ids, L):
-        return ids[:L] + [self.pad_id] * (L - len(ids))
-    
-    def __getitem__(self, idx):
+        ids = ids[:L]
+        if len(ids) < L:
+            ids = ids + [self.pad_id] * (L - len(ids))
+        return ids
+
+    def _maybe_permute_slice_(self, ids: torch.Tensor, a: int, z: int, g: torch.Generator) -> None:
+        """
+        Permute ids[a:z] in-place if it satisfies the 'no zero' caveat.
+        """
+        slice_ = ids[a:z]
+        if slice_.numel() <= 1:
+            return
+
+        # Caveat: only permute if obtained slice contains NO zeros
+        if self.only_if_no_zero and torch.any(slice_ == 0):
+            return
+
+        perm = torch.randperm(slice_.numel(), generator=g)
+        ids[a:z] = slice_[perm]
+
+    def _permute_obtained_inplace(self, ids: torch.Tensor, sample_index: int) -> None:
+        """
+        ids: (seq_len_ai,) int64 tensor
+        Permute the obtained-products slice according to permute_mode.
+        """
+        if not self.augment_permute_obtained:
+            return
+
+        # deterministic per (epoch, sample_index)
+        g = torch.Generator(device="cpu")
+        g.manual_seed(self.base_seed + 1000003 * self.epoch + sample_index)
+
+        start_offset = self.lto_len
+        end_offset = self.lto_len + self.obtained_len  # exclusive
+
+        L = ids.numel()
+
+        if self.permute_mode == "last_block":
+            # Permute obtained slice in the LAST ai_rate tokens (most consistent with decision-only samples)
+            b0 = max(0, L - self.ai_rate)
+            a = b0 + start_offset
+            z = b0 + end_offset
+            if z <= L:
+                self._maybe_permute_slice_(ids, a, z, g)
+            return
+
+        if self.permute_mode == "all_blocks":
+            # Permute obtained slice in EVERY full block
+            for b0 in range(0, L, self.ai_rate):
+                a = b0 + start_offset
+                z = b0 + end_offset
+                if z > L:
+                    break
+                self._maybe_permute_slice_(ids, a, z, g)
+            return
+
+        raise ValueError(f"Unknown permute_mode={self.permute_mode!r}. Use 'last_block' or 'all_blocks'.")
+
+    def __getitem__(self, idx: int):
         rec = self.data[idx]
 
-        # ------------- INPUT -----------------
-        src_txt = " ".join(map(str, rec["AggregateInput"])) \
-                if isinstance(rec["AggregateInput"], (list, tuple)) else str(rec["AggregateInput"])
-        ai_ids  = self._pad(self.tok_ai.encode(src_txt).ids,  self.seq_ai)
+        # ----- UID -----
+        uid = rec.get("uid", "")
 
-        # ------------- TARGET ----------------
-        tgt_txt = " ".join(map(str, rec["Decision"])) \
-                if isinstance(rec["Decision"], (list, tuple)) else str(rec["Decision"])
-        tgt_ids = self._pad(self.tok_tgt.encode(tgt_txt).ids, self.seq_tgt)
+        # ----- INPUT: AggregateInput -----
+        # In your explode_record, AggregateInput is a string already.
+        # But keep compatibility with list/tuple just in case.
+        agg = rec["AggregateInput"]
+        if isinstance(agg, (list, tuple)):
+            src_txt = " ".join(map(str, agg))
+        else:
+            src_txt = str(agg)
+
+        ai_ids = self.tok_src.encode(src_txt).ids
+        ai_ids = self._pad(ai_ids, self.seq_len_ai)
+        enc_input = torch.tensor(ai_ids, dtype=torch.long)
+
+        # ----- TARGET: Decision -----
+        # In explode_record you set Decision = lab (likely int)
+        dec = rec["Decision"]
+        if isinstance(dec, (list, tuple)):
+            tgt_txt = " ".join(map(str, dec))
+        else:
+            tgt_txt = str(dec)
+
+        tgt_ids = self.tok_tgt.encode(tgt_txt).ids
+        tgt_ids = self._pad(tgt_ids, self.seq_len_tgt)
+        label_tensor = torch.tensor(tgt_ids, dtype=torch.long)
+
+        # ----- Augmentation (training only) -----
+        self._permute_obtained_inplace(enc_input, idx)
 
         return {
-            "uid": rec["uid"],
-            "aggregate_input": torch.tensor(ai_ids,  dtype=torch.long),
-            "label":           torch.tensor(tgt_ids, dtype=torch.long),
+            "uid": uid,
+            "aggregate_input": enc_input,
+            "label": label_tensor,
         }
