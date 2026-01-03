@@ -1,5 +1,45 @@
+import json
+import gzip
+from typing import Any, Dict, List
 import torch
 from torch.utils.data import Dataset
+
+def load_json_dataset(path: str) -> List[Dict[str, Any]]:
+    """
+    Loads:
+      - JSON array:  [ {...}, {...}, ... ]
+      - JSONL:       one JSON object per line
+      - optionally gzipped (.gz) versions of either
+    Returns a list of dict records.
+    """
+    opener = gzip.open if path.endswith(".gz") else open
+
+    with opener(path, "rt", encoding="utf-8") as f:
+        first = f.read(1)
+        f.seek(0)
+
+        # JSON array
+        if first == "[":
+            data = json.load(f)
+            if not isinstance(data, list):
+                raise ValueError(f"Expected a JSON list in {path}, got {type(data)}")
+            # best-effort sanity: list of dicts
+            for i, x in enumerate(data[:5]):
+                if not isinstance(x, dict):
+                    raise ValueError(f"Expected dict records; at index {i} got {type(x)}")
+            return data
+
+        # JSONL
+        out: List[Dict[str, Any]] = []
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+            if not isinstance(obj, dict):
+                raise ValueError(f"Expected JSON objects per line in {path}, got {type(obj)}")
+            out.append(obj)
+        return out
 
 class TransformerDataset(Dataset):
     def __init__(
