@@ -225,7 +225,7 @@ class RepeatWithPermutation(torch.utils.data.Dataset):
         # so permutations differ even within the same epoch.
         # Easiest: temporarily override by calling base.__getitem__ with i
         # only if base uses idx as seed. Otherwise, modify base to accept a seed.
-        return self.base.__getitem__(i)  # if your base uses idx for permutation seeding
+        return self.base.__getitem__(base_i)  # if your base uses idx for permutation seeding
 
 
 # ══════════════════════════════ 6. DataLoaders ═══════════════════════=
