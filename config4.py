@@ -43,6 +43,7 @@ def _raw_config():
         "kernel_type": "exp",
         "d_ff": 32,
         "eval_freq": 40,
+        "fold_id": 0,
 
         # ---------- rates ----------
         "source_rate": 10,
