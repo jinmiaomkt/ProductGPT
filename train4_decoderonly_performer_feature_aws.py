@@ -200,31 +200,70 @@ def perplexity(logits: torch.Tensor, targets: torch.Tensor, pad: int = PAD_ID) -
         return float("nan")
     return torch.exp(F.nll_loss(lp2d[mask], tgt[mask], reduction="mean")).item()
 
+class RepeatWithPermutation(torch.utils.data.Dataset):
+    """
+    Treat each base record as K distinct samples by repeating indices.
+    The underlying dataset must support set_epoch() and/or use sample_index
+    in its permutation seeding.
+    """
+    def __init__(self, base_ds, repeat_factor: int):
+        self.base = base_ds
+        self.K = int(repeat_factor)
+        if self.K <= 0:
+            raise ValueError("repeat_factor must be >= 1")
+
+    def set_epoch(self, epoch: int) -> None:
+        if hasattr(self.base, "set_epoch"):
+            self.base.set_epoch(epoch)
+
+    def __len__(self):
+        return len(self.base) * self.K
+
+    def __getitem__(self, i: int):
+        base_i = i % len(self.base)
+        # IMPORTANT: pass a "sample_index" that changes across repeats
+        # so permutations differ even within the same epoch.
+        # Easiest: temporarily override by calling base.__getitem__ with i
+        # only if base uses idx as seed. Otherwise, modify base to accept a seed.
+        return self.base.__getitem__(i)  # if your base uses idx for permutation seeding
+
+
 # ══════════════════════════════ 6. DataLoaders ═══════════════════════=
 def build_dataloaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, DataLoader, Tokenizer]:
-    
+    """
+    Build train/val/test dataloaders (or a single inference loader) plus the target tokenizer.
+
+    Notes
+    -----
+    - Augmentation (obtained-items permutation) is enabled ONLY for the training split.
+    - Tokenizers are saved under cfg["model_folder"] for reproducibility.
+    """
     mode = cfg.get("mode", "train")
 
+    # ── load raw records ────────────────────────────────────────────────
     if mode == "infer":
         raw = load_json_dataset(cfg["test_filepath"], keep_uids=None)
     else:
-        keep = None
+        keep_uids = None
         if mode == "test":
-            keep = set(cfg["uids_test"])
-        elif "uids_trainval" in cfg:
-            keep = set(cfg["uids_trainval"])
-        raw = load_json_dataset(cfg["filepath"], keep_uids=keep)
+            keep_uids = set(cfg["uids_test"])
+        elif "uids_trainval" in cfg and cfg["uids_trainval"] is not None:
+            keep_uids = set(cfg["uids_trainval"])
+        raw = load_json_dataset(cfg["filepath"], keep_uids=keep_uids)
 
-    # ------------- train / val / test splits -------------
+    # ── split ───────────────────────────────────────────────────────────
     if mode == "infer":
-        tr_ds = raw                                   # will be wrapped once
-        va_ds = te_ds = []
+        tr_split, va_split, te_split = raw, [], []
     else:
         n = len(raw)
-        tr, va = int(0.8 * n), int(0.1 * n)
-        g = torch.Generator().manual_seed(33)
-        tr_ds, va_ds, te_ds = random_split(raw, [tr, va, n - tr - va], generator=g)
+        n_train = int(0.8 * n)
+        n_val = int(0.1 * n)
+        n_test = n - n_train - n_val
 
+        g = torch.Generator().manual_seed(33)
+        tr_split, va_split, te_split = random_split(raw, [n_train, n_val, n_test], generator=g)
+
+    # ── tokenizers (fixed numeric vocab) ────────────────────────────────
     tok_src = build_tokenizer_src()
     tok_tgt = build_tokenizer_tgt()
 
@@ -233,7 +272,8 @@ def build_dataloaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, Data
     tok_src.save(str(out_dir / "tokenizer_ai.json"))
     tok_tgt.save(str(out_dir / "tokenizer_tgt.json"))
 
-    def _wrap(split):
+    # ── dataset wrapper ────────────────────────────────────────────────
+    def wrap(split, *, augment: bool) -> TransformerDataset:
         return TransformerDataset(
             split,
             tok_src,
@@ -243,13 +283,41 @@ def build_dataloaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, Data
             cfg["num_heads"],
             cfg["ai_rate"],
             pad_token=PAD_ID,
+            augment_permute_obtained=augment,  # True only for train
+            lto_len=4,
+            obtained_len=10,
+            prev_dec_len=1,
+            # If your dataset class still has keep_zeros_tail, keep it.
+            # If you moved to "only_if_no_zero", pass that instead.
+            keep_zeros_tail=True,
+            base_seed=33,
         )
-    
-    make_loader = lambda ds, sh: DataLoader(ds, batch_size=cfg["batch_size"], shuffle=sh)
 
+    def make_loader(ds, *, shuffle: bool) -> DataLoader:
+        return DataLoader(ds, batch_size=cfg["batch_size"], shuffle=shuffle)
+
+    # ── inference: single loader ───────────────────────────────────────
     if mode == "infer":
-        return make_loader(_wrap(tr_ds), False), None, None, tok_tgt
-    return make_loader(_wrap(tr_ds), True), make_loader(_wrap(va_ds), False), make_loader(_wrap(te_ds), False), tok_tgt
+        inf_ds = wrap(tr_split, augment=False)
+        return make_loader(inf_ds, shuffle=False), None, None, tok_tgt
+
+    # ── train/val/test ─────────────────────────────────────────────────
+    train_ds = wrap(tr_split, augment=True)
+
+    rep = int(cfg.get("permute_repeat", 1))
+    if rep > 1:
+        train_ds = RepeatWithPermutation(train_ds, repeat_factor=rep)
+
+    val_ds   = wrap(va_split, augment=False)
+    test_ds  = wrap(te_split, augment=False)
+
+    # train_loader = make_loader(train_ds, shuffle=True)
+    train_loader = DataLoader(train_ds, batch_size=cfg["batch_size"], shuffle=True)
+
+    val_loader   = make_loader(val_ds, shuffle=False)
+    test_loader  = make_loader(test_ds, shuffle=False)
+
+    return train_loader, val_loader, test_loader, tok_tgt
 
 # ══════════════════════════════ 7. S3 helpers ═════════════════════════
 def _json_safe(o: Any):
@@ -486,6 +554,8 @@ def train_model(cfg: Dict[str, Any]):
     # ---- training -----------------------------------------------------
     best_val_loss, patience = None, 0
     for ep in range(cfg["num_epochs"]):
+        if hasattr(train_dl.dataset, "set_epoch"):
+            train_dl.dataset.set_epoch(ep)
         engine.train()
         running = 0.0
         for batch in tqdm(train_dl, desc=f"Ep {ep:02d}"):
