@@ -1,19 +1,27 @@
 import json
 import gzip
-from typing import Any, Dict, List
 import torch
 from torch.utils.data import Dataset
+from typing import Any, Dict, List, Optional, Iterable, Set
 
-def load_json_dataset(path: str) -> List[Dict[str, Any]]:
+def load_json_dataset(
+    path: str,
+    keep_uids: Optional[Iterable[str]] = None,
+    **kwargs
+) -> List[Dict[str, Any]]:
     """
     Loads:
       - JSON array:  [ {...}, {...}, ... ]
       - JSONL:       one JSON object per line
       - optionally gzipped (.gz) versions of either
-    Returns a list of dict records.
-    """
-    opener = gzip.open if path.endswith(".gz") else open
 
+    Optional:
+      keep_uids: if provided, only keep records whose rec.get("uid") is in keep_uids.
+      **kwargs: ignored (forward-compat for callers that pass extra options).
+    """
+    keep: Optional[Set[str]] = set(keep_uids) if keep_uids is not None else None
+
+    opener = gzip.open if path.endswith(".gz") else open
     with opener(path, "rt", encoding="utf-8") as f:
         first = f.read(1)
         f.seek(0)
@@ -23,11 +31,9 @@ def load_json_dataset(path: str) -> List[Dict[str, Any]]:
             data = json.load(f)
             if not isinstance(data, list):
                 raise ValueError(f"Expected a JSON list in {path}, got {type(data)}")
-            # best-effort sanity: list of dicts
-            for i, x in enumerate(data[:5]):
-                if not isinstance(x, dict):
-                    raise ValueError(f"Expected dict records; at index {i} got {type(x)}")
-            return data
+            if keep is None:
+                return data
+            return [rec for rec in data if isinstance(rec, dict) and rec.get("uid") in keep]
 
         # JSONL
         out: List[Dict[str, Any]] = []
@@ -35,10 +41,12 @@ def load_json_dataset(path: str) -> List[Dict[str, Any]]:
             line = line.strip()
             if not line:
                 continue
-            obj = json.loads(line)
-            if not isinstance(obj, dict):
-                raise ValueError(f"Expected JSON objects per line in {path}, got {type(obj)}")
-            out.append(obj)
+            rec = json.loads(line)
+            if not isinstance(rec, dict):
+                continue
+            if keep is not None and rec.get("uid") not in keep:
+                continue
+            out.append(rec)
         return out
 
 class TransformerDataset(Dataset):
