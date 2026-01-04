@@ -89,6 +89,24 @@ class TransformerDataset(Dataset):
 
         self.epoch = 0
 
+        self._enc_cache = []
+        self._lab_cache = []
+        self._uid_cache = []
+
+        for rec in self.data:
+            uid = rec.get("uid","")
+            agg = rec["AggregateInput"]
+            src_txt = " ".join(map(str, agg)) if isinstance(agg, (list, tuple)) else str(agg)
+            ai_ids = self._pad(self.tok_src.encode(src_txt).ids, self.seq_len_ai)
+
+            dec = rec["Decision"]
+            tgt_txt = " ".join(map(str, dec)) if isinstance(dec, (list, tuple)) else str(dec)
+            tgt_ids = self._pad(self.tok_tgt.encode(tgt_txt).ids, self.seq_len_tgt)
+
+            self._uid_cache.append(uid)
+            self._enc_cache.append(torch.tensor(ai_ids, dtype=torch.long))
+            self._lab_cache.append(torch.tensor(tgt_ids, dtype=torch.long))
+
         # Basic sanity: expected block length
         # Some setups have ai_rate == lto_len + obtained_len + prev_dec_len (+1 pad/special)
         # We do not hard-fail here, but you should confirm offsets are correct.
@@ -163,42 +181,49 @@ class TransformerDataset(Dataset):
 
         raise ValueError(f"Unknown permute_mode={self.permute_mode!r}. Use 'last_block' or 'all_blocks'.")
 
+    # def __getitem__(self, idx: int):
+    #     rec = self.data[idx]
+
+    #     # ----- UID -----
+    #     uid = rec.get("uid", "")
+
+    #     # ----- INPUT: AggregateInput -----
+    #     # In your explode_record, AggregateInput is a string already.
+    #     # But keep compatibility with list/tuple just in case.
+    #     agg = rec["AggregateInput"]
+    #     if isinstance(agg, (list, tuple)):
+    #         src_txt = " ".join(map(str, agg))
+    #     else:
+    #         src_txt = str(agg)
+
+    #     ai_ids = self.tok_src.encode(src_txt).ids
+    #     ai_ids = self._pad(ai_ids, self.seq_len_ai)
+    #     enc_input = torch.tensor(ai_ids, dtype=torch.long)
+
+    #     # ----- TARGET: Decision -----
+    #     # In explode_record you set Decision = lab (likely int)
+    #     dec = rec["Decision"]
+    #     if isinstance(dec, (list, tuple)):
+    #         tgt_txt = " ".join(map(str, dec))
+    #     else:
+    #         tgt_txt = str(dec)
+
+    #     tgt_ids = self.tok_tgt.encode(tgt_txt).ids
+    #     tgt_ids = self._pad(tgt_ids, self.seq_len_tgt)
+    #     label_tensor = torch.tensor(tgt_ids, dtype=torch.long)
+
+    #     # ----- Augmentation (training only) -----
+    #     self._permute_obtained_inplace(enc_input, idx)
+
+    #     return {
+    #         "uid": uid,
+    #         "aggregate_input": enc_input,
+    #         "label": label_tensor,
+    #     }
     def __getitem__(self, idx: int):
-        rec = self.data[idx]
+        enc_input = self._enc_cache[idx].clone()   # clone so permutation doesn't corrupt cache
+        label_tensor = self._lab_cache[idx]
+        uid = self._uid_cache[idx]
 
-        # ----- UID -----
-        uid = rec.get("uid", "")
-
-        # ----- INPUT: AggregateInput -----
-        # In your explode_record, AggregateInput is a string already.
-        # But keep compatibility with list/tuple just in case.
-        agg = rec["AggregateInput"]
-        if isinstance(agg, (list, tuple)):
-            src_txt = " ".join(map(str, agg))
-        else:
-            src_txt = str(agg)
-
-        ai_ids = self.tok_src.encode(src_txt).ids
-        ai_ids = self._pad(ai_ids, self.seq_len_ai)
-        enc_input = torch.tensor(ai_ids, dtype=torch.long)
-
-        # ----- TARGET: Decision -----
-        # In explode_record you set Decision = lab (likely int)
-        dec = rec["Decision"]
-        if isinstance(dec, (list, tuple)):
-            tgt_txt = " ".join(map(str, dec))
-        else:
-            tgt_txt = str(dec)
-
-        tgt_ids = self.tok_tgt.encode(tgt_txt).ids
-        tgt_ids = self._pad(tgt_ids, self.seq_len_tgt)
-        label_tensor = torch.tensor(tgt_ids, dtype=torch.long)
-
-        # ----- Augmentation (training only) -----
         self._permute_obtained_inplace(enc_input, idx)
-
-        return {
-            "uid": uid,
-            "aggregate_input": enc_input,
-            "label": label_tensor,
-        }
+        return {"uid": uid, "aggregate_input": enc_input, "label": label_tensor}
