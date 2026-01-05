@@ -383,6 +383,7 @@ def generate_campaign28_step1_fixed_outcomes(
     stop_decision: int = 9,
     temperature: float = 1.0,
     greedy: bool = False,
+    trace: Optional[TraceCfg] = None,   # NEW
 ) -> Dict[str, Any]:
     assert len(lto28_tokens) == 4, "lto28_tokens must have length 4."
     assert len(fixed_outcomes_after_step0) == 10, "fixed_outcomes_after_step0 must have length 10."
@@ -408,6 +409,9 @@ def generate_campaign28_step1_fixed_outcomes(
     for t in range(max_steps28):
         out10 = outcomes_step0 if t == 0 else fixed_outcomes_after_step0
         block = list(lto28_tokens) + list(out10) + [prev_dec]
+
+        if trace is not None and trace.enabled:
+            print(format_triplet(lto28_tokens, out10, prev_dec), flush=True)
 
         seq_full.extend(block)
         seq_c28.extend(block)
@@ -976,13 +980,6 @@ def main():
     cfg = get_config()
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--trace", action="store_true",
-                        help="Print a per-step trace (decision/outcomes/state) to stdout.")
-    parser.add_argument("--trace_out", type=str, default=None,
-                        help="Optional path to also write trace JSONL.")
-    parser.add_argument("--trace_max_steps", type=int, default=200,
-                        help="Max number of steps to trace (to avoid huge logs). 0 = no limit.")
-
     parser.add_argument("--step", type=int, choices=[1, 2], default=2,
                         help="1: fixed outcomes after t=0; 2: infer counters + simulate outcomes")
     parser.add_argument("--repeat", type=int, default=1,
@@ -1030,6 +1027,16 @@ def main():
                         help="Validate AggregateInput vs Decision and report anomalies.")
     parser.add_argument("--validate_users", type=int, default=50)
     parser.add_argument("--validate_last_k", type=int, default=8)
+
+    # trace
+    parser.add_argument("--trace_triplets", action="store_true",
+                    help="Print generated triplets as [LTO4] [OUT10] [DEC1] line by line.")
+    parser.add_argument("--trace", action="store_true",
+                        help="Print a per-step trace (decision/outcomes/state) to stdout.")
+    parser.add_argument("--trace_out", type=str, default=None,
+                        help="Optional path to also write trace JSONL.")
+    parser.add_argument("--trace_max_steps", type=int, default=200,
+                        help="Max number of steps to trace (to avoid huge logs). 0 = no limit.")
 
     args = parser.parse_args()
 
