@@ -6,6 +6,8 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple, TextIO
 
+from collections import defaultdict
+
 import numpy as np
 import pandas as pd
 import torch
@@ -52,6 +54,165 @@ AI_RATE = 15
 SOS_DEC_ID = 10                 # from your main()
 EOS_PROD_ID_LOCAL = 57          # from your main()
 SOS_PROD_ID_LOCAL = 58          # from your main()
+
+BUY1_DECS  = {1, 3, 5, 7}
+BUY10_DECS = {2, 4, 6, 8}
+NOTBUY_DEC = 9
+
+# These are "special" product IDs that should not appear as real outcomes.
+SPECIAL_PROD_TOKS = {EOS_PROD_ID_LOCAL, SOS_PROD_ID_LOCAL}
+
+@dataclass
+class GenValidationCfg:
+    eos_prod_id: int = EOS_PROD_ID_LOCAL
+    sos_prod_id: int = SOS_PROD_ID_LOCAL
+    require_lto4_match: bool = True
+    # If True: buy-10 must have all 10 outcomes nonzero/non-special.
+    # If False: allow missing outcomes but report warnings.
+    strict_buy10_full: bool = True
+    # If True: treat buy-10 missing outcomes as ERROR; else WARNING.
+    buy10_missing_is_error: bool = True
+    # If True: treat any nonzero tail after buy-1 as ERROR.
+    strict_buy1_tail_zero: bool = True
+
+
+def iter_blocks_from_seq(seq_tokens: List[int], ai_rate: int = AI_RATE):
+    if len(seq_tokens) % ai_rate != 0:
+        raise ValueError(f"seq length {len(seq_tokens)} not divisible by {ai_rate}")
+    n_blocks = len(seq_tokens) // ai_rate
+    for b in range(n_blocks):
+        block = seq_tokens[b*ai_rate:(b+1)*ai_rate]
+        lto4 = block[0:4]
+        out10 = block[4:14]
+        dec1 = int(block[14])
+        yield b, lto4, out10, dec1
+
+
+def _is_valid_real_outcome(tok: int, cfg: GenValidationCfg) -> bool:
+    # Valid realized outcome token: nonzero and not special.
+    if tok == 0:
+        return False
+    if tok in (cfg.eos_prod_id, cfg.sos_prod_id):
+        return False
+    return True
+
+
+def validate_seq_campaign28(
+    seq_campaign28: List[int],
+    expected_lto4: Optional[List[int]],
+    cfg: GenValidationCfg,
+) -> Dict[str, Any]:
+    """
+    Validate generated seq_campaign28 blocks for feasibility invariants.
+    Returns a summary dict and prints detailed issues.
+    """
+    errors: List[str] = []
+    warnings: List[str] = []
+
+    if len(seq_campaign28) == 0:
+        errors.append("seq_campaign28 is empty.")
+        return {"ok": False, "n_blocks": 0, "errors": errors, "warnings": warnings}
+
+    if len(seq_campaign28) % AI_RATE != 0:
+        errors.append(f"seq_campaign28 length {len(seq_campaign28)} not divisible by {AI_RATE}.")
+        return {"ok": False, "n_blocks": 0, "errors": errors, "warnings": warnings}
+
+    n_blocks = len(seq_campaign28) // AI_RATE
+
+    for b, lto4, out10, dec1 in iter_blocks_from_seq(seq_campaign28, AI_RATE):
+
+        # (Optional) check LTO4 is constant and matches args.lto28
+        if cfg.require_lto4_match and expected_lto4 is not None:
+            if list(lto4) != list(expected_lto4):
+                errors.append(f"b={b}: LTO4 mismatch. got={lto4} expected={expected_lto4}")
+
+        # Check SOS never appears in OUT10
+        if cfg.sos_prod_id in out10:
+            errors.append(f"b={b}: SOS_PROD_ID={cfg.sos_prod_id} appears in OUT10: {out10}")
+
+        # Enforce EOS appearance rules:
+        # - If dec1==9: OUT10 must be [EOS,0,...,0]
+        # - Otherwise: EOS must not appear anywhere in OUT10
+        if dec1 == NOTBUY_DEC:
+            expected = [cfg.eos_prod_id] + [0]*9
+            if list(out10) != expected:
+                errors.append(f"b={b}: DEC1==9 but OUT10 invalid. got={out10} expected={expected}")
+
+            # Also ensure EOS appears only at position 0 (redundant if exact match)
+            if any(tok == cfg.eos_prod_id for tok in out10[1:]):
+                errors.append(f"b={b}: DEC1==9 but EOS appears after OUT10[0]: {out10}")
+
+        else:
+            if cfg.eos_prod_id in out10:
+                errors.append(f"b={b}: DEC1={dec1} but EOS_PROD_ID appears in OUT10: {out10}")
+
+        # Buy-1 rules
+        if dec1 in BUY1_DECS:
+            if not _is_valid_real_outcome(int(out10[0]), cfg):
+                errors.append(f"b={b}: buy-1 DEC1={dec1} but OUT10[0] not a valid realized token: {out10[0]} out10={out10}")
+
+            tail = out10[1:]
+            if cfg.strict_buy1_tail_zero and any(int(x) != 0 for x in tail):
+                errors.append(f"b={b}: buy-1 DEC1={dec1} but OUT10[1:] contains nonzero: out10={out10}")
+
+            # Also disallow special tokens as realized in OUT10[0]
+            if int(out10[0]) in SPECIAL_PROD_TOKS:
+                errors.append(f"b={b}: buy-1 DEC1={dec1} but OUT10[0] is special token {out10[0]} out10={out10}")
+
+        # Buy-10 rules
+        if dec1 in BUY10_DECS:
+            realized = [int(x) for x in out10 if _is_valid_real_outcome(int(x), cfg)]
+            num_realized = len(realized)
+
+            # If strict: require all 10 realized outcomes
+            if cfg.strict_buy10_full:
+                if num_realized != 10:
+                    msg = f"b={b}: buy-10 DEC1={dec1} but realized outcomes={num_realized}/10. out10={out10}"
+                    if cfg.buy10_missing_is_error:
+                        errors.append(msg)
+                    else:
+                        warnings.append(msg)
+            else:
+                # non-strict: allow fewer, but warn if very low
+                if num_realized < 10:
+                    warnings.append(f"b={b}: buy-10 DEC1={dec1} has only {num_realized}/10 realized outcomes. out10={out10}")
+
+            # Ensure no special tokens appear in OUT10 for buy-10
+            if any(int(x) in SPECIAL_PROD_TOKS for x in out10):
+                errors.append(f"b={b}: buy-10 DEC1={dec1} but OUT10 contains special token(s): out10={out10}")
+
+        # Not-buy already handled EOS rule; also ensure no other realized tokens
+        if dec1 == NOTBUY_DEC:
+            # By exact match, only EOS at [0] is allowed and rest zeros.
+            pass
+
+        # Unknown decision id
+        if dec1 not in BUY1_DECS and dec1 not in BUY10_DECS and dec1 != NOTBUY_DEC:
+            errors.append(f"b={b}: unknown DEC1={dec1}")
+
+    ok = (len(errors) == 0)
+
+    # Print concise report
+    print("\n=== GENERATED SEQ VALIDATION ===")
+    print(f"Blocks checked: {n_blocks}")
+    print(f"OK: {ok}")
+    print(f"Errors: {len(errors)}  Warnings: {len(warnings)}")
+
+    if errors:
+        print("\n[ERRORS]")
+        for e in errors[:50]:
+            print("  " + e)
+        if len(errors) > 50:
+            print(f"  ... ({len(errors)-50} more)")
+
+    if warnings:
+        print("\n[WARNINGS]")
+        for w in warnings[:50]:
+            print("  " + w)
+        if len(warnings) > 50:
+            print(f"  ... ({len(warnings)-50} more)")
+
+    return {"ok": ok, "n_blocks": n_blocks, "errors": errors, "warnings": warnings}
 
 def extract_block_decs(history_tokens):
     n_blocks = len(history_tokens) // AI_RATE
@@ -687,6 +848,9 @@ def simulate_outcomes_for_decision(
     banner, n_pulls = decision_to_banner_and_pulls(decision)
     info = {"banner": banner, "pulls": n_pulls}
 
+    if decision == DEC_NOT_BUY:
+        return [EOS_PROD_ID_LOCAL] + [0]*9, info
+
     out10 = [0] * 10
 
     if n_pulls == 0 or banner == "none":
@@ -784,6 +948,390 @@ def infer_states_from_history(history_tokens: List[int]) -> Dict[str, BannerStat
 
     return states
 
+
+def rarity_from_token(tok: int) -> int:
+    # Mirror your inference logic:
+    # 5* tokens: 15,17,18..56
+    # 4*: 14,16
+    # else: 3
+    if tok in (15, 17) or (18 <= tok <= 56):
+        return 5
+    if tok in (14, 16):
+        return 4
+    return 3
+
+def decision_to_banner_and_pulls(dec: int) -> Tuple[str, int]:
+    if dec == 1: return "regular", 1
+    if dec == 2: return "regular", 10
+    if dec == 3: return "figure_a", 1
+    if dec == 4: return "figure_a", 10
+    if dec == 5: return "figure_b", 1
+    if dec == 6: return "figure_b", 10
+    if dec == 7: return "weapon", 1
+    if dec == 8: return "weapon", 10
+    if dec == 9: return "none", 0
+    return "unknown", 0
+
+def update_pity_after_pull(st: Dict[str, Any], rarity: int) -> None:
+    st["pity5"] += 1
+    st["pity4"] += 1
+    if rarity == 5:
+        st["pity5"] = 0
+        st["pity4"] = 0
+    elif rarity == 4:
+        st["pity4"] = 0
+
+def apply_guarantee_inference(
+    banner: str,
+    tok: int,
+    lto4: List[int],
+    st: Dict[str, Any],
+) -> None:
+    """
+    Apply the same *inference-style* guarantee update you used in infer_states_from_history:
+      - if banner has featured and tok is 5*:
+          - if tok not in featured set -> guarantee_featured_5 = True
+          - else -> guarantee_featured_5 = False
+    """
+    if not (tok in (15, 17) or (18 <= tok <= 56)):
+        return  # only meaningful for 5*
+
+    figA, figB, wep1, wep2 = lto4
+
+    if banner in ("figure_a", "figure_b"):
+        featured = figA if banner == "figure_a" else figB
+        if featured != 0 and tok != featured:
+            st["guarantee_featured_5"] = True
+        else:
+            st["guarantee_featured_5"] = False
+
+    elif banner == "weapon":
+        featured_pool = [t for t in [wep1, wep2] if t != 0]
+        if featured_pool and tok not in featured_pool:
+            st["guarantee_featured_5"] = True
+        else:
+            st["guarantee_featured_5"] = False
+
+# def validate_trace_state_consistency(
+#     trace_jsonl_path: str,
+#     lto4: List[int],
+#     eos_prod_id: int = EOS_PROD_ID,
+#     sos_prod_id: int = SOS_PROD_ID,
+#     hard_pity5_map: Optional[Dict[str, int]] = None,
+#     hard_pity4: int = 10,
+# ) -> Dict[str, Any]:
+#     """
+#     Validate Step-2 trace JSONL:
+#       - state_after equals applying updates to state_before given prev_dec and out10 (for t>=1)
+#       - pity counters remain feasible
+#     """
+#     if hard_pity5_map is None:
+#         hard_pity5_map = {"regular": 90, "figure_a": 90, "figure_b": 90, "weapon": 80}
+
+#     errors = []
+#     total = 0
+
+#     def _state_equal(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+#         # compare only the fields you track
+#         keys = ["pity5","pity4","guarantee_featured_5","guarantee_featured_4","fate_points","epitomized_target"]
+#         return all(int(a.get(k,0)) == int(b.get(k,0)) if isinstance(a.get(k,0),(int,bool)) else a.get(k)==b.get(k) for k in keys)
+
+#     with open(trace_jsonl_path, "rt") as f:
+#         for line in f:
+#             line = line.strip()
+#             if not line:
+#                 continue
+#             rec = json.loads(line)
+#             if int(rec.get("step", 0)) != 2:
+#                 continue
+
+#             total += 1
+#             t = int(rec["t"])
+#             prev_dec = int(rec["prev_dec"])
+#             out10 = [int(x) for x in rec["out10"]]
+
+#             # Check special tokens do not appear as realized pulls
+#             if sos_prod_id in out10:
+#                 errors.append(f"t={t}: SOS appears in out10={out10}")
+
+#             # EOS should appear only when prev_dec==9 and only at position 0
+#             if prev_dec == 9:
+#                 expected = [eos_prod_id] + [0]*9
+#                 if out10 != expected:
+#                     errors.append(f"t={t}: prev_dec=9 but out10 invalid. got={out10} expected={expected}")
+#             else:
+#                 if eos_prod_id in out10:
+#                     errors.append(f"t={t}: prev_dec={prev_dec} but EOS appears in out10={out10}")
+
+#             # For t==0 you explicitly don't update states; skip state transition check
+#             if t == 0:
+#                 continue
+
+#             banner, n_pulls = decision_to_banner_and_pulls(prev_dec)
+#             if banner in ("none","unknown") or n_pulls == 0:
+#                 # should have no realized outcomes
+#                 # (under your schema: if prev_dec==9, we already enforced EOS-only above)
+#                 pass
+
+#             state_before = rec["state_before"][banner] if banner in rec["state_before"] else None
+#             state_after  = rec["state_after"][banner]  if banner in rec["state_after"]  else None
+
+#             if state_before is None or state_after is None:
+#                 errors.append(f"t={t}: missing banner state for banner={banner}")
+#                 continue
+
+#             # Recompute expected after-state
+#             st = dict(state_before)
+
+#             # Apply n_pulls pulls (use first n_pulls tokens in out10)
+#             for k in range(n_pulls):
+#                 tok = int(out10[k])
+#                 if tok == 0:
+#                     # treat as missing; still a consistency issue in strict mode
+#                     continue
+#                 if tok in (eos_prod_id, sos_prod_id):
+#                     continue
+#                 apply_guarantee_inference(banner, tok, lto4, st)
+#                 rarity = rarity_from_token(tok)
+#                 update_pity_after_pull(st, rarity)
+
+#             # Compare
+#             if not _state_equal(st, state_after):
+#                 errors.append(
+#                     f"t={t}: state mismatch for banner={banner}. "
+#                     f"expected={st} got={state_after}"
+#                 )
+
+#             # Feasibility: pity counters should be < hard thresholds
+#             hard5 = int(hard_pity5_map.get(banner, 90))
+#             if int(state_after.get("pity5", 0)) >= hard5:
+#                 errors.append(f"t={t}: pity5 infeasible (>=hard) banner={banner} pity5={state_after.get('pity5')} hard={hard5}")
+#             if int(state_after.get("pity4", 0)) >= hard_pity4:
+#                 errors.append(f"t={t}: pity4 infeasible (>=hard) banner={banner} pity4={state_after.get('pity4')} hard={hard_pity4}")
+
+#     ok = (len(errors) == 0)
+#     print("\n=== TRACE STATE CONSISTENCY VALIDATION ===")
+#     print(f"Records checked: {total}")
+#     print(f"OK: {ok}")
+#     print(f"Errors: {len(errors)}")
+#     if errors:
+#         print("\n[ERRORS]")
+#         for e in errors[:50]:
+#             print("  " + e)
+#         if len(errors) > 50:
+#             print(f"  ... ({len(errors)-50} more)")
+
+#     return {"ok": ok, "records": total, "errors": errors}
+
+# from collections import defaultdict
+
+def _state_equal_dict(a: Dict[str, Any], b: Dict[str, Any], keys: List[str]) -> bool:
+    for k in keys:
+        if a.get(k) != b.get(k):
+            return False
+    return True
+
+def _apply_one_pull_update_for_banner(
+    banner: str,
+    tok: int,
+    lto4: List[int],
+    st: Dict[str, Any],
+    use_epitomized: bool,
+) -> None:
+    # Update guarantee_featured_5 (your inference-style logic)
+    apply_guarantee_inference(banner, tok, lto4, st)
+
+    # Update pity counters
+    rarity = rarity_from_token(tok)
+    update_pity_after_pull(st, rarity)
+
+    # Weapon epitomized fate points logic (only if target set)
+    if use_epitomized and banner == "weapon" and rarity == 5:
+        tgt = int(st.get("epitomized_target", 0) or 0)
+        if tgt != 0:
+            if tok == tgt:
+                st["fate_points"] = 0
+            else:
+                st["fate_points"] = min(2, int(st.get("fate_points", 0)) + 1)
+
+def validate_trace_state_consistency(
+    trace_jsonl_path: str,
+    lto4: List[int],
+    eos_prod_id: int = EOS_PROD_ID_LOCAL,
+    sos_prod_id: int = SOS_PROD_ID_LOCAL,
+    hard_pity5_map: Optional[Dict[str, int]] = None,
+    hard_pity4: int = 10,
+) -> Dict[str, Any]:
+    if hard_pity5_map is None:
+        hard_pity5_map = {"regular": 90, "figure_a": 90, "figure_b": 90, "weapon": 80}
+
+    # group records by (uid, run)
+    groups = defaultdict(list)
+    total_records = 0
+    parse_errors = 0
+
+    with open(trace_jsonl_path, "rt") as f:
+        for ln, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                parse_errors += 1
+                continue
+            if int(rec.get("step", -1)) != 2:
+                continue
+            uid = rec.get("uid", "")
+            run = int(rec.get("run", 0))
+            t = int(rec.get("t", -1))
+            groups[(uid, run)].append(rec)
+            total_records += 1
+
+    errors: List[str] = []
+    warnings: List[str] = []
+
+    STATE_KEYS = ["pity5","pity4","guarantee_featured_5","guarantee_featured_4","fate_points","epitomized_target"]
+
+    for (uid, run), recs in groups.items():
+        recs.sort(key=lambda r: int(r["t"]))
+
+        # ---- Cross-record checks: t monotonic + prev_dec chaining ----
+        for i, r in enumerate(recs):
+            t = int(r["t"])
+            if t != i:
+                warnings.append(f"uid={uid} run={run}: non-contiguous t (expected {i}, got {t}); trace_max_steps may truncate.")
+
+        for i in range(len(recs) - 1):
+            cur = recs[i]
+            nxt = recs[i + 1]
+
+            cur_prev = int(cur["prev_dec"])
+            cur_sampled = int(cur["sampled_dec"])
+            nxt_prev = int(nxt["prev_dec"])
+
+            # Once you stop (sampled_dec == 9), generation breaks, so there should be no next record.
+            if cur_sampled == 9:
+                errors.append(f"uid={uid} run={run}: sampled_dec==9 at t={cur['t']} but trace continues at t={nxt['t']}.")
+                break
+
+            if nxt_prev != cur_sampled:
+                errors.append(
+                    f"uid={uid} run={run}: decision chaining mismatch: "
+                    f"t={cur['t']} sampled_dec={cur_sampled} but t={nxt['t']} prev_dec={nxt_prev}"
+                )
+
+        # ---- Per-record checks: mechanics ----
+        for r in recs:
+            t = int(r["t"])
+            prev_dec = int(r["prev_dec"])
+            out10 = [int(x) for x in r["out10"]]
+
+            # EOS/SOS in OUT10 rules
+            if sos_prod_id in out10:
+                errors.append(f"uid={uid} run={run} t={t}: SOS appears in OUT10={out10}")
+
+            if prev_dec == 9:
+                expected = [eos_prod_id] + [0]*9
+                if out10 != expected:
+                    errors.append(f"uid={uid} run={run} t={t}: prev_dec=9 but OUT10 invalid: got={out10} expected={expected}")
+            else:
+                if eos_prod_id in out10:
+                    errors.append(f"uid={uid} run={run} t={t}: prev_dec={prev_dec} but EOS appears in OUT10={out10}")
+
+            # outcome_source sanity
+            src = r.get("outcome_source", "")
+            if t == 0 and src != "history_c27_lastblock":
+                warnings.append(f"uid={uid} run={run} t=0: outcome_source={src} (expected history_c27_lastblock)")
+            if t >= 1 and src != "simulated":
+                warnings.append(f"uid={uid} run={run} t={t}: outcome_source={src} (expected simulated)")
+
+            # t==0: you intentionally do not update states; verify state_before == state_after
+            if t == 0:
+                if r["state_before"] != r["state_after"]:
+                    errors.append(f"uid={uid} run={run} t=0: state_before != state_after (should be unchanged at t=0)")
+                continue
+
+            banner, n_pulls = decision_to_banner_and_pulls(prev_dec)
+
+            # For prev_dec==9, n_pulls=0. Your schema still has OUT10=[EOS,0..]
+            # and states should not change.
+            if prev_dec == 9 or banner == "none" or n_pulls == 0:
+                if r["state_before"] != r["state_after"]:
+                    errors.append(f"uid={uid} run={run} t={t}: prev_dec=9 but states changed")
+                continue
+
+            sb_all = r["state_before"]
+            sa_all = r["state_after"]
+
+            if banner not in sb_all or banner not in sa_all:
+                errors.append(f"uid={uid} run={run} t={t}: missing banner={banner} in state_before/after")
+                continue
+
+            # Unaffected banners should not change
+            for bname in sb_all.keys():
+                if bname == banner:
+                    continue
+                if sb_all[bname] != sa_all[bname]:
+                    errors.append(f"uid={uid} run={run} t={t}: banner={banner} changed state of unrelated banner={bname}")
+
+            # Recompute expected after-state for the affected banner
+            st = dict(sb_all[banner])
+            use_epitomized = (banner == "weapon" and int(st.get("epitomized_target", 0) or 0) != 0)
+
+            for k in range(n_pulls):
+                tok = int(out10[k])
+                if tok == 0:
+                    # missingness; if you don't expect this, treat as error
+                    warnings.append(f"uid={uid} run={run} t={t}: tok==0 within realized pulls (k={k}) out10={out10}")
+                    continue
+                if tok in (eos_prod_id, sos_prod_id):
+                    errors.append(f"uid={uid} run={run} t={t}: special token {tok} in realized pulls out10={out10}")
+                    continue
+
+                _apply_one_pull_update_for_banner(banner, tok, lto4, st, use_epitomized)
+
+            expected_after = st
+            got_after = sa_all[banner]
+
+            if not _state_equal_dict(expected_after, got_after, STATE_KEYS):
+                errors.append(
+                    f"uid={uid} run={run} t={t}: state mismatch banner={banner}. "
+                    f"expected={expected_after} got={got_after}"
+                )
+
+            # Feasibility checks
+            hard5 = int(hard_pity5_map.get(banner, 90))
+            if int(got_after.get("pity5", 0)) >= hard5:
+                errors.append(f"uid={uid} run={run} t={t}: pity5 infeasible banner={banner} pity5={got_after.get('pity5')} hard={hard5}")
+            if int(got_after.get("pity4", 0)) >= hard_pity4:
+                errors.append(f"uid={uid} run={run} t={t}: pity4 infeasible banner={banner} pity4={got_after.get('pity4')} hard={hard_pity4}")
+
+    ok = (len(errors) == 0)
+
+    print("\n=== TRACE STATE CONSISTENCY VALIDATION ===")
+    print(f"Trace file: {trace_jsonl_path}")
+    print(f"Groups (uid,run): {len(groups)}")
+    print(f"Records checked: {total_records}")
+    print(f"Parse errors: {parse_errors}")
+    print(f"OK: {ok}")
+    print(f"Errors: {len(errors)}  Warnings: {len(warnings)}")
+
+    if errors:
+        print("\n[ERRORS]")
+        for e in errors[:50]:
+            print("  " + e)
+        if len(errors) > 50:
+            print(f"  ... ({len(errors)-50} more)")
+
+    if warnings:
+        print("\n[WARNINGS]")
+        for w in warnings[:50]:
+            print("  " + w)
+        if len(warnings) > 50:
+            print(f"  ... ({len(warnings)-50} more)")
+
+    return {"ok": ok, "groups": len(groups), "records": total_records, "errors": errors, "warnings": warnings}
 
 @torch.no_grad()
 def generate_campaign28_step2_simulated_outcomes(
@@ -909,7 +1457,8 @@ def generate_campaign28_step2_simulated_outcomes(
                 "sampled_dec_name": dec_name,
             }
             # _trace_emit(rec, do_print=True, fout=trace_fout)
-            _trace_emit(rec, do_print=True, fout=None)
+            # _trace_emit(rec, do_print=True, fout=None)
+            _trace_emit(rec, do_print=True, fout=trace_fout)
 
         decisions28.append(dec)
 
@@ -1027,6 +1576,8 @@ def main():
                         help="Validate AggregateInput vs Decision and report anomalies.")
     parser.add_argument("--validate_users", type=int, default=50)
     parser.add_argument("--validate_last_k", type=int, default=8)
+    parser.add_argument("--validate_trace_states", action="store_true",
+                        help="Validate Step-2 trace file (requires --trace_out and --trace).")
 
     # trace
     parser.add_argument("--trace_triplets", action="store_true",
@@ -1222,6 +1773,20 @@ def main():
                         run_seed=run_seed,
                         trace_fout=trace_fout,
                     )
+
+                    val_cfg = GenValidationCfg(
+                        require_lto4_match=True,
+                        strict_buy10_full=True,
+                        buy10_missing_is_error=True,
+                    )
+
+                    # Validate generated seq_campaign28 in-memory
+                    _ = validate_seq_campaign28(
+                        seq_campaign28=out["seq_campaign28"],
+                        expected_lto4=list(args.lto28),
+                        cfg=val_cfg,
+                    )
+
                     payload = {
                         "uid": uid,
                         "step": 2,
@@ -1250,6 +1815,22 @@ def main():
 
     if trace_fout is not None:
         trace_fout.close()
+
+    if args.trace_out is not None and not args.trace:
+        raise ValueError("--trace_out requires --trace to be enabled")
+
+    if args.validate_trace_states:
+        if args.step != 2:
+            raise ValueError("--validate_trace_states requires --step 2")
+        if args.trace_out is None:
+            raise ValueError("--validate_trace_states requires --trace_out")
+        # Ensure trace was actually written
+        validate_trace_state_consistency(
+            trace_jsonl_path=args.trace_out,
+            lto4=list(args.lto28),
+            eos_prod_id=EOS_PROD_ID_LOCAL,
+            sos_prod_id=SOS_PROD_ID_LOCAL,
+        )
 
     if processed == 0:
         raise ValueError("No matching consumer found. Check --uid or input data.")
