@@ -22,18 +22,6 @@ class TraceCfg:
     max_steps: int = 200   # 0 means no limit
     fout: Optional[TextIO] = None
 
-# def _trace_emit(
-#     rec: dict,
-#     do_print: bool = True,
-#     fout: Optional[TextIO] = None,
-# ):
-#     line = json.dumps(rec, ensure_ascii=False)
-#     if do_print:
-#         print(line, flush=True)
-#     if fout is not None:
-#         fout.write(line + "\n")
-#         fout.flush()
-
 def _json_fallback(o):
     # dataclasses
     if hasattr(o, "__dataclass_fields__"):
@@ -61,6 +49,56 @@ def _trace_emit(rec: dict, do_print: bool = True, fout: Optional[TextIO] = None)
 # Constants / Token meanings
 # ----------------------------
 AI_RATE = 15
+SOS_DEC_ID = 10                 # from your main()
+EOS_PROD_ID_LOCAL = 57          # from your main()
+SOS_PROD_ID_LOCAL = 58          # from your main()
+
+def extract_block_decs(history_tokens):
+    n_blocks = len(history_tokens) // AI_RATE
+    return [int(history_tokens[i*AI_RATE + 14]) for i in range(n_blocks)]
+
+def maybe_append_missing_terminal_block(
+    history_tokens: list[int],
+    decision_tokens: list[int],
+    terminal_prod_tok: int = EOS_PROD_ID_LOCAL,  # recommended: 57
+) -> tuple[list[int], bool]:
+    """
+    If Decision has one extra terminal decision (commonly 9) not present in AggregateInput,
+    append one last [LTO4][OUT10][DEC1] block:
+      LTO4 = last block's LTO4
+      OUT10 = [terminal_prod_tok, 0, ..., 0]
+      DEC1 = decision_tokens[-1]
+    """
+    if len(history_tokens) % AI_RATE != 0:
+        raise ValueError("history_tokens length must be divisible by 15")
+
+    if not decision_tokens:
+        return history_tokens, False
+
+    block_decs = extract_block_decs(history_tokens)
+
+    # Many datasets start AggregateInput with a SOS_DEC block; Decision often excludes that.
+    if block_decs and block_decs[0] == SOS_DEC_ID:
+        block_decs_no_sos = block_decs[1:]
+    else:
+        block_decs_no_sos = block_decs
+
+    # Case 1 (clean): Decision matches all existing blocks and has exactly one extra at the end.
+    if (len(decision_tokens) == len(block_decs_no_sos) + 1 and
+        decision_tokens[:len(block_decs_no_sos)] == block_decs_no_sos):
+        last_lto4 = history_tokens[-AI_RATE : -AI_RATE + 4]
+        new_block = list(last_lto4) + [int(terminal_prod_tok)] + [0]*9 + [int(decision_tokens[-1])]
+        return history_tokens + new_block, True
+
+    # Case 2 (pragmatic): the last decision differs; append if Decision ends with 9 but AggregateInput doesn’t.
+    # This avoids breaking your inference run on the specific issue you described.
+    if decision_tokens[-1] == 9 and (not block_decs_no_sos or block_decs_no_sos[-1] != 9):
+        last_lto4 = history_tokens[-AI_RATE : -AI_RATE + 4]
+        new_block = list(last_lto4) + [int(terminal_prod_tok)] + [0]*9 + [9]
+        return history_tokens + new_block, True
+
+    return history_tokens, False
+
 DECISION_IDS = torch.tensor([1, 2, 3, 4, 5, 6, 7, 8, 9], dtype=torch.long)
 
 DECISION_META = {
@@ -186,6 +224,123 @@ def extract_last_outcomes_from_history(history_tokens: List[int], ai_rate: int =
     last_block = history_tokens[-ai_rate:]
     return last_block[4:14]  # length 10
 
+def iter_blocks(history_tokens: List[int], ai_rate: int = AI_RATE):
+    assert len(history_tokens) % ai_rate == 0
+    n_blocks = len(history_tokens) // ai_rate
+    for b in range(n_blocks):
+        block = history_tokens[b*ai_rate:(b+1)*ai_rate]
+        lto4 = block[0:4]
+        out10 = block[4:14]
+        dec1 = int(block[14])
+        yield b, lto4, out10, dec1
+
+def format_triplet(lto4: List[int], out10: List[int], dec1: int) -> str:
+    # exact requested format: [LTO4] [OUT10] [DEC1]
+    return f"[{' '.join(map(str, lto4))}] [{' '.join(map(str, out10))}] [{dec1}]"
+
+def extract_dec1_sequence_from_aggregate(history_tokens: List[int]) -> List[int]:
+    return [dec1 for _, _, _, dec1 in iter_blocks(history_tokens)]
+
+def validate_one_user(uid: str, history_tokens: List[int], decision_tokens: List[int],
+                      k_last: int = 8, sos_dec_id: int = 10, stop_dec_id: int = 9) -> Dict[str, Any]:
+    """
+    Returns summary stats and prints a concise tail comparison.
+    - Drops leading SOS (10) from AggregateInput DEC1 stream if present.
+    - Detects terminal-stop extra decision in `Decision` (common) and reports it.
+    - Counts "DEC1==9 but OUT10 has nonzero" within AggregateInput.
+    """
+    decs_agg = extract_dec1_sequence_from_aggregate(history_tokens)
+    has_sos = (len(decs_agg) > 0 and decs_agg[0] == sos_dec_id)
+    decs_agg_nos = decs_agg[1:] if has_sos else decs_agg
+
+    # Count not-buy blocks with nonzero outcomes
+    notbuy_nonzero = 0
+    examples_notbuy = []
+    for b, lto4, out10, dec1 in iter_blocks(history_tokens):
+        if dec1 == stop_dec_id and any(x != 0 for x in out10):
+            notbuy_nonzero += 1
+            if len(examples_notbuy) < 3:
+                examples_notbuy.append((b, lto4, out10, dec1))
+
+    # Alignment checks
+    min_len = min(len(decs_agg_nos), len(decision_tokens))
+    prefix_match = (decs_agg_nos[:min_len] == decision_tokens[:min_len])
+
+    terminal_extra = False
+    if len(decision_tokens) == len(decs_agg_nos) + 1 and prefix_match:
+        terminal_extra = True
+
+    # Print tail diagnostics
+    tail_agg = decs_agg_nos[-k_last:] if len(decs_agg_nos) >= k_last else decs_agg_nos
+    tail_dec = decision_tokens[-k_last:] if len(decision_tokens) >= k_last else decision_tokens
+
+    print(f"\n[UID] {uid}")
+    print(f"  Aggregate blocks: {len(decs_agg)} (has_sos={has_sos}) -> compare len={len(decs_agg_nos)}")
+    print(f"  Decision len: {len(decision_tokens)}")
+    print(f"  Prefix match up to min_len={min_len}: {prefix_match}")
+    print(f"  Terminal extra decision in Decision: {terminal_extra}")
+    print(f"  Tail Aggregate DEC1: {tail_agg}")
+    print(f"  Tail Decision:       {tail_dec}")
+    print(f"  Count DEC1==9 but OUT10 nonzero in AggregateInput: {notbuy_nonzero}")
+
+    if examples_notbuy:
+        print("  Examples of [LTO4][OUT10][DEC1==9] with nonzero OUT10:")
+        for b, lto4, out10, dec1 in examples_notbuy:
+            print(f"    block={b}: {format_triplet(lto4, out10, dec1)}")
+
+    # Also print last k triplets from AggregateInput for manual inspection
+    blocks = list(iter_blocks(history_tokens))
+    tail_blocks = blocks[-k_last:] if len(blocks) >= k_last else blocks
+    print("  Last triplets from AggregateInput:")
+    for b, lto4, out10, dec1 in tail_blocks:
+        print(f"    b={b}: {format_triplet(lto4, out10, dec1)}")
+
+    return {
+        "uid": uid,
+        "has_sos": has_sos,
+        "len_agg_blocks": len(decs_agg),
+        "len_agg_compare": len(decs_agg_nos),
+        "len_decision": len(decision_tokens),
+        "prefix_match": prefix_match,
+        "terminal_extra": terminal_extra,
+        "notbuy_nonzero": notbuy_nonzero,
+    }
+
+def batch_validate(data_path: str, n_users: int = 50, k_last: int = 8):
+    """
+    Iterates through dataset and prints per-user tail diagnostics + global summary.
+    """
+    total = 0
+    mismatch = 0
+    terminal_extra_cnt = 0
+    any_notbuy_nonzero = 0
+    sum_notbuy_nonzero = 0
+
+    for row in _iter_rows(data_path):
+        uid = row["uid"][0] if isinstance(row.get("uid"), list) else row.get("uid")
+        history_tokens = parse_int_sequence(row["AggregateInput"], na_to=0)
+        decision_tokens = parse_int_sequence(row["Decision"]) if "Decision" in row else []
+
+        info = validate_one_user(uid, history_tokens, decision_tokens, k_last=k_last)
+
+        total += 1
+        if not info["prefix_match"]:
+            mismatch += 1
+        if info["terminal_extra"]:
+            terminal_extra_cnt += 1
+        if info["notbuy_nonzero"] > 0:
+            any_notbuy_nonzero += 1
+            sum_notbuy_nonzero += info["notbuy_nonzero"]
+
+        if n_users and total >= n_users:
+            break
+
+    print("\n=== GLOBAL SUMMARY ===")
+    print(f"Users checked: {total}")
+    print(f"Users with prefix mismatch (Aggregate vs Decision): {mismatch}")
+    print(f"Users with terminal-extra decision (Decision len = Aggregate len + 1): {terminal_extra_cnt}")
+    print(f"Users with any (DEC1==9 AND OUT10 nonzero) blocks: {any_notbuy_nonzero}")
+    print(f"Total such blocks across checked users: {sum_notbuy_nonzero}")
 
 # ----------------------------
 # Model sampling (decision)
@@ -554,42 +709,6 @@ def simulate_outcomes_for_decision(
 
     return out10, info
 
-
-# def simulate_outcomes_for_decision(
-#     decision: int,
-#     lto4: List[int],
-#     states: Dict[str, BannerState],
-#     rng: np.random.Generator,
-#     use_epitomized: bool = False,
-# ) -> List[int]:
-#     """
-#     Produce OUT10 for the decision (0/1/10 pulls), enforcing feasibility:
-#       - 0 pulls: all zeros
-#       - 1 pull: exactly 1 nonzero then zeros
-#       - 10 pulls: up to 10 nonzero
-#     """
-#     banner, n_pulls = decision_to_banner_and_pulls(decision)
-#     out10 = [0] * 10
-
-#     if n_pulls == 0 or banner == "none":
-#         return out10
-
-#     if banner not in states:
-#         # unknown banner -> treat as no outcomes
-#         return out10
-
-#     st = states[banner]
-#     cfg = cfgs[banner]
-
-#     for k in range(n_pulls):
-#         rarity = sample_rarity_one_pull(cfg, st, rng)
-#         tok = sample_outcome_token(banner, rarity, lto4, st, rng, use_epitomized=use_epitomized)
-#         out10[k] = int(tok)
-#         update_pity_after_pull(st, rarity)
-
-#     return out10
-
-
 def infer_states_from_history(history_tokens: List[int]) -> Dict[str, BannerState]:
     """
     Step 2a: infer pity/guarantee counters from Campaigns 1–27 token history.
@@ -624,9 +743,13 @@ def infer_states_from_history(history_tokens: List[int]) -> Dict[str, BannerStat
 
         # For each realized pull (first n_pulls outcome tokens), update pity and featured guarantee
         for k in range(n_pulls):
+            SPECIAL_PROD_TOKS = {EOS_PROD_ID, SOS_PROD_ID}  # or use the *_LOCAL vars
             tok = int(out10[k])
             if tok == 0:
                 # if data contains 0 even when supposed to have a pull, treat as missing
+                continue
+            
+            if tok in SPECIAL_PROD_TOKS:
                 continue
 
             # infer rarity from token id
@@ -903,10 +1026,19 @@ def main():
     parser.add_argument("--quiet", action="store_true",
                         help="Do not print JSON lines to stdout (file output still written).")
 
+    parser.add_argument("--validate", action="store_true",
+                        help="Validate AggregateInput vs Decision and report anomalies.")
+    parser.add_argument("--validate_users", type=int, default=50)
+    parser.add_argument("--validate_last_k", type=int, default=8)
+
     args = parser.parse_args()
 
-    trace_enabled = bool(args.trace)
-    trace_max_steps = int(args.trace_max_steps)
+    # trace_enabled = bool(args.trace)
+    # trace_max_steps = int(args.trace_max_steps)
+
+    if args.validate:
+        batch_validate(args.data, n_users=args.validate_users, k_last=args.validate_last_k)
+        return
 
     if args.first:
         args.n_users = 1
@@ -994,6 +1126,19 @@ def main():
                 continue
 
             history_tokens = parse_int_sequence(row["AggregateInput"], na_to=0)
+
+            decs = []
+            if "Decision" in row:
+                decs = parse_int_sequence(row["Decision"])
+
+            terminal_prod_tok = EOS_PROD_ID_LOCAL 
+
+            history_tokens, appended = maybe_append_missing_terminal_block(
+                history_tokens, decs, terminal_prod_tok=terminal_prod_tok
+            )
+
+            if appended:
+                print(f"[FIX] uid={uid}: appended terminal block", flush=True)
             if len(history_tokens) % AI_RATE != 0:
                 raise ValueError(f"uid={uid}: history length {len(history_tokens)} not divisible by {AI_RATE}")
 
