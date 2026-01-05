@@ -1184,6 +1184,7 @@ def main():
                         stop_decision=9,
                         temperature=args.temperature,
                         greedy=args.greedy,
+                        trace=trace_cfg,   
                     )
                     payload = {
                         "uid": uid,
