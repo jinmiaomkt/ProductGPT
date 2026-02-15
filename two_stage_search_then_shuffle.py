@@ -69,6 +69,21 @@ def load_fold_spec(uri: str):
         return json.load(f)
 
 def sample_hp():
+
+    if os.getenv("PGPT_SMOKE", "0") == "1":
+        return {
+            "nb_features": 16,
+            "d_model": 64,
+            "d_ff": 128,
+            "N": 2,
+            "num_heads": 4,
+            "dropout": 0.1,
+            "lr": 5e-4,
+            "weight": 2,
+            "gamma": 1.0,
+            "warmup_steps": 100,
+        }
+
     while True:
         nb_features = random.choice([32, 48, 64])
         d_model     = random.choice([96, 128, 160, 256])
@@ -123,7 +138,9 @@ def build_cfg(base_cfg: dict, hp: dict, *, fold_id: int, uids_test, uids_trainva
     })
 
     # keep your ai_rate/seq_len_ai logic
-    cfg["ai_rate"] = int(cfg.get("ai_rate", 10))
+    cfg["ai_rate"] = int(cfg.get("ai_rate", 15))
+    cfg["batch_size"] = int(os.getenv("PGPT_BATCH_SIZE", cfg.get("batch_size", 2)))
+    cfg["seq_len_tgt"] = int(os.getenv("PGPT_SEQ_LEN_TGT", cfg["seq_len_tgt"]))
     cfg["seq_len_ai"] = cfg["ai_rate"] * cfg["seq_len_tgt"]
 
     cfg.update(hp)
