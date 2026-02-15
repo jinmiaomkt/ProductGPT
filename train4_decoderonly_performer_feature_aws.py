@@ -10,7 +10,7 @@ import botocore
 import gzip
 import torch
 from tqdm.auto import tqdm
-
+import random
 # --- runtime knobs (before import deepspeed) ---
 os.environ.setdefault("DS_BUILD_OPS", "0")                    # no fused kernels
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
@@ -610,7 +610,7 @@ def train_model(cfg: Dict[str, Any],
         if stop_check_fn is not None and stop_check_fn():
             print("[INFO] External early-stop triggered.")
             break
-        
+
         print(f"Epoch {ep:02d}  ValLoss={v_loss:.4f}  PPL={v_ppl:.4f}")
         for tag,d in (("all",v_all),("STOP_cur",v_stop),
                       ("after_STOP",v_after),("transition",v_tr)):
