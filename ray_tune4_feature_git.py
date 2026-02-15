@@ -62,7 +62,7 @@ def trainable_ray(config: dict):
         "fold_id": FOLD_ID,
         "uids_test": uids_test,
         "uids_trainval": uids_trainval,
-        "ai_rate": 10,
+        "ai_rate": 15,
         "num_epochs": config.get("num_epochs", 120),
         # optional: speed-up stage-A tuning on a small dataset:
         "data_frac": config.get("data_frac", 1.0),          # requires your build_dataloaders patch
