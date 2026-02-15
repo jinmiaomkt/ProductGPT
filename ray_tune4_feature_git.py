@@ -17,7 +17,7 @@ from ray.tune.schedulers import ASHAScheduler
 
 # -------------------- your fold logic --------------------
 FOLD_ID  = 0
-SPEC_URI = "s3://productgptbucket/CV/folds.json"
+SPEC_URI = "s3://productgptbucket/folds/productgptfolds.json"
 
 def load_fold_spec(uri: str):
     if uri.startswith("s3://"):
@@ -77,11 +77,12 @@ def trainable_ray(config: dict):
     d_model, num_heads = config["dm_heads"]
     cfg["d_model"] = d_model
     cfg["num_heads"] = num_heads
+    cfg["d_ff"] = min(int(d_model * config["dff_mult"]), 512)
 
     # ---- rest of HP ----
     cfg.update({
         "nb_features": config["nb_features"],
-        "d_ff": config["d_ff"],
+        # "d_ff": config["d_ff"],
         "N": config["N"],
         "dropout": config["dropout"],
         "lr": config["lr"],
@@ -148,9 +149,6 @@ def main():
         "d_ff": 256,  # placeholder; we’ll override in trainable below if desired
     }
 
-    # If you want d_ff to depend on d_model, do it in trainable_ray:
-    # cfg["d_ff"] = min(cfg["d_model"] * config["dff_mult"], 512)
-
     # ---- ASHA scheduler: early stop bad trials ----
     asha = ASHAScheduler(
         time_attr="epoch",
@@ -172,6 +170,7 @@ def main():
         tune.with_resources(trainable_ray, resources={"cpu": 4, "gpu": 1}),
         tune_config=tune.TuneConfig(
             num_samples=300,     # like your JMR example
+            max_concurrent_trials=1,
             search_alg=algo,
             scheduler=asha,
         ),
