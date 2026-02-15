@@ -4,6 +4,7 @@ import torch
 from torch.utils.data import Dataset
 from typing import Any, Dict, List, Optional, Iterable, Set
 
+
 def load_json_dataset(
     path: str,
     keep_uids: Optional[Iterable[str]] = None,
@@ -49,6 +50,7 @@ def load_json_dataset(
             out.append(rec)
         return out
 
+
 class TransformerDataset(Dataset):
     def __init__(
         self,
@@ -77,24 +79,25 @@ class TransformerDataset(Dataset):
         self.seq_len_ai = seq_len_ai
         self.seq_len_tgt = seq_len_tgt
         self.ai_rate = ai_rate
-        self.pad_id = pad_token
+        self.pad_id = int(pad_token)
 
         self.augment_permute_obtained = augment_permute_obtained
-        self.lto_len = lto_len
-        self.obtained_len = obtained_len
-        self.prev_dec_len = prev_dec_len
-        self.base_seed = base_seed
-        self.permute_mode = permute_mode
-        self.only_if_no_zero = only_if_no_zero
+        self.lto_len = int(lto_len)
+        self.obtained_len = int(obtained_len)
+        self.prev_dec_len = int(prev_dec_len)
+        self.base_seed = int(base_seed)
+        self.permute_mode = str(permute_mode)
+        self.only_if_no_zero = bool(only_if_no_zero)
 
         self.epoch = 0
 
-        self._enc_cache = []
-        self._lab_cache = []
-        self._uid_cache = []
+        self._enc_cache: List[torch.Tensor] = []
+        self._lab_cache: List[torch.Tensor] = []
+        self._uid_cache: List[str] = []
 
         for rec in self.data:
-            uid = rec.get("uid","")
+            uid = rec.get("uid", "")
+
             agg = rec["AggregateInput"]
             src_txt = " ".join(map(str, agg)) if isinstance(agg, (list, tuple)) else str(agg)
             ai_ids = self._pad(self.tok_src.encode(src_txt).ids, self.seq_len_ai)
@@ -107,13 +110,10 @@ class TransformerDataset(Dataset):
             self._enc_cache.append(torch.tensor(ai_ids, dtype=torch.long))
             self._lab_cache.append(torch.tensor(tgt_ids, dtype=torch.long))
 
-        # Basic sanity: expected block length
-        # Some setups have ai_rate == lto_len + obtained_len + prev_dec_len (+1 pad/special)
-        # We do not hard-fail here, but you should confirm offsets are correct.
         if self.lto_len + self.obtained_len + self.prev_dec_len > self.ai_rate:
             raise ValueError(
-                f"Invalid offsets: lto_len({lto_len}) + obtained_len({obtained_len}) + "
-                f"prev_dec_len({prev_dec_len}) > ai_rate({ai_rate})."
+                f"Invalid offsets: lto_len({self.lto_len}) + obtained_len({self.obtained_len}) + "
+                f"prev_dec_len({self.prev_dec_len}) > ai_rate({self.ai_rate})."
             )
 
     def set_epoch(self, epoch: int) -> None:
@@ -130,38 +130,78 @@ class TransformerDataset(Dataset):
 
     def _maybe_permute_slice_(self, ids: torch.Tensor, a: int, z: int, g: torch.Generator) -> None:
         """
-        Permute ids[a:z] in-place if it satisfies the 'no zero' caveat.
+        Permute ids[a:z] in-place subject to the configured PAD/zero policy.
         """
+        if a < 0 or z > ids.numel() or a >= z:
+            return
+
         slice_ = ids[a:z]
         if slice_.numel() <= 1:
             return
 
-        # Caveat: only permute if obtained slice contains NO zeros
-        if self.only_if_no_zero and torch.any(slice_ == 0):
+        pad = self.pad_id
+
+        # Policy 1: only permute if there are NO PADs in the slice.
+        if self.only_if_no_zero:
+            if torch.any(slice_ == pad):
+                return
+            perm = torch.randperm(slice_.numel(), generator=g)
+            ids[a:z] = slice_[perm]
             return
 
+        # Policy 2: keep PADs as a trailing tail if present (skip if PADs appear in the middle).
+        if self.keep_zeros_tail:
+            if not torch.any(slice_ == pad):
+                perm = torch.randperm(slice_.numel(), generator=g)
+                ids[a:z] = slice_[perm]
+                return
+
+            # Find last non-PAD; permute only the prefix [0:last_nonpad+1] if it contains no PAD.
+            nonpad_idx = (slice_ != pad).nonzero(as_tuple=False).view(-1)
+            if nonpad_idx.numel() == 0:
+                return  # all PADs
+            last_nonpad = int(nonpad_idx[-1].item())
+
+            prefix = slice_[: last_nonpad + 1]
+            if torch.any(prefix == pad):
+                return  # PADs in the middle -> skip
+
+            perm = torch.randperm(prefix.numel(), generator=g)
+            ids[a : a + prefix.numel()] = prefix[perm]
+            # tail PADs remain untouched
+            return
+
+        # Policy 3: permute including PADs (rarely desired, but supported)
         perm = torch.randperm(slice_.numel(), generator=g)
         ids[a:z] = slice_[perm]
 
-    def _permute_obtained_inplace(self, ids: torch.Tensor, sample_index: int) -> None:
+    def _permute_obtained_inplace(self, ids: torch.Tensor, *, idx: int, sample_index: Optional[int]) -> None:
         """
         ids: (seq_len_ai,) int64 tensor
-        Permute the obtained-products slice according to permute_mode.
+        Deterministically permute obtained-products slice based on (epoch, idx, sample_index).
         """
         if not self.augment_permute_obtained:
             return
 
-        # deterministic per (epoch, sample_index)
+        si = int(sample_index) if sample_index is not None else 0
+
+        # deterministic per (epoch, idx, sample_index)
+        # primes reduce collisions; keep under 64-bit comfortably.
+        seed = (
+            self.base_seed
+            + 1_000_003 * self.epoch
+            + 9_917 * int(idx)
+            + 104_729 * si
+        )
+
         g = torch.Generator(device="cpu")
-        g.manual_seed(self.base_seed + 1000003 * self.epoch + sample_index)
+        g.manual_seed(seed)
 
         start_offset = self.lto_len
         end_offset = self.lto_len + self.obtained_len  # exclusive
-
         L = ids.numel()
 
         if self.permute_mode == "last_block":
-            # Permute obtained slice in the LAST ai_rate tokens (most consistent with decision-only samples)
             b0 = max(0, L - self.ai_rate)
             a = b0 + start_offset
             z = b0 + end_offset
@@ -170,7 +210,6 @@ class TransformerDataset(Dataset):
             return
 
         if self.permute_mode == "all_blocks":
-            # Permute obtained slice in EVERY full block
             for b0 in range(0, L, self.ai_rate):
                 a = b0 + start_offset
                 z = b0 + end_offset
@@ -181,49 +220,12 @@ class TransformerDataset(Dataset):
 
         raise ValueError(f"Unknown permute_mode={self.permute_mode!r}. Use 'last_block' or 'all_blocks'.")
 
-    # def __getitem__(self, idx: int):
-    #     rec = self.data[idx]
-
-    #     # ----- UID -----
-    #     uid = rec.get("uid", "")
-
-    #     # ----- INPUT: AggregateInput -----
-    #     # In your explode_record, AggregateInput is a string already.
-    #     # But keep compatibility with list/tuple just in case.
-    #     agg = rec["AggregateInput"]
-    #     if isinstance(agg, (list, tuple)):
-    #         src_txt = " ".join(map(str, agg))
-    #     else:
-    #         src_txt = str(agg)
-
-    #     ai_ids = self.tok_src.encode(src_txt).ids
-    #     ai_ids = self._pad(ai_ids, self.seq_len_ai)
-    #     enc_input = torch.tensor(ai_ids, dtype=torch.long)
-
-    #     # ----- TARGET: Decision -----
-    #     # In explode_record you set Decision = lab (likely int)
-    #     dec = rec["Decision"]
-    #     if isinstance(dec, (list, tuple)):
-    #         tgt_txt = " ".join(map(str, dec))
-    #     else:
-    #         tgt_txt = str(dec)
-
-    #     tgt_ids = self.tok_tgt.encode(tgt_txt).ids
-    #     tgt_ids = self._pad(tgt_ids, self.seq_len_tgt)
-    #     label_tensor = torch.tensor(tgt_ids, dtype=torch.long)
-
-    #     # ----- Augmentation (training only) -----
-    #     self._permute_obtained_inplace(enc_input, idx)
-
-    #     return {
-    #         "uid": uid,
-    #         "aggregate_input": enc_input,
-    #         "label": label_tensor,
-    #     }
-    def __getitem__(self, idx: int):
+    def __getitem__(self, idx: int, *, sample_index: Optional[int] = None):
         enc_input = self._enc_cache[idx].clone()   # clone so permutation doesn't corrupt cache
         label_tensor = self._lab_cache[idx]
         uid = self._uid_cache[idx]
 
-        self._permute_obtained_inplace(enc_input, idx)
+        # IMPORTANT: use (idx, sample_index) so RepeatWithPermutation creates distinct permutations
+        self._permute_obtained_inplace(enc_input, idx=idx, sample_index=sample_index)
+
         return {"uid": uid, "aggregate_input": enc_input, "label": label_tensor}

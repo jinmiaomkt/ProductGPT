@@ -24,6 +24,27 @@ class TraceCfg:
     max_steps: int = 200   # 0 means no limit
     fout: Optional[TextIO] = None
 
+def trim_to_ctx(seq: List[int], max_len: int, ai_rate: int = AI_RATE) -> List[int]:
+    """
+    Keep only the last <= max_len tokens, aligned to ai_rate block boundaries.
+    """
+    if max_len <= 0:
+        return seq  # treat as "no limit"
+
+    if len(seq) <= max_len:
+        # optionally align down to a block boundary (not necessary if already aligned)
+        return seq
+
+    # keep last max_len tokens
+    tail = seq[-max_len:]
+
+    # align to block boundary: drop leading remainder so length is divisible by ai_rate
+    rem = len(tail) % ai_rate
+    if rem != 0:
+        tail = tail[rem:]
+
+    return tail
+
 def _json_fallback(o):
     # dataclasses
     if hasattr(o, "__dataclass_fields__"):
@@ -540,6 +561,7 @@ def generate_campaign28_step1_fixed_outcomes(
     fixed_outcomes_after_step0: List[int],
     device: torch.device,
     init_prev_dec: Optional[int] = None,
+    max_seq_len_ckpt: int = 1024,
     max_steps28: int = 500,
     stop_decision: int = 9,
     temperature: float = 1.0,
@@ -576,6 +598,8 @@ def generate_campaign28_step1_fixed_outcomes(
 
         seq_full.extend(block)
         seq_c28.extend(block)
+
+        seq_full = trim_to_ctx(seq_full, max_seq_len_ckpt, AI_RATE)
 
         x = torch.tensor(seq_full, dtype=torch.long, device=device).unsqueeze(0)  # (1,T)
         logits = model(x)                                                        # (1,T,V)
@@ -1445,208 +1469,6 @@ def validate_trace_state_consistency(
         "warnings": warnings,
     }
 
-# def _apply_one_pull_update_for_banner(
-#     banner: str,
-#     tok: int,
-#     lto4: List[int],
-#     st: Dict[str, Any],
-#     use_epitomized: bool,
-# ) -> None:
-#     # Update guarantee_featured_5 (your inference-style logic)
-#     apply_guarantee_inference(banner, tok, lto4, st)
-
-#     # Update pity counters
-#     rarity = rarity_from_token(tok)
-#     update_pity_after_pull(st, rarity)
-
-#     # Weapon epitomized fate points logic (only if target set)
-#     if use_epitomized and banner == "weapon" and rarity == 5:
-#         tgt = int(st.get("epitomized_target", 0) or 0)
-#         if tgt != 0:
-#             if tok == tgt:
-#                 st["fate_points"] = 0
-#             else:
-#                 st["fate_points"] = min(2, int(st.get("fate_points", 0)) + 1)
-
-# def validate_trace_state_consistency(
-#     trace_jsonl_path: str,
-#     lto4: List[int],
-#     eos_prod_id: int = EOS_PROD_ID_LOCAL,
-#     sos_prod_id: int = SOS_PROD_ID_LOCAL,
-#     hard_pity5_map: Optional[Dict[str, int]] = None,
-#     hard_pity4: int = 10,
-# ) -> Dict[str, Any]:
-#     if hard_pity5_map is None:
-#         hard_pity5_map = {"regular": 90, "figure_a": 90, "figure_b": 90, "weapon": 80}
-
-#     # group records by (uid, run)
-#     groups = defaultdict(list)
-#     total_records = 0
-#     parse_errors = 0
-
-#     with open(trace_jsonl_path, "rt") as f:
-#         for ln, line in enumerate(f, start=1):
-#             line = line.strip()
-#             if not line:
-#                 continue
-#             try:
-#                 rec = json.loads(line)
-#             except Exception:
-#                 parse_errors += 1
-#                 continue
-#             if int(rec.get("step", -1)) != 2:
-#                 continue
-#             uid = rec.get("uid", "")
-#             run = int(rec.get("run", 0))
-#             t = int(rec.get("t", -1))
-#             groups[(uid, run)].append(rec)
-#             total_records += 1
-
-#     errors: List[str] = []
-#     warnings: List[str] = []
-
-#     STATE_KEYS = ["pity5","pity4","guarantee_featured_5","guarantee_featured_4","fate_points","epitomized_target"]
-
-#     for (uid, run), recs in groups.items():
-#         recs.sort(key=lambda r: int(r["t"]))
-
-#         # ---- Cross-record checks: t monotonic + prev_dec chaining ----
-#         for i, r in enumerate(recs):
-#             t = int(r["t"])
-#             if t != i:
-#                 warnings.append(f"uid={uid} run={run}: non-contiguous t (expected {i}, got {t}); trace_max_steps may truncate.")
-
-#         for i in range(len(recs) - 1):
-#             cur = recs[i]
-#             nxt = recs[i + 1]
-
-#             cur_prev = int(cur["prev_dec"])
-#             cur_sampled = int(cur["sampled_dec"])
-#             nxt_prev = int(nxt["prev_dec"])
-
-#             # Once you stop (sampled_dec == 9), generation breaks, so there should be no next record.
-#             if cur_sampled == 9:
-#                 errors.append(f"uid={uid} run={run}: sampled_dec==9 at t={cur['t']} but trace continues at t={nxt['t']}.")
-#                 break
-
-#             if nxt_prev != cur_sampled:
-#                 errors.append(
-#                     f"uid={uid} run={run}: decision chaining mismatch: "
-#                     f"t={cur['t']} sampled_dec={cur_sampled} but t={nxt['t']} prev_dec={nxt_prev}"
-#                 )
-
-#         # ---- Per-record checks: mechanics ----
-#         for r in recs:
-#             t = int(r["t"])
-#             prev_dec = int(r["prev_dec"])
-#             out10 = [int(x) for x in r["out10"]]
-
-#             # EOS/SOS in OUT10 rules
-#             if sos_prod_id in out10:
-#                 errors.append(f"uid={uid} run={run} t={t}: SOS appears in OUT10={out10}")
-
-#             if prev_dec == 9:
-#                 expected = [eos_prod_id] + [0]*9
-#                 if out10 != expected:
-#                     errors.append(f"uid={uid} run={run} t={t}: prev_dec=9 but OUT10 invalid: got={out10} expected={expected}")
-#             else:
-#                 if eos_prod_id in out10:
-#                     errors.append(f"uid={uid} run={run} t={t}: prev_dec={prev_dec} but EOS appears in OUT10={out10}")
-
-#             # outcome_source sanity
-#             src = r.get("outcome_source", "")
-#             if t == 0 and src != "history_c27_lastblock":
-#                 warnings.append(f"uid={uid} run={run} t=0: outcome_source={src} (expected history_c27_lastblock)")
-#             if t >= 1 and src != "simulated":
-#                 warnings.append(f"uid={uid} run={run} t={t}: outcome_source={src} (expected simulated)")
-
-#             # t==0: you intentionally do not update states; verify state_before == state_after
-#             if t == 0:
-#                 if r["state_before"] != r["state_after"]:
-#                     errors.append(f"uid={uid} run={run} t=0: state_before != state_after (should be unchanged at t=0)")
-#                 continue
-
-#             banner, n_pulls = decision_to_banner_and_pulls(prev_dec)
-
-#             # For prev_dec==9, n_pulls=0. Your schema still has OUT10=[EOS,0..]
-#             # and states should not change.
-#             if prev_dec == 9 or banner == "none" or n_pulls == 0:
-#                 if r["state_before"] != r["state_after"]:
-#                     errors.append(f"uid={uid} run={run} t={t}: prev_dec=9 but states changed")
-#                 continue
-
-#             sb_all = r["state_before"]
-#             sa_all = r["state_after"]
-
-#             if banner not in sb_all or banner not in sa_all:
-#                 errors.append(f"uid={uid} run={run} t={t}: missing banner={banner} in state_before/after")
-#                 continue
-
-#             # Unaffected banners should not change
-#             for bname in sb_all.keys():
-#                 if bname == banner:
-#                     continue
-#                 if sb_all[bname] != sa_all[bname]:
-#                     errors.append(f"uid={uid} run={run} t={t}: banner={banner} changed state of unrelated banner={bname}")
-
-#             # Recompute expected after-state for the affected banner
-#             st = dict(sb_all[banner])
-#             use_epitomized = (banner == "weapon" and int(st.get("epitomized_target", 0) or 0) != 0)
-
-#             for k in range(n_pulls):
-#                 tok = int(out10[k])
-#                 if tok == 0:
-#                     # missingness; if you don't expect this, treat as error
-#                     warnings.append(f"uid={uid} run={run} t={t}: tok==0 within realized pulls (k={k}) out10={out10}")
-#                     continue
-#                 if tok in (eos_prod_id, sos_prod_id):
-#                     errors.append(f"uid={uid} run={run} t={t}: special token {tok} in realized pulls out10={out10}")
-#                     continue
-
-#                 _apply_one_pull_update_for_banner(banner, tok, lto4, st, use_epitomized)
-
-#             expected_after = st
-#             got_after = sa_all[banner]
-
-#             if not _state_equal_dict(expected_after, got_after, STATE_KEYS):
-#                 errors.append(
-#                     f"uid={uid} run={run} t={t}: state mismatch banner={banner}. "
-#                     f"expected={expected_after} got={got_after}"
-#                 )
-
-#             # Feasibility checks
-#             hard5 = int(hard_pity5_map.get(banner, 90))
-#             if int(got_after.get("pity5", 0)) >= hard5:
-#                 errors.append(f"uid={uid} run={run} t={t}: pity5 infeasible banner={banner} pity5={got_after.get('pity5')} hard={hard5}")
-#             if int(got_after.get("pity4", 0)) >= hard_pity4:
-#                 errors.append(f"uid={uid} run={run} t={t}: pity4 infeasible banner={banner} pity4={got_after.get('pity4')} hard={hard_pity4}")
-
-#     ok = (len(errors) == 0)
-
-#     print("\n=== TRACE STATE CONSISTENCY VALIDATION ===")
-#     print(f"Trace file: {trace_jsonl_path}")
-#     print(f"Groups (uid,run): {len(groups)}")
-#     print(f"Records checked: {total_records}")
-#     print(f"Parse errors: {parse_errors}")
-#     print(f"OK: {ok}")
-#     print(f"Errors: {len(errors)}  Warnings: {len(warnings)}")
-
-#     if errors:
-#         print("\n[ERRORS]")
-#         for e in errors[:50]:
-#             print("  " + e)
-#         if len(errors) > 50:
-#             print(f"  ... ({len(errors)-50} more)")
-
-#     if warnings:
-#         print("\n[WARNINGS]")
-#         for w in warnings[:50]:
-#             print("  " + w)
-#         if len(warnings) > 50:
-#             print(f"  ... ({len(warnings)-50} more)")
-
-#     return {"ok": ok, "groups": len(groups), "records": total_records, "errors": errors, "warnings": warnings}
-
 @torch.no_grad()
 def generate_campaign28_step2_simulated_outcomes(
     model,
@@ -1659,6 +1481,7 @@ def generate_campaign28_step2_simulated_outcomes(
     temperature: float,
     greedy: bool,
     rng: np.random.Generator,
+    max_ctx_tokens: int = 1024,
     use_epitomized: bool = False,
     epitomized_target: int = 0,
     trace: Optional[TraceCfg] = None,   
@@ -2081,6 +1904,7 @@ def main():
                         rng=rng,
                         use_epitomized=args.use_epitomized,
                         epitomized_target=args.epitomized_target,
+                        max_ctx_tokens=args.max_ctx_tokens,
                         trace=trace_cfg,
                         uid=uid,
                         run_id=r,

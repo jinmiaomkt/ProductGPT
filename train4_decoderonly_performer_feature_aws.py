@@ -33,6 +33,7 @@ from sklearn.preprocessing import label_binarize
 from torch.utils.data import DataLoader, random_split
 from tokenizers import Tokenizer, models, pre_tokenizers
 from tqdm import tqdm
+from typing import Callable, Optional, Dict, Any
 
 # ────────────────────────────── project local
 from config4 import get_config, get_weights_file_path, latest_weights_file_path
@@ -221,23 +222,16 @@ class RepeatWithPermutation(torch.utils.data.Dataset):
 
     def __getitem__(self, i: int):
         base_i = i % len(self.base)
+        rep_i  = i // len(self.base)
         # IMPORTANT: pass a "sample_index" that changes across repeats
         # so permutations differ even within the same epoch.
         # Easiest: temporarily override by calling base.__getitem__ with i
         # only if base uses idx as seed. Otherwise, modify base to accept a seed.
-        return self.base.__getitem__(base_i)  # if your base uses idx for permutation seeding
-
+        # return self.base.__getitem__(base_i)  # if your base uses idx for permutation seeding
+        return self.base.__getitem__(base_i, sample_index = rep_i)
 
 # ══════════════════════════════ 6. DataLoaders ═══════════════════════=
 def build_dataloaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, DataLoader, Tokenizer]:
-    """
-    Build train/val/test dataloaders (or a single inference loader) plus the target tokenizer.
-
-    Notes
-    -----
-    - Augmentation (obtained-items permutation) is enabled ONLY for the training split.
-    - Tokenizers are saved under cfg["model_folder"] for reproducibility.
-    """
     mode = cfg.get("mode", "train")
 
     # ── load raw records ────────────────────────────────────────────────
@@ -247,9 +241,25 @@ def build_dataloaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, Data
         keep_uids = None
         if mode == "test":
             keep_uids = set(cfg["uids_test"])
-        elif "uids_trainval" in cfg and cfg["uids_trainval"] is not None:
+        elif cfg.get("uids_trainval") is not None:
             keep_uids = set(cfg["uids_trainval"])
         raw = load_json_dataset(cfg["filepath"], keep_uids=keep_uids)
+
+    # ── optional deterministic subsample (for cheap HP search) ──────────
+    def _deterministic_subsample(raw_list, frac: float, seed: int):
+        if frac >= 1.0:
+            return raw_list
+        n = len(raw_list)
+        k = max(1, int(n * frac))
+        rng = random.Random(seed)
+        idx = list(range(n))
+        rng.shuffle(idx)
+        keep = set(idx[:k])
+        return [raw_list[i] for i in range(n) if i in keep]
+
+    data_frac = float(cfg.get("data_frac", 1.0))          # e.g., 0.05
+    subsample_seed = int(cfg.get("subsample_seed", 33))   # deterministic
+    raw = _deterministic_subsample(raw, data_frac, subsample_seed)
 
     # ── split ───────────────────────────────────────────────────────────
     if mode == "infer":
@@ -257,13 +267,13 @@ def build_dataloaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, Data
     else:
         n = len(raw)
         n_train = int(0.8 * n)
-        n_val = int(0.1 * n)
-        n_test = n - n_train - n_val
+        n_val   = int(0.1 * n)
+        n_test  = n - n_train - n_val
 
         g = torch.Generator().manual_seed(33)
         tr_split, va_split, te_split = random_split(raw, [n_train, n_val, n_test], generator=g)
 
-    # ── tokenizers (fixed numeric vocab) ────────────────────────────────
+    # ── tokenizers ─────────────────────────────────────────────────────
     tok_src = build_tokenizer_src()
     tok_tgt = build_tokenizer_tgt()
 
@@ -283,12 +293,10 @@ def build_dataloaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, Data
             cfg["num_heads"],
             cfg["ai_rate"],
             pad_token=PAD_ID,
-            augment_permute_obtained=augment,  # True only for train
+            augment_permute_obtained=augment,
             lto_len=4,
             obtained_len=10,
             prev_dec_len=1,
-            # If your dataset class still has keep_zeros_tail, keep it.
-            # If you moved to "only_if_no_zero", pass that instead.
             keep_zeros_tail=True,
             base_seed=33,
         )
@@ -302,18 +310,17 @@ def build_dataloaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, Data
         return make_loader(inf_ds, shuffle=False), None, None, tok_tgt
 
     # ── train/val/test ─────────────────────────────────────────────────
-    train_ds = wrap(tr_split, augment=True)
+    augment_train = bool(cfg.get("augment_train", True))  # <<< IMPORTANT TOGGLE
+    train_ds = wrap(tr_split, augment=augment_train)
 
     rep = int(cfg.get("permute_repeat", 1))
     if rep > 1:
         train_ds = RepeatWithPermutation(train_ds, repeat_factor=rep)
 
-    val_ds   = wrap(va_split, augment=False)
-    test_ds  = wrap(te_split, augment=False)
+    val_ds  = wrap(va_split, augment=False)
+    test_ds = wrap(te_split, augment=False)
 
-    # train_loader = make_loader(train_ds, shuffle=True)
-    train_loader = DataLoader(train_ds, batch_size=cfg["batch_size"], shuffle=True)
-
+    train_loader = make_loader(train_ds, shuffle=True)
     val_loader   = make_loader(val_ds, shuffle=False)
     test_loader  = make_loader(test_ds, shuffle=False)
 
@@ -471,7 +478,9 @@ def evaluate(loader: DataLoader, model: nn.Module, dev: torch.device, loss_fn, p
     )
 
 # ══════════════════════════════ 10. Training loop ════════════════════
-def train_model(cfg: Dict[str, Any]):
+def train_model(cfg: Dict[str, Any],
+                report_fn: Optional[Callable[[Dict[str, Any]], None]] = None,
+                stop_check_fn: Optional[Callable[[], bool]] = None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
@@ -500,6 +509,12 @@ def train_model(cfg: Dict[str, Any]):
     # --- data ----------------------------------------------------------
     train_dl, val_dl, test_dl, tok_tgt = build_dataloaders(cfg)
     pad_id = tok_tgt.token_to_id("[PAD]")
+
+    # ── optional deterministic subsample for hyperparam search ──
+    # cfg["data_frac"] in (0,1] e.g., 0.05 for 5% of records
+    # data_frac = float(cfg.get("data_frac", 1.0))
+    # subsample_seed = int(cfg.get("subsample_seed", 33))
+    # raw = _deterministic_subsample(raw, data_frac, subsample_seed)
 
     # --- model ---------------------------------------------------------
     feat_tensor = load_feature_tensor(FEAT_FILE)
@@ -578,6 +593,23 @@ def train_model(cfg: Dict[str, Any]):
         
         # ---- validation ----------------------------------------------
         v_loss,v_ppl,v_all,v_stop,v_after,v_tr = evaluate(val_dl, engine, device, loss_fn, pad_id, tok_tgt, cfg["ai_rate"])
+        
+        # ---- Ray Tune / external reporting ----
+        if report_fn is not None:
+            report_fn({
+                "epoch": ep,
+                "val_loss": v_loss,
+                "val_ppl": v_ppl,
+                "val_all_hit": v_all["hit"],
+                "val_all_f1": v_all["f1"],
+                "val_all_auprc": v_all["auprc"],
+                "val_all_rev_mae": v_all["rev_mae"],
+            })
+
+        # Allow scheduler to terminate the trial early
+        if stop_check_fn is not None and stop_check_fn():
+            print("[INFO] External early-stop triggered.")
+            break
         
         print(f"Epoch {ep:02d}  ValLoss={v_loss:.4f}  PPL={v_ppl:.4f}")
         for tag,d in (("all",v_all),("STOP_cur",v_stop),
