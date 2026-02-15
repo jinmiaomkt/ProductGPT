@@ -176,7 +176,7 @@ def main():
         ),
         run_config=ray.air.RunConfig(
             name="ProductGPT_RayTune",
-            local_dir=str(Path("./ray_results").resolve()),
+            storage_path=str(Path("./ray_results").resolve()),
         ),
         param_space=param_space,
     )
