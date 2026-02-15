@@ -10,7 +10,7 @@ from train4_decoderonly_performer_feature_aws import train_model
 
 # -------------------- user knobs --------------------
 FOLD_ID = 0
-SPEC_URI = "s3://productgptbucket/CV/folds.json"
+SPEC_URI = "s3://productgptbucket/folds/productgptfolds.json"
 
 # Stage A: cheap search
 STAGEA_TRIALS = 32
@@ -28,6 +28,31 @@ STAGEB_PERMUTE_REPEAT = 1       # optionally >1 (but see note below)
 SELECT_METRIC = "val_all_auprc"  # or "val_all_f1_score", etc.
 
 random.seed(1337)
+
+def _env_int(name: str, default: int) -> int:
+    v = os.getenv(name)
+    return default if v is None else int(v)
+
+def _env_float(name: str, default: float) -> float:
+    v = os.getenv(name)
+    return default if v is None else float(v)
+
+def _env_bool(name: str, default: bool) -> bool:
+    v = os.getenv(name)
+    if v is None:
+        return default
+    return v.strip().lower() in ("1", "true", "t", "yes", "y")
+
+# -------- env overrides (optional) --------
+STAGEA_TRIALS        = _env_int("PGPT_STAGEA_TRIALS", STAGEA_TRIALS)
+STAGEA_MAX_EPOCHS    = _env_int("PGPT_STAGEA_MAX_EPOCHS", STAGEA_MAX_EPOCHS)
+STAGEA_DATA_FRAC     = _env_float("PGPT_STAGEA_DATA_FRAC", STAGEA_DATA_FRAC)
+STAGEA_AUGMENT_TRAIN = _env_bool("PGPT_STAGEA_AUGMENT_TRAIN", STAGEA_AUGMENT_TRAIN)
+
+STAGEB_MAX_EPOCHS    = _env_int("PGPT_STAGEB_MAX_EPOCHS", STAGEB_MAX_EPOCHS)
+STAGEB_DATA_FRAC     = _env_float("PGPT_STAGEB_DATA_FRAC", STAGEB_DATA_FRAC)
+STAGEB_AUGMENT_TRAIN = _env_bool("PGPT_STAGEB_AUGMENT_TRAIN", STAGEB_AUGMENT_TRAIN)
+STAGEB_PERMUTE_REPEAT= _env_int("PGPT_STAGEB_PERMUTE_REPEAT", STAGEB_PERMUTE_REPEAT)
 
 # -------------------- utilities --------------------
 def free_port():
