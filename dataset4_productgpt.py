@@ -22,6 +22,18 @@ def load_json_dataset(
     """
     keep: Optional[Set[str]] = set(keep_uids) if keep_uids is not None else None
 
+    def _uid_matches(rec_uid, keep_set: Set[str] | None) -> bool:
+        if keep_set is None:
+            return True
+        if rec_uid is None:
+            return False
+
+        # uid sometimes is a list (unhashable) -> keep if any element is in keep
+        if isinstance(rec_uid, (list, tuple, set)):
+            return any((x is not None and str(x) in keep_set) for x in rec_uid)
+
+        return str(rec_uid) in keep_set
+
     opener = gzip.open if path.endswith(".gz") else open
     with opener(path, "rt", encoding="utf-8") as f:
         first = f.read(1)
@@ -34,7 +46,8 @@ def load_json_dataset(
                 raise ValueError(f"Expected a JSON list in {path}, got {type(data)}")
             if keep is None:
                 return data
-            return [rec for rec in data if isinstance(rec, dict) and rec.get("uid") in keep]
+            # return [rec for rec in data if isinstance(rec, dict) and rec.get("uid") in keep]
+            return [rec for rec in data if isinstance(rec, dict) and _uid_matches(rec.get("uid"), keep)]
 
         # JSONL
         out: List[Dict[str, Any]] = []
