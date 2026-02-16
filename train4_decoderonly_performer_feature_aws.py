@@ -524,8 +524,12 @@ def evaluate(
         prob_sel = prob[mask]                 # [num_true, C]
         scores_9 = prob_sel[:, 1:10]          # [num_true, 9]
 
-        y_true_chunks.append(y_true_np.astype(np.int64))
-        y_score_chunks.append(scores_9)
+        # y_true_chunks.append(y_true_np.astype(np.int64))
+        y_true_chunks.append(y_true.detach().cpu().numpy())  # or .long() if needed
+
+        # y_score_chunks.append(scores_9)
+        y_score_chunks.append(scores_9.detach().float().cpu().numpy())
+        y_score_all = np.concatenate(y_score_chunks, axis=0)
 
         # --- optional: unweighted NLL on corrected logits (proper scoring rule) ---
         if compute_nll:
