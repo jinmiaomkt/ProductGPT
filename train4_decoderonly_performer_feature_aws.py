@@ -667,6 +667,8 @@ def train_model(cfg: Dict[str, Any],
 
     # ---- training -----------------------------------------------------
     best_val_loss, patience = None, 0
+    best_val_nll = None          # or float("inf") if you prefer
+    best_val_epoch = -1
     for ep in range(cfg["num_epochs"]):
         if hasattr(train_dl.dataset, "set_epoch"):
             train_dl.dataset.set_epoch(ep)
@@ -727,10 +729,11 @@ def train_model(cfg: Dict[str, Any],
         # ---- model selection / early stopping (by corrected unweighted NLL) ----
         val_nll = v["nll"]
         if best_val_nll is None or val_nll < best_val_nll:
-            best_val_nll, patience = val_nll, 0
+            best_val_nll, patience, best_val_epoch = val_nll, 0, ep
 
             best_val_metrics = {
                 "val_nll": best_val_nll,
+                "val_epoch": best_val_epoch,
                 "val_hit": v["hit"],
                 "val_f1_macro": v["f1_macro"],
                 "val_auprc_macro": v["auprc_macro"],
@@ -742,6 +745,7 @@ def train_model(cfg: Dict[str, Any],
             ckpt = {
                 "epoch": ep,
                 "best_val_nll": best_val_nll,
+                "best_val_epoch": best_val_epoch,
                 "model_state_dict": engine.module.state_dict(),
                 "weight_class9": float(cfg["weight"]),
                 "logit_bias_class9": float(logit_bias[9].item()),
