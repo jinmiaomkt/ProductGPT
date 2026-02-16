@@ -17,6 +17,7 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 torch.backends.cuda.matmul.allow_tf32 = True                  # safer perf on Ampere+
 torch.set_float32_matmul_precision("high")
 import deepspeed
+import math
 
 import numpy as np
 import pandas as pd
@@ -193,13 +194,13 @@ def transition_mask(seq: torch.Tensor) -> torch.Tensor:  # (B, T)
     prev = F.pad(seq, (1, 0), value=-1)[:, :-1]
     return seq != prev
 
-def perplexity(logits: torch.Tensor, targets: torch.Tensor, pad: int = PAD_ID) -> float:
-    logp = F.log_softmax(logits, dim=-1)
-    lp2d, tgt = logp.view(-1, logp.size(-1)), targets.view(-1)
-    mask = tgt != pad
-    if mask.sum() == 0:
-        return float("nan")
-    return torch.exp(F.nll_loss(lp2d[mask], tgt[mask], reduction="mean")).item()
+# def perplexity(logits: torch.Tensor, targets: torch.Tensor, pad: int = PAD_ID) -> float:
+#     logp = F.log_softmax(logits, dim=-1)
+#     lp2d, tgt = logp.view(-1, logp.size(-1)), targets.view(-1)
+#     mask = tgt != pad
+#     if mask.sum() == 0:
+#         return float("nan")
+#     return torch.exp(F.nll_loss(lp2d[mask], tgt[mask], reduction="mean")).item()
 
 class RepeatWithPermutation(torch.utils.data.Dataset):
     """
@@ -398,84 +399,159 @@ def build_model(cfg: Dict[str, Any], feat_tensor: torch.Tensor) -> nn.Module:
     )
 
 # ══════════════════════════════ 9. Evaluation ════════════════════════
-def _subset(pred, lbl, probs, rev_err, mask, classes=np.arange(1, 10)):
-    if mask.sum() == 0:
-        return {"hit": np.nan, "f1": np.nan, "auprc": np.nan, "rev_mae": np.nan}
-    p, l, pr, re = pred[mask], lbl[mask], probs[mask], rev_err[mask]
-    return {
-        "hit": accuracy_score(l, p),
-        "f1": f1_score(l, p, average="macro"),
-        "auprc": average_precision_score(label_binarize(l, classes=classes), pr[:, 1:10], average="macro"),
-        "rev_mae": re.mean(),
-    }
+DECISION_CLASSES = np.arange(1, 10, dtype=np.int64)  # decisions 1..9
 
-def evaluate(loader: DataLoader, model: nn.Module, dev: torch.device, loss_fn, pad: int, tok: Tokenizer, ai_rate: int):
-    if not loader:
-        nan = float("nan")
-        emp = {"hit": nan, "f1": nan, "auprc": nan, "rev_mae":nan}
-        return nan, nan, emp, emp, emp, emp
+def _macro_f1_from_counts(tp: np.ndarray, pred_cnt: np.ndarray, true_cnt: np.ndarray) -> float:
+    """
+    Macro F1 over the 9 decision classes.
+    Classes with zero support get F1=0 (matches sklearn with zero_division=0).
+    """
+    f1s = []
+    for k in range(len(tp)):
+        tpk = tp[k]
+        fpk = pred_cnt[k] - tpk
+        fnk = true_cnt[k] - tpk
 
-    special = {pad, tok.token_to_id("[SOS]"), tok.token_to_id("[UNK]")}
+        prec = tpk / (tpk + fpk) if (tpk + fpk) > 0 else 0.0
+        rec  = tpk / (tpk + fnk) if (tpk + fnk) > 0 else 0.0
+        f1   = (2 * prec * rec / (prec + rec)) if (prec + rec) > 0 else 0.0
+        f1s.append(f1)
+    return float(np.mean(f1s)) if f1s else float("nan")
 
-    tot_loss = tot_ppl = 0.0
-    P: List[np.ndarray] = []
-    L: List[np.ndarray] = []
-    PR: List[np.ndarray] = []
-    RE: List[np.ndarray] = []
-    m_stop: List[np.ndarray] = []
-    m_after_stop: List[np.ndarray] = []
-    m_tr: List[np.ndarray] = []
+@torch.no_grad()
+def evaluate(
+    loader,
+    model,
+    dev: torch.device,
+    *,
+    ai_rate: int,
+    logit_bias: torch.Tensor | None = None,
+    compute_nll: bool = True,
+    compute_rev_mae: bool = True,
+) -> dict:
+    """
+    Returns metrics computed on decision positions only (labels in 1..9).
 
-    REV_VEC = torch.tensor([1, 10, 1, 10, 1, 10, 1, 10, 0],
-                       dtype=torch.float32)                      # shape (9,)    
-    rev_vec = REV_VEC.to(dev)
+    logit_bias:
+      If provided, we do: logits_corr = logits - logit_bias (broadcast over batch/time).
+      For class-weight correction (Option A), set logit_bias[c] = log(weight[c]).
+      Example: only class 9 weighted by w -> logit_bias[9] = log(w), others 0.
+
+    Metrics returned:
+      hit (accuracy), f1_macro, auprc_macro, plus optional nll and rev_mae.
+    """
+    if loader is None:
+        return {"nll": float("nan"), "hit": float("nan"), "f1_macro": float("nan"),
+                "auprc_macro": float("nan"), "rev_mae": float("nan")}
 
     model.eval()
-    with torch.no_grad():
-        for batch in loader:
-            x = batch["aggregate_input"].to(dev)
-            tgt = batch["label"].to(dev)
-            pos = torch.arange(ai_rate - 1, x.size(1), ai_rate, device=dev)
-            logits = model(x)[:, pos, :]
 
-            tgt_ = tgt.clone()
-            # tgt_[transition_mask(tgt)] = pad
-            tot_loss += loss_fn(logits, tgt_).item()
-            tot_ppl += perplexity(logits, tgt_, pad)
+    # streaming counters for hit + macro-F1 over classes 1..9
+    tp = np.zeros(9, dtype=np.int64)
+    pred_cnt = np.zeros(9, dtype=np.int64)
+    true_cnt = np.zeros(9, dtype=np.int64)
+    correct = 0
+    total = 0
 
-            prob_t = F.softmax(logits, dim=-1)
-            rev_vec = rev_vec.to(dtype=prob_t.dtype)
+    # AUPRC needs all scores/labels (but only 9-class scores)
+    y_true_chunks: list[np.ndarray] = []
+    y_score_chunks: list[np.ndarray] = []
 
-            # ----- revenue error (all torch) --------------------------------
-            exp_rev  = (prob_t[..., 1:10] * rev_vec).sum(-1)              # (B, n_slots)
-            true_rev = rev_vec[(tgt - 1).clamp(min=0, max=8)]             # same shape
-            rev_err  = torch.abs(exp_rev - true_rev).view(-1).cpu().numpy()
+    # optional proper scoring / revenue diagnostics
+    nll_sum = 0.0
+    nll_cnt = 0
+    rev_sum = 0.0
+    rev_cnt = 0
 
-            prob = prob_t.view(-1, prob_t.size(-1)).cpu().numpy()         # NumPy copy
-            pred = prob.argmax(1)
-            lbl = tgt.view(-1).cpu().numpy()
-            keep = ~np.isin(lbl, list(special))
+    # revenue vector for decisions 1..9 (your original)
+    # 1..8 alternate {1,10}, decision 9 is 0
+    rev_vec = torch.tensor([1, 10, 1, 10, 1, 10, 1, 10, 0], device=dev, dtype=torch.float32)
 
-            P.append(pred[keep])
-            L.append(lbl[keep])
-            PR.append(prob[keep])
-            RE.append(rev_err[keep])
+    for batch in loader:
+        x = batch["aggregate_input"].to(dev)   # (B, Tsrc)
+        tgt = batch["label"].to(dev)           # (B, Ttgt) aligned with decision slots
 
-            flat = lambda m: m.view(-1).cpu().numpy()[keep]
-            m_stop.append(flat(tgt == 9))
-            prev = F.pad(tgt, (1, 0), value=-1)[:, :-1]
-            m_after_stop.append(flat(prev == 9))
-            m_tr.append(flat(transition_mask(tgt)))
+        # decision positions in the *model output time axis*
+        pos = torch.arange(ai_rate - 1, x.size(1), ai_rate, device=dev)
 
-    P_, L_, PR_, RE_ = map(np.concatenate, (P, L, PR, RE))
-    return (
-        tot_loss / len(loader),
-        tot_ppl / len(loader),
-        _subset(P_, L_, PR_, RE_, np.ones_like(P_, dtype=bool)),
-        _subset(P_, L_, PR_, RE_, np.concatenate(m_stop)),
-        _subset(P_, L_, PR_, RE_, np.concatenate(m_after_stop)),
-        _subset(P_, L_, PR_, RE_, np.concatenate(m_tr)),
-    )
+        logits = model(x)[:, pos, :]           # (B, n_slots, V)
+
+        if logit_bias is not None:
+            logits = logits - logit_bias.to(device=logits.device, dtype=logits.dtype)
+
+        # full softmax over vocab; we will *evaluate* on labels 1..9
+        prob = F.softmax(logits, dim=-1)       # (B, n_slots, V)
+        pred = prob.argmax(dim=-1)             # (B, n_slots)
+
+        # valid evaluation targets: decisions 1..9 only
+        mask = (tgt >= 1) & (tgt <= 9)         # (B, n_slots)
+        if mask.sum().item() == 0:
+            continue
+
+        y_true = tgt[mask].to(torch.int64)     # (N,)
+        y_pred = pred[mask].to(torch.int64)    # (N,)
+
+        # --- hit (accuracy) ---
+        total += y_true.numel()
+        correct += (y_true == y_pred).sum().item()
+
+        # --- macro-F1 counts over 9 classes ---
+        # predictions outside 1..9 do not contribute to pred_cnt (matches sklearn(labels=...))
+        y_true_np = y_true.cpu().numpy()
+        y_pred_np = y_pred.cpu().numpy()
+
+        for c in range(1, 10):
+            idx = c - 1
+            tmask = (y_true_np == c)
+            pmask = (y_pred_np == c)
+            true_cnt[idx] += int(tmask.sum())
+            pred_cnt[idx] += int(pmask.sum())
+            tp[idx] += int((tmask & pmask).sum())
+
+        # --- AUPRC: store only 9-class scores (classes 1..9) ---
+        # shape (N, 9)
+        scores_9 = prob[mask, 1:10].detach().cpu().numpy().astype(np.float32)
+        y_true_chunks.append(y_true_np.astype(np.int64))
+        y_score_chunks.append(scores_9)
+
+        # --- optional: unweighted NLL on corrected logits (proper scoring rule) ---
+        if compute_nll:
+            logp = F.log_softmax(logits, dim=-1)  # (B, n_slots, V)
+            # gather log prob at true class
+            lp_true = logp[mask].gather(dim=-1, index=y_true.unsqueeze(-1)).squeeze(-1)
+            nll_sum += (-lp_true).sum().item()
+            nll_cnt += lp_true.numel()
+
+        # --- optional: revenue MAE using corrected probs (consistent with Option A) ---
+        if compute_rev_mae:
+            # (N, 9)
+            p9 = prob[mask, 1:10]
+            exp_rev = (p9 * rev_vec.to(dtype=p9.dtype)).sum(dim=-1)     # (N,)
+            true_rev = rev_vec[(y_true - 1).clamp(0, 8)].to(dtype=exp_rev.dtype)
+            rev_sum += torch.abs(exp_rev - true_rev).sum().item()
+            rev_cnt += exp_rev.numel()
+
+    if total == 0:
+        return {"nll": float("nan"), "hit": float("nan"), "f1_macro": float("nan"),
+                "auprc_macro": float("nan"), "rev_mae": float("nan")}
+
+    hit = correct / total
+    f1_macro = _macro_f1_from_counts(tp, pred_cnt, true_cnt)
+
+    # AUPRC macro
+    y_true_all = np.concatenate(y_true_chunks, axis=0)
+    y_score_all = np.concatenate(y_score_chunks, axis=0)  # (N, 9)
+    y_bin = label_binarize(y_true_all, classes=DECISION_CLASSES)  # (N, 9)
+    auprc_macro = float(average_precision_score(y_bin, y_score_all, average="macro"))
+
+    out = {
+        "hit": float(hit),
+        "f1_macro": float(f1_macro),
+        "auprc_macro": float(auprc_macro),
+    }
+    out["nll"] = float(nll_sum / max(1, nll_cnt)) if compute_nll else float("nan")
+    out["rev_mae"] = float(rev_sum / max(1, rev_cnt)) if compute_rev_mae else float("nan")
+    return out
 
 # ══════════════════════════════ 10. Training loop ════════════════════
 def train_model(cfg: Dict[str, Any],
@@ -528,6 +604,12 @@ def train_model(cfg: Dict[str, Any],
     weights = torch.ones(cfg["vocab_size_tgt"], device=device)
     weights[9] = cfg["weight"]
     loss_fn = FocalLoss(cfg["gamma"], pad_id, weights)
+
+    # Analytic correction at eval/infer time:
+    # If training used class weight w_c in weighted CE, then p_train(y|x) ∝ w_y * p_true(y|x).
+    # So to recover p_true, subtract log(w_c) from logits before softmax.
+    logit_bias = torch.zeros(cfg["vocab_size_tgt"], device=device, dtype=torch.float32)
+    logit_bias[9] = math.log(cfg["weight"])   # only class 9 was upweighted
 
     # ---- DeepSpeed ----------------------------------------------------
     ds_cfg = {
@@ -592,18 +674,30 @@ def train_model(cfg: Dict[str, Any],
             running += loss.item()
         
         # ---- validation ----------------------------------------------
-        v_loss,v_ppl,v_all,v_stop,v_after,v_tr = evaluate(val_dl, engine, device, loss_fn, pad_id, tok_tgt, cfg["ai_rate"])
-        
+        v = evaluate(
+            val_dl,
+            engine.module,            # underlying nn.Module
+            device,
+            ai_rate=cfg["ai_rate"],
+            logit_bias=logit_bias,    # analytic odds correction
+            compute_nll=True,         # selection metric
+            compute_rev_mae=False,    # keep eval simple
+        )
+
+        # Basic console log (single line)
+        print(
+            f"Epoch {ep:02d}  ValNLL={v['nll']:.4f}  "
+            f"Hit={v['hit']:.4f}  F1={v['f1_macro']:.4f}  AUPRC={v['auprc_macro']:.4f}"
+        )
+
         # ---- Ray Tune / external reporting ----
         if report_fn is not None:
             report_fn({
                 "epoch": ep,
-                "val_loss": v_loss,
-                "val_ppl": v_ppl,
-                "val_all_hit": v_all["hit"],
-                "val_all_f1": v_all["f1"],
-                "val_all_auprc": v_all["auprc"],
-                "val_all_rev_mae": v_all["rev_mae"],
+                "val_nll": v["nll"],                 # <<< use this in Ray Tune (mode="min")
+                "val_hit": v["hit"],
+                "val_f1_macro": v["f1_macro"],
+                "val_auprc_macro": v["auprc_macro"],
             })
 
         # Allow scheduler to terminate the trial early
@@ -611,61 +705,46 @@ def train_model(cfg: Dict[str, Any],
             print("[INFO] External early-stop triggered.")
             break
 
-        print(f"Epoch {ep:02d}  ValLoss={v_loss:.4f}  PPL={v_ppl:.4f}")
-        for tag,d in (("all",v_all),("STOP_cur",v_stop),
-                      ("after_STOP",v_after),("transition",v_tr)):
-            print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
-                  f"AUPRC={d['auprc']:.4f}  RevMAE={d['rev_mae']:.4f}")
-
         print(f"[INFO] artefacts → s3://{bucket}/{ck_key} and s3://{bucket}/{js_key}")
 
-        if best_val_loss is None or v_loss < best_val_loss:
-            best_val_loss, patience = v_loss, 0
+        # ---- model selection / early stopping (by corrected unweighted NLL) ----
+        val_nll = v["nll"]
+        if best_val_nll is None or val_nll < best_val_nll:
+            best_val_nll, patience = val_nll, 0
 
             best_val_metrics = {
-                "val_loss"             : v_loss,
-                "val_ppl"              : v_ppl,
-                "val_all_hit_rate"     : v_all["hit"],
-                "val_all_f1_score"     : v_all["f1"],
-                "val_all_auprc"        : v_all["auprc"],
-                "val_all_rev_mae"      : v_all["rev_mae"],
-                "val_stop_hit_rate"    : v_stop["hit"],
-                "val_stop_f1_score"    : v_stop["f1"],
-                "val_stop_auprc"       : v_stop["auprc"],
-                "val_stop_rev_mae"     : v_stop["rev_mae"],
-                "val_after_hit_rate"     : v_after["hit"],
-                "val_after_f1_score"     : v_after["f1"],
-                "val_after_auprc"        : v_after["auprc"],
-                "val_after_rev_mae"      : v_after["rev_mae"],
-                "val_transition_hit_rate"     : v_tr["hit"],
-                "val_transition_f1_score"     : v_tr["f1"],
-                "val_transition_auprc"        : v_tr["auprc"],
-                "val_transition_rev_mae"      : v_tr["rev_mae"],
+                "val_nll": best_val_nll,
+                "val_hit": v["hit"],
+                "val_f1_macro": v["f1_macro"],
+                "val_auprc_macro": v["auprc_macro"],
+                # reproducibility of the analytic correction
+                "weight_class9": float(cfg["weight"]),
+                "logit_bias_class9": float(logit_bias[9].item()),
             }
 
             ckpt = {
                 "epoch": ep,
-                "best_val_loss": best_val_loss,
+                "best_val_nll": best_val_nll,
                 "model_state_dict": engine.module.state_dict(),
+                "weight_class9": float(cfg["weight"]),
+                "logit_bias_class9": float(logit_bias[9].item()),
             }
 
-            # when you save the best checkpoint & metrics:
+            # save best checkpoint & metrics
             torch.save(ckpt, ckpt_path)
             json_path.write_text(json.dumps(_json_safe(best_val_metrics), indent=2))
 
-            # upload & unlink
-            # _upload_and_unlink(json_path, bucket, js_key, s3)
-            # _upload_and_unlink(ckpt_path, bucket, ck_key, s3)
-
             if s3:
-                s3.upload_file(str(json_path), bucket, js_key,
-                            ExtraArgs={"ContentType": "application/json"})
+                s3.upload_file(
+                    str(json_path), bucket, js_key,
+                    ExtraArgs={"ContentType": "application/json"},
+                )
                 s3.upload_file(str(ckpt_path), bucket, ck_key)
 
         else:
             patience += 1
             if patience >= cfg["patience"]:
-                print("Early stopping")
+                print("Early stopping (by val_nll).")
                 break
 
 

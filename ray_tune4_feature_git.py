@@ -152,17 +152,16 @@ def main():
     # ---- ASHA scheduler: early stop bad trials ----
     asha = ASHAScheduler(
         time_attr="epoch",
-        metric="val_all_auprc",
-        mode="max",
+        metric="val_nll",
+        mode="min",
         max_t=120,
-        grace_period=10,       # don't kill too early
-        reduction_factor=3
+        grace_period=10,
+        reduction_factor=3,
     )
 
-    # ---- HyperOpt: smarter than pure random after some trials ----
     algo = HyperOptSearch(
-        metric="val_all_auprc",
-        mode="max"
+        metric="val_nll",
+        mode="min",
     )
 
     # ---- Run config ----
@@ -183,10 +182,13 @@ def main():
 
     results = tuner.fit()
 
-    best = results.get_best_result(metric="val_all_auprc", mode="max")
+    best = results.get_best_result(metric="val_nll", mode="min")
     print("\n===== BEST CONFIG =====")
     print(best.config)
-    print("best val_all_auprc:", best.metrics.get("val_all_auprc"))
+    print("best val_nll:", best.metrics.get("val_nll"))
+    print("val_hit:", best.metrics.get("val_hit"))
+    print("val_f1_macro:", best.metrics.get("val_f1_macro"))
+    print("val_auprc_macro:", best.metrics.get("val_auprc_macro"))
 
     # ---- Stage B: retrain best on full data with expensive shuffling ----
     best_cfg = best.config
