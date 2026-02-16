@@ -510,7 +510,20 @@ def evaluate(
 
         # --- AUPRC: store only 9-class scores (classes 1..9) ---
         # shape (N, 9)
-        scores_9 = prob[mask, 1:10].detach().cpu().numpy().astype(np.float32)
+        # scores_9 = prob[mask, 1:10].detach().cpu().numpy().astype(np.float32)
+
+        # prob: [B, T_dec, C]
+        # mask must be [B, T_dec]
+        if mask.shape[1] != prob.shape[1]:
+            # Best: rebuild mask from the labels that correspond to prob's positions.
+            # If you already have y aligned with prob, use that.
+            # Otherwise, as a safe fallback, truncate (only OK if prob corresponds to the prefix).
+            mask = mask[:, :prob.shape[1]]
+
+        # safer indexing: first apply mask (-> [num_true, C]), then slice classes
+        prob_sel = prob[mask]                 # [num_true, C]
+        scores_9 = prob_sel[:, 1:10]          # [num_true, 9]
+
         y_true_chunks.append(y_true_np.astype(np.int64))
         y_score_chunks.append(scores_9)
 
