@@ -119,7 +119,7 @@ def main():
 
     # ---- Valid (d_model, heads) combos to satisfy divisibility + head_dim>=16 ----
     valid_dm_heads = []
-    for dm in [96, 128, 160, 256]:
+    for dm in [64, 96, 128]:
         for h in [4, 6, 8]:
             if dm % h == 0 and (dm // h) >= 16:
                 valid_dm_heads.append((dm, h))
@@ -135,7 +135,7 @@ def main():
         # hyperparams
         "nb_features": tune.choice([32, 48, 64]),
         "dm_heads": tune.choice(valid_dm_heads),   # couples d_model and num_heads safely
-        "N": tune.randint(4, 9),                   # 4..8
+        "N": tune.randint(2, 4),                   # 4..8
         "dropout": tune.uniform(0.0, 0.2),
         "lr": tune.loguniform(1e-4, 1e-3),
         "weight": tune.choice([1, 2, 4, 6, 8]),
@@ -145,7 +145,7 @@ def main():
 
         # You can make d_ff depend on d_model inside trainable if you want.
         # For simplicity: sample a multiplier then compute d_ff = min(d_model*m, 512)
-        "dff_mult": tune.choice([2, 3, 4]),
+        "dff_mult": tune.choice([2, 3]),
         "d_ff": 256,  # placeholder; we’ll override in trainable below if desired
     }
 
