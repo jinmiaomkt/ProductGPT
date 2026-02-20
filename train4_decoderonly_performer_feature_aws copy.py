@@ -667,17 +667,6 @@ def train_model(cfg: Dict[str, Any],
 
     # ---- training -----------------------------------------------------
     best_val_loss, patience = None, 0
-
-    best_val_metrics = {
-    "val_nll": float("nan"),
-    "val_epoch": -1,
-    "val_hit": float("nan"),
-    "val_f1_macro": float("nan"),
-    "val_auprc_macro": float("nan"),
-    "weight_class9": float(cfg["weight"]),
-    "logit_bias_class9": float(logit_bias[9].item()),
-}
-
     best_val_nll = None          # or float("inf") if you prefer
     best_val_epoch = -1
     for ep in range(cfg["num_epochs"]):
@@ -790,71 +779,59 @@ def train_model(cfg: Dict[str, Any],
             print(f"[WARN] Could not download ckpt for test: {e}")
 
     # ---- test ---------------------------------------------------------
-    # if ckpt_path.exists():
-    #     state = torch.load(ckpt_path, map_location=device)
-    #     engine.module.load_state_dict(state["model_state_dict"])
-
-    #     t_loss,t_ppl,t_all,t_stop,t_after,t_tr = evaluate(test_dl, engine, device, loss_fn, pad_id, tok_tgt, cfg["ai_rate"])
-        
-    #     print(f"\n** TEST ** Loss={t_loss:.4f}  PPL={t_ppl:.4f}")
-    #     for tag,d in (("all",t_all),("STOP_cur",t_stop),
-    #                   ("after_STOP",t_after),("transition",t_tr)):
-    #         print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
-    #               f"AUPRC={d['auprc']:.4f}")
-    
-    # ---- test ---------------------------------------------------------
-    # Default placeholders so final_meta never crashes
-    t = {"nll": float("nan"), "hit": float("nan"), "f1_macro": float("nan"),
-        "auprc_macro": float("nan"), "rev_mae": float("nan")}
-
     if ckpt_path.exists():
         state = torch.load(ckpt_path, map_location=device)
         engine.module.load_state_dict(state["model_state_dict"])
 
-        t = evaluate(
-            test_dl,
-            engine.module,
-            device,
-            ai_rate=cfg["ai_rate"],
-            logit_bias=logit_bias,
-            compute_nll=True,
-            compute_rev_mae=True,
-        )
-
-        print(
-            f"\n** TEST ** NLL={t['nll']:.4f}  Hit={t['hit']:.4f}  "
-            f"F1={t['f1_macro']:.4f}  AUPRC={t['auprc_macro']:.4f}  RevMAE={t['rev_mae']:.4f}"
-        )
-
+        t_loss,t_ppl,t_all,t_stop,t_after,t_tr = evaluate(test_dl, engine, device, loss_fn, pad_id, tok_tgt, cfg["ai_rate"])
+        
+        print(f"\n** TEST ** Loss={t_loss:.4f}  PPL={t_ppl:.4f}")
+        for tag,d in (("all",t_all),("STOP_cur",t_stop),
+                      ("after_STOP",t_after),("transition",t_tr)):
+            print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
+                  f"AUPRC={d['auprc']:.4f}")
+            
     # ------------------ inference on full 30 campaigns ------------------
-    if cfg.get("do_infer", True):
-        inf_dl, _, _, _ = build_dataloaders({**cfg, "mode": "infer"})
+    inf_dl, _, _, _ = build_dataloaders({**cfg, "mode": "infer"})
 
-        # Write to a gzipped temp file in /tmp to keep root disk small
-        tmp_pred = Path("/tmp") / f"{uid}_predictions.jsonl.gz"
+    # Write to a gzipped temp file in /tmp to keep root disk small
+    tmp_pred = Path("/tmp") / f"{uid}_predictions.jsonl.gz"
 
-        with gzip.open(tmp_pred, "wt", encoding="utf-8") as fp, torch.no_grad():
-            for batch in tqdm(inf_dl, desc="Infer 30-campaign set"):
-                x   = batch["aggregate_input"].to(device)
-                uids = batch["uid"]  # list[str] length B
-                logits = engine(x)[:, cfg["ai_rate"]-1::cfg["ai_rate"], :]
-                probs  = torch.softmax(logits, -1).cpu().numpy()   # (B, N, 60)
-                for u, p in zip(uids, probs):
-                    fp.write(json.dumps({"uid": u, "probs": p.tolist()}) + "\n")
+    with gzip.open(tmp_pred, "wt", encoding="utf-8") as fp, torch.no_grad():
+        for batch in tqdm(inf_dl, desc="Infer 30-campaign set"):
+            x   = batch["aggregate_input"].to(device)
+            uids = batch["uid"]  # list[str] length B
+            logits = engine(x)[:, cfg["ai_rate"]-1::cfg["ai_rate"], :]
+            probs  = torch.softmax(logits, -1).cpu().numpy()   # (B, N, 60)
+            for u, p in zip(uids, probs):
+                fp.write(json.dumps({"uid": u, "probs": p.tolist()}) + "\n")
 
-        # Upload gzipped predictions and delete local temp
-        pred_s3_key = f"CV/predictions/{tmp_pred.name}"
-        _upload_and_unlink(tmp_pred, bucket, pred_s3_key, s3, gzip_json=True)
+    # Upload gzipped predictions and delete local temp
+    pred_s3_key = f"CV/predictions/{tmp_pred.name}"
+    _upload_and_unlink(tmp_pred, bucket, pred_s3_key, s3, gzip_json=True)
 
     # ------------------ Final metadata (optional) ------------------
     final_meta = {
         "best_checkpoint_path": ckpt_path.name,
         **best_val_metrics,
-        "test_nll": t["nll"],
-        "test_hit": t["hit"],
-        "test_f1_macro": t["f1_macro"],
-        "test_auprc_macro": t["auprc_macro"],
-        "test_rev_mae": t["rev_mae"],
+        "test_loss" : t_loss,
+        "test_ppl"  : t_ppl,
+        "test_all_hit_rate" : t_all["hit"],
+        "test_all_f1_score" : t_all["f1"],
+        "test_all_auprc"    : t_all["auprc"],
+        "test_all_rev_mae"  : t_all["rev_mae"],
+        "test_stop_hit_rate": t_stop["hit"],
+        "test_stop_f1_score": t_stop["f1"],
+        "test_stop_auprc"   : t_stop["auprc"],
+        "test_stop_rev_mae" : t_stop["rev_mae"],
+        "test_after_hit_rate": t_after["hit"],
+        "test_after_f1_score": t_after["f1"],
+        "test_after_auprc"   : t_after["auprc"],
+        "test_after_rev_mae" : t_after["rev_mae"],
+        "test_transition_hit_rate": t_tr["hit"],
+        "test_transition_f1_score": t_tr["f1"],
+        "test_transition_auprc"   : t_tr["auprc"],
+        "test_transition_rev_mae" : t_tr["rev_mae"],
     }
 
     final_meta_path = metrics_dir / f"FullProductGPT_{uid}_final.json"
@@ -869,15 +846,13 @@ def train_model(cfg: Dict[str, Any],
     return {
         "uid": uid,
         "fold_id": cfg["fold_id"],
-        "best_val_nll": float(best_val_nll) if best_val_nll is not None else float("nan"),
-        "val_hit": float(best_val_metrics.get("val_hit", float("nan"))),
-        "val_f1_macro": float(best_val_metrics.get("val_f1_macro", float("nan"))),
-        "val_auprc_macro": float(best_val_metrics.get("val_auprc_macro", float("nan"))),
-        "test_hit": float(t["hit"]),
-        "test_f1_macro": float(t["f1_macro"]),
-        "test_auprc_macro": float(t["auprc_macro"]),
-        "ckpt": ck_key.split("/")[-1],
-        "preds": f"{uid}_predictions.jsonl.gz",
+        "val_loss": best_val_loss,
+        "val_f1":  best_val_metrics["val_all_f1_score"],
+        "val_auprc": best_val_metrics["val_all_auprc"],
+        "test_f1": t_all["f1"],
+        "test_auprc": t_all["auprc"],
+        "ckpt": ck_key.split("/")[-1],                   # name in checkpoints/
+        "preds": f"{uid}_predictions.jsonl.gz",          # uploaded filename in CV/predictions/
     }
 
 # ══════════════════════════════ 11. CLI ═══════════════════════════════
