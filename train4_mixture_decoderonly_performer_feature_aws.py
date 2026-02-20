@@ -38,8 +38,8 @@ from typing import Callable, Optional, Dict, Any
 
 # ────────────────────────────── project local
 from config4 import get_config, get_weights_file_path, latest_weights_file_path
-from dataset4_productgpt import TransformerDataset, load_json_dataset
-from model4_decoderonly_feature_performer import build_transformer
+from dataset4_mixture import TransformerDataset, load_json_dataset
+from model4_mixture_decoderonly_feature_performer import build_transformer
 
 # ────────────────────────────── global config
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # silence TF
@@ -187,6 +187,95 @@ class FocalLoss(nn.Module):
         pt = torch.exp(-ce)
         loss = ((1 - pt) ** self.gamma) * ce
         return loss.mean() 
+
+class SeqWeightedCrossEntropy(nn.Module):
+    def __init__(self, weight: torch.Tensor | None, ignore_index: int):
+        super().__init__()
+        self.register_buffer("weight", weight if weight is not None else None)
+        self.ignore_index = ignore_index
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        # logits: (B,T,V), targets: (B,T)
+        B, T, V = logits.shape
+        loss = F.cross_entropy(
+            logits.view(-1, V),
+            targets.view(-1),
+            weight=self.weight,
+            ignore_index=self.ignore_index,
+            reduction="none",
+        )
+        mask = targets.view(-1) != self.ignore_index
+        if mask.sum() == 0:
+            return logits.sum() * 0.0
+        return loss[mask].mean()
+
+
+class SeqFocalLoss(nn.Module):
+    """
+    Standard focal loss for multi-class:
+      FL = alpha_y * (1 - pt)^gamma * CE_unweighted
+    where pt comes from the unweighted CE (important).
+    """
+    def __init__(self, gamma: float, ignore_index: int, alpha: torch.Tensor | None = None):
+        super().__init__()
+        self.gamma = float(gamma)
+        self.ignore_index = ignore_index
+        self.register_buffer("alpha", alpha if alpha is not None else None)
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        B, T, V = logits.shape
+        logits2d = logits.view(-1, V)
+        targets1d = targets.view(-1)
+
+        # unweighted CE for pt
+        ce = F.cross_entropy(
+            logits2d,
+            targets1d,
+            ignore_index=self.ignore_index,
+            reduction="none",
+        )
+
+        mask = targets1d != self.ignore_index
+        if mask.sum() == 0:
+            return logits.sum() * 0.0
+
+        ce = ce[mask]
+        t  = targets1d[mask]
+
+        pt = torch.exp(-ce)
+        loss = ((1.0 - pt) ** self.gamma) * ce
+
+        if self.alpha is not None:
+            loss = loss * self.alpha[t].to(dtype=loss.dtype, device=loss.device)
+
+        return loss.mean()
+
+def make_loss_and_bias(cfg: dict, pad_id: int, device: torch.device):
+    """
+    Returns:
+      loss_fn, logit_bias (or None), class_weight (float tensor length vocab)
+    """
+    V = cfg["vocab_size_tgt"]
+
+    # class_weight is your "w" used for imbalance / cost-sensitive training
+    class_weight = torch.ones(V, device=device, dtype=torch.float32)
+    class_weight[9] = float(cfg["weight"])   # your upweighted class index (9)
+
+    gamma = float(cfg.get("gamma", 0.0))
+
+    if gamma == 0.0:
+        # weighted CE (analytic correction is valid)
+        loss_fn = SeqWeightedCrossEntropy(weight=class_weight, ignore_index=pad_id)
+
+        # correction: softmax(z - log(w))
+        logit_bias = torch.log(class_weight).to(device=device)  # log(1)=0, log(w)>0
+        return loss_fn, logit_bias, class_weight
+
+    # focal (analytic correction NOT valid)
+    # You may still use alpha=class_weight as a focal alpha term
+    loss_fn = SeqFocalLoss(gamma=gamma, ignore_index=pad_id, alpha=class_weight)
+    logit_bias = None
+    return loss_fn, logit_bias, class_weight
 
 # ══════════════════════════════ 5. Utility fns ════════════════════════
 def transition_mask(seq: torch.Tensor) -> torch.Tensor:  # (B, T)
@@ -468,38 +557,64 @@ def evaluate(
     rev_vec = torch.tensor([1, 10, 1, 10, 1, 10, 1, 10, 0], device=dev, dtype=torch.float32)
 
     for batch in loader:
-        x = batch["aggregate_input"].to(dev)   # (B, Tsrc)
-        tgt = batch["label"].to(dev)           # (B, Ttgt) aligned with decision slots
+        x = batch["aggregate_input"].to(dev)     # (B, Tsrc)
+        tgt_full = batch["label"].to(dev)        # could be (B, n_slots) OR (B, Tsrc)
 
-        # decision positions in the *model output time axis*
+        # decision positions on the source/time axis
         pos = torch.arange(ai_rate - 1, x.size(1), ai_rate, device=dev)
 
-        logits = model(x)[:, pos, :]           # (B, n_slots, V)
+        # model output (you expect either (B, Tsrc, V) or already (B, n_slots, V))
+        logits_full = model(x)
 
+        # Align logits to decision slots
+        if logits_full.size(1) == x.size(1):
+            logits = logits_full[:, pos, :]      # (B, n_slots, V)
+        else:
+            logits = logits_full                 # assume already (B, n_slots, V)
+
+        # (optional) analytic correction only when logit_bias is not None
         if logit_bias is not None:
             logits = logits - logit_bias.to(device=logits.device, dtype=logits.dtype)
 
-        # full softmax over vocab; we will *evaluate* on labels 1..9
-        prob = F.softmax(logits, dim=-1)       # (B, n_slots, V)
-        pred = prob.argmax(dim=-1)             # (B, n_slots)
+        # Evaluate ONLY over decision classes 1..9:
+        logits_dec = logits[:, :, 1:10]               # (B, n_slots, 9)
+        prob_dec   = F.softmax(logits_dec, dim=-1)    # (B, n_slots, 9)
+        pred_dec   = prob_dec.argmax(dim=-1) + 1      # back to label space 1..9
 
-        # valid evaluation targets: decisions 1..9 only
-        mask = (tgt >= 1) & (tgt <= 9)         # (B, n_slots)
+        # prob = F.softmax(logits, dim=-1)         # (B, n_slots, V)
+        # pred = prob.argmax(dim=-1)              # (B, n_slots)
+
+        # ---- Align labels to decision slots ----
+        if tgt_full.size(1) == prob_dec.size(1):
+            tgt_dec = tgt_full                   # already (B, n_slots)
+        elif tgt_full.size(1) == x.size(1):
+            tgt_dec = tgt_full[:, pos]           # take decision positions from full axis
+        elif tgt_full.size(1) > prob_dec.size(1):
+            tgt_dec = tgt_full[:, :prob_dec.size(1)] # fallback
+        else:
+            tgt_dec = F.pad(tgt_full, (0, prob_dec.size(1) - tgt_full.size(1)), value=PAD_ID)
+
+        mask = (tgt_dec >= 1) & (tgt_dec <= 9)   # (B, n_slots)
         if mask.sum().item() == 0:
             continue
 
-        y_true = tgt[mask].to(torch.int64)     # (N,)
-        y_pred = pred[mask].to(torch.int64)    # (N,)
+        y_true = tgt_dec[mask].long()            # (N,)
+        y_pred = pred_dec[mask].long()               # (N,)
 
-        # --- hit (accuracy) ---
+        # Flatten prob/logp on masked positions (prevents shape bugs)
+        prob_flat = prob_dec[mask]                   # (N, V)
+        if prob_flat.size(-1) < 10:
+            continue
+
+        scores_9 = prob_flat[:, 1:10]            # (N, 9)
+
+        # --- hit ---
         total += y_true.numel()
         correct += (y_true == y_pred).sum().item()
 
-        # --- macro-F1 counts over 9 classes ---
-        # predictions outside 1..9 do not contribute to pred_cnt (matches sklearn(labels=...))
-        y_true_np = y_true.cpu().numpy()
-        y_pred_np = y_pred.cpu().numpy()
-
+        # --- macro-F1 counts ---
+        y_true_np = y_true.detach().cpu().numpy()
+        y_pred_np = y_pred.detach().cpu().numpy()
         for c in range(1, 10):
             idx = c - 1
             tmask = (y_true_np == c)
@@ -508,42 +623,20 @@ def evaluate(
             pred_cnt[idx] += int(pmask.sum())
             tp[idx] += int((tmask & pmask).sum())
 
-        # --- AUPRC: store only 9-class scores (classes 1..9) ---
-        # shape (N, 9)
-        # scores_9 = prob[mask, 1:10].detach().cpu().numpy().astype(np.float32)
-
-        # prob: [B, T_dec, C]
-        # mask must be [B, T_dec]
-        if mask.shape[1] != prob.shape[1]:
-            # Best: rebuild mask from the labels that correspond to prob's positions.
-            # If you already have y aligned with prob, use that.
-            # Otherwise, as a safe fallback, truncate (only OK if prob corresponds to the prefix).
-            mask = mask[:, :prob.shape[1]]
-
-        # safer indexing: first apply mask (-> [num_true, C]), then slice classes
-        prob_sel = prob[mask]                 # [num_true, C]
-        scores_9 = prob_sel[:, 1:10]          # [num_true, 9]
-
-        # y_true_chunks.append(y_true_np.astype(np.int64))
-        y_true_chunks.append(y_true.detach().cpu().numpy())  # or .long() if needed
-
-        # y_score_chunks.append(scores_9)
+        # --- AUPRC chunks ---
+        y_true_chunks.append(y_true_np.astype(np.int64))
         y_score_chunks.append(scores_9.detach().float().cpu().numpy())
-        y_score_all = np.concatenate(y_score_chunks, axis=0)
 
-        # --- optional: unweighted NLL on corrected logits (proper scoring rule) ---
+        # --- NLL (on corrected logits) ---
         if compute_nll:
-            logp = F.log_softmax(logits, dim=-1)  # (B, n_slots, V)
-            # gather log prob at true class
-            lp_true = logp[mask].gather(dim=-1, index=y_true.unsqueeze(-1)).squeeze(-1)
+            logp_flat = F.log_softmax(logits, dim=-1)[mask]     # (N, V)
+            lp_true = logp_flat.gather(1, y_true.unsqueeze(1)).squeeze(1)
             nll_sum += (-lp_true).sum().item()
             nll_cnt += lp_true.numel()
 
-        # --- optional: revenue MAE using corrected probs (consistent with Option A) ---
+        # --- revenue MAE ---
         if compute_rev_mae:
-            # (N, 9)
-            p9 = prob[mask, 1:10]
-            exp_rev = (p9 * rev_vec.to(dtype=p9.dtype)).sum(dim=-1)     # (N,)
+            exp_rev = (scores_9 * rev_vec.to(dtype=scores_9.dtype)).sum(dim=-1)  # (N,)
             true_rev = rev_vec[(y_true - 1).clamp(0, 8)].to(dtype=exp_rev.dtype)
             rev_sum += torch.abs(exp_rev - true_rev).sum().item()
             rev_cnt += exp_rev.numel()
@@ -618,15 +711,20 @@ def train_model(cfg: Dict[str, Any],
     # torch.quantization.prepare_qat(model, inplace=True)
 
     # ---- criterion ----------------------------------------------------
-    weights = torch.ones(cfg["vocab_size_tgt"], device=device)
-    weights[9] = cfg["weight"]
-    loss_fn = FocalLoss(cfg["gamma"], pad_id, weights)
+    # weights = torch.ones(cfg["vocab_size_tgt"], device=device)
+    # weights[9] = cfg["weight"]
+    # loss_fn = FocalLoss(cfg["gamma"], pad_id, weights)
 
-    # Analytic correction at eval/infer time:
-    # If training used class weight w_c in weighted CE, then p_train(y|x) ∝ w_y * p_true(y|x).
-    # So to recover p_true, subtract log(w_c) from logits before softmax.
-    logit_bias = torch.zeros(cfg["vocab_size_tgt"], device=device, dtype=torch.float32)
-    logit_bias[9] = math.log(cfg["weight"])   # only class 9 was upweighted
+    # # Analytic correction at eval/infer time:
+    # # If training used class weight w_c in weighted CE, then p_train(y|x) ∝ w_y * p_true(y|x).
+    # # So to recover p_true, subtract log(w_c) from logits before softmax.
+    # logit_bias = torch.zeros(cfg["vocab_size_tgt"], device=device, dtype=torch.float32)
+    # logit_bias[9] = math.log(cfg["weight"])   # only class 9 was upweighted
+
+    loss_fn, logit_bias, class_weight = make_loss_and_bias(cfg, pad_id, device)
+
+    print(f"[INFO] loss= {'weighted-CE' if logit_bias is not None else 'focal'} "
+        f"(gamma={cfg.get('gamma', 0)}) | analytic_correction={'ON' if logit_bias is not None else 'OFF'}")
 
     # ---- DeepSpeed ----------------------------------------------------
     ds_cfg = {
@@ -634,9 +732,13 @@ def train_model(cfg: Dict[str, Any],
         "zero_allow_untested_optimizer": True,
         "gradient_accumulation_steps": 2,
         "gradient_clipping": 1.0,
+        # "optimizer": {
+        #     "type": "Lamb",
+        #     "params": {"lr": cfg["lr"], "eps": cfg["eps"], "weight_decay": cfg["weight_decay"]},
+        # },
         "optimizer": {
-            "type": "Lamb",
-            "params": {"lr": cfg["lr"], "eps": cfg["eps"], "weight_decay": cfg["weight_decay"]},
+            "type": "AdamW",
+            "params": {"lr": cfg["lr"], "betas": [0.9, 0.999], "eps": cfg["eps"], "weight_decay": cfg["weight_decay"]},
         },
         "zero_optimization": {"stage": 1},
         # "fp16": {"enabled": True, "loss_scale": 0, "hysteresis": 2, "min_loss_scale": 1},
@@ -667,12 +769,24 @@ def train_model(cfg: Dict[str, Any],
 
     # ---- training -----------------------------------------------------
     best_val_loss, patience = None, 0
+
+    best_val_metrics = {
+    "val_nll": float("nan"),
+    "val_epoch": -1,
+    "val_hit": float("nan"),
+    "val_f1_macro": float("nan"),
+    "val_auprc_macro": float("nan"),
+    "weight_class9": float(cfg["weight"]),
+    "logit_bias_class9": float(logit_bias[9].item()),
+}
+
     best_val_nll = None          # or float("inf") if you prefer
     best_val_epoch = -1
     for ep in range(cfg["num_epochs"]):
         if hasattr(train_dl.dataset, "set_epoch"):
             train_dl.dataset.set_epoch(ep)
         engine.train()
+        engine.gate.use_mean_gate = False
         running = 0.0
         for batch in tqdm(train_dl, desc=f"Ep {ep:02d}"):
             x = batch["aggregate_input"].to(device)
@@ -692,7 +806,14 @@ def train_model(cfg: Dict[str, Any],
             engine.step()
             running += loss.item()
         
+       # ---- update mean gate ----
+        engine.gate.update_mean_gate()
+        engine.gate.use_mean_gate = True
+
         # ---- validation ----------------------------------------------
+        if cfg.get("gamma", 0.0) != 0.0 and logit_bias is not None:
+            raise RuntimeError("Analytic correction must be OFF when gamma>0 (focal).")
+
         v = evaluate(
             val_dl,
             engine.module,            # underlying nn.Module
@@ -777,61 +898,71 @@ def train_model(cfg: Dict[str, Any],
             print(f"[S3] downloaded best ckpt for test → s3://{bucket}/{ck_key}")
         except Exception as e:
             print(f"[WARN] Could not download ckpt for test: {e}")
-
+    
     # ---- test ---------------------------------------------------------
+    # Default placeholders so final_meta never crashes
+    t = {"nll": float("nan"), "hit": float("nan"), "f1_macro": float("nan"),
+        "auprc_macro": float("nan"), "rev_mae": float("nan")}
+
     if ckpt_path.exists():
         state = torch.load(ckpt_path, map_location=device)
         engine.module.load_state_dict(state["model_state_dict"])
 
-        t_loss,t_ppl,t_all,t_stop,t_after,t_tr = evaluate(test_dl, engine, device, loss_fn, pad_id, tok_tgt, cfg["ai_rate"])
-        
-        print(f"\n** TEST ** Loss={t_loss:.4f}  PPL={t_ppl:.4f}")
-        for tag,d in (("all",t_all),("STOP_cur",t_stop),
-                      ("after_STOP",t_after),("transition",t_tr)):
-            print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
-                  f"AUPRC={d['auprc']:.4f}")
-            
+        t = evaluate(
+            test_dl,
+            engine.module,
+            device,
+            ai_rate=cfg["ai_rate"],
+            logit_bias=logit_bias,
+            compute_nll=True,
+            compute_rev_mae=True,
+        )
+
+        print(
+            f"\n** TEST ** NLL={t['nll']:.4f}  Hit={t['hit']:.4f}  "
+            f"F1={t['f1_macro']:.4f}  AUPRC={t['auprc_macro']:.4f}  RevMAE={t['rev_mae']:.4f}"
+        )
+
     # ------------------ inference on full 30 campaigns ------------------
-    inf_dl, _, _, _ = build_dataloaders({**cfg, "mode": "infer"})
+    if cfg.get("do_infer", True):
+        inf_dl, _, _, _ = build_dataloaders({**cfg, "mode": "infer"})
 
-    # Write to a gzipped temp file in /tmp to keep root disk small
-    tmp_pred = Path("/tmp") / f"{uid}_predictions.jsonl.gz"
+        # Write to a gzipped temp file in /tmp to keep root disk small
+        tmp_pred = Path("/tmp") / f"{uid}_predictions.jsonl.gz"
 
-    with gzip.open(tmp_pred, "wt", encoding="utf-8") as fp, torch.no_grad():
-        for batch in tqdm(inf_dl, desc="Infer 30-campaign set"):
-            x   = batch["aggregate_input"].to(device)
-            uids = batch["uid"]  # list[str] length B
-            logits = engine(x)[:, cfg["ai_rate"]-1::cfg["ai_rate"], :]
-            probs  = torch.softmax(logits, -1).cpu().numpy()   # (B, N, 60)
-            for u, p in zip(uids, probs):
-                fp.write(json.dumps({"uid": u, "probs": p.tolist()}) + "\n")
+        with gzip.open(tmp_pred, "wt", encoding="utf-8") as fp, torch.no_grad():
+            for batch in tqdm(inf_dl, desc="Infer 30-campaign set"):
+                x   = batch["aggregate_input"].to(device)
+                uids = batch["uid"]  # list[str] length B
+                # logits = engine(x)[:, cfg["ai_rate"]-1::cfg["ai_rate"], :]
+                # probs  = torch.softmax(logits, -1).cpu().numpy()   # (B, N, 60)
 
-    # Upload gzipped predictions and delete local temp
-    pred_s3_key = f"CV/predictions/{tmp_pred.name}"
-    _upload_and_unlink(tmp_pred, bucket, pred_s3_key, s3, gzip_json=True)
+                logits = engine(x)[:, cfg["ai_rate"]-1::cfg["ai_rate"], :]  # (B, n_slots, V)
+
+                if logit_bias is not None:
+                    logits = logits - logit_bias.to(device=logits.device, dtype=logits.dtype)
+
+                logits_dec = logits[:, :, 1:10]                  # (B, n_slots, 9)
+                probs_dec  = torch.softmax(logits_dec, -1).cpu().numpy()
+
+                fp.write(json.dumps({"uid": u, "probs_dec_1to9": probs_dec[i].tolist()}) + "\n")
+
+                # for u, p in zip(uids, probs):
+                #     fp.write(json.dumps({"uid": u, "probs": p.tolist()}) + "\n")
+
+        # Upload gzipped predictions and delete local temp
+        pred_s3_key = f"CV/predictions/{tmp_pred.name}"
+        _upload_and_unlink(tmp_pred, bucket, pred_s3_key, s3, gzip_json=True)
 
     # ------------------ Final metadata (optional) ------------------
     final_meta = {
         "best_checkpoint_path": ckpt_path.name,
         **best_val_metrics,
-        "test_loss" : t_loss,
-        "test_ppl"  : t_ppl,
-        "test_all_hit_rate" : t_all["hit"],
-        "test_all_f1_score" : t_all["f1"],
-        "test_all_auprc"    : t_all["auprc"],
-        "test_all_rev_mae"  : t_all["rev_mae"],
-        "test_stop_hit_rate": t_stop["hit"],
-        "test_stop_f1_score": t_stop["f1"],
-        "test_stop_auprc"   : t_stop["auprc"],
-        "test_stop_rev_mae" : t_stop["rev_mae"],
-        "test_after_hit_rate": t_after["hit"],
-        "test_after_f1_score": t_after["f1"],
-        "test_after_auprc"   : t_after["auprc"],
-        "test_after_rev_mae" : t_after["rev_mae"],
-        "test_transition_hit_rate": t_tr["hit"],
-        "test_transition_f1_score": t_tr["f1"],
-        "test_transition_auprc"   : t_tr["auprc"],
-        "test_transition_rev_mae" : t_tr["rev_mae"],
+        "test_nll": t["nll"],
+        "test_hit": t["hit"],
+        "test_f1_macro": t["f1_macro"],
+        "test_auprc_macro": t["auprc_macro"],
+        "test_rev_mae": t["rev_mae"],
     }
 
     final_meta_path = metrics_dir / f"FullProductGPT_{uid}_final.json"
@@ -846,13 +977,15 @@ def train_model(cfg: Dict[str, Any],
     return {
         "uid": uid,
         "fold_id": cfg["fold_id"],
-        "val_loss": best_val_loss,
-        "val_f1":  best_val_metrics["val_all_f1_score"],
-        "val_auprc": best_val_metrics["val_all_auprc"],
-        "test_f1": t_all["f1"],
-        "test_auprc": t_all["auprc"],
-        "ckpt": ck_key.split("/")[-1],                   # name in checkpoints/
-        "preds": f"{uid}_predictions.jsonl.gz",          # uploaded filename in CV/predictions/
+        "best_val_nll": float(best_val_nll) if best_val_nll is not None else float("nan"),
+        "val_hit": float(best_val_metrics.get("val_hit", float("nan"))),
+        "val_f1_macro": float(best_val_metrics.get("val_f1_macro", float("nan"))),
+        "val_auprc_macro": float(best_val_metrics.get("val_auprc_macro", float("nan"))),
+        "test_hit": float(t["hit"]),
+        "test_f1_macro": float(t["f1_macro"]),
+        "test_auprc_macro": float(t["auprc_macro"]),
+        "ckpt": ck_key.split("/")[-1],
+        "preds": f"{uid}_predictions.jsonl.gz",
     }
 
 # ══════════════════════════════ 11. CLI ═══════════════════════════════

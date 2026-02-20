@@ -78,6 +78,32 @@ for idx in range(len(df)):
 
 feature_tensor = torch.from_numpy(feature_array)  
 
+class UserHeadGate(nn.Module):
+    """
+    gate(u) -> weights over heads: [B, H], sum_h gate=1
+    Train: use per-user gates
+    Val/Test: use mean gate across users
+    """
+    def __init__(self, num_users: int, num_heads: int):
+        super().__init__()
+        self.logits = nn.Embedding(num_users, num_heads)  # [U, H]
+        nn.init.zeros_(self.logits.weight)               # start ~uniform after softmax
+
+        self.register_buffer("mean_gate", torch.full((num_heads,), 1.0 / num_heads))
+        self.use_mean_gate = False
+
+    @torch.no_grad()
+    def update_mean_gate(self):
+        probs = torch.softmax(self.logits.weight, dim=-1)     # [U, H]
+        self.mean_gate.copy_(probs.mean(dim=0))               # [H]
+
+    def forward(self, user_ids: torch.LongTensor) -> torch.Tensor:
+        # user_ids: [B]
+        if self.use_mean_gate:
+            return self.mean_gate[None, :].expand(user_ids.size(0), -1)  # [B, H]
+        return torch.softmax(self.logits(user_ids), dim=-1)              # [B, H]
+
+
 ##############################################################################
 # 1. gelu_approx
 ##############################################################################
@@ -287,7 +313,7 @@ class CausalPerformer(nn.Module):
         else:
             raise ValueError(f"Unsupported kernel type {self.kernel_type}")
 
-    def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
+    def forward(self, q, k, v, gate: torch.Tensor | None = None):
         # q,k,v: (B, seq_len, d_model)
         B, seq_len_q, _ = q.shape
         _, seq_len_k, _ = k.shape
@@ -329,9 +355,18 @@ class CausalPerformer(nn.Module):
         denominator = torch.sum(q_prime * K_cum_selected, dim=-1, keepdim=True)
         out = numerator / (denominator + 1e-6)
 
+        # --- mixture-head gating (minimal surgery) ---
+        # gate: (B, H) -> broadcast to (B, 1, H, 1)
+        if gate is not None:
+            out = out * gate[:, None, :, None]
+
         out = out.reshape(B, seq_len_q, self.d_model)
         out = self.w_o(out)
         return out
+
+        # out = out.reshape(B, seq_len_q, self.d_model)
+        # out = self.w_o(out)
+        # return out
 
 ##############################################################################
 # 8. DecoderBlock (Self-Attn + FeedForward)
@@ -348,12 +383,20 @@ class DecoderBlock(nn.Module):
         self.residual_attn = ResidualConnection(d_model, dropout)
         self.residual_ff   = ResidualConnection(d_model, dropout)
 
-    def forward(self, x: torch.Tensor):
-        # 1) Self-attn
-        # x = self.residual_attn(x, self.self_attention_block)
-        x = self.residual_attn(x, lambda x_norm:
-            self.self_attention_block(x_norm, x_norm, x_norm))
-        # 2) Feed-forward
+    # def forward(self, x: torch.Tensor):
+    #     # 1) Self-attn
+    #     # x = self.residual_attn(x, self.self_attention_block)
+    #     x = self.residual_attn(x, lambda x_norm:
+    #         self.self_attention_block(x_norm, x_norm, x_norm))
+    #     # 2) Feed-forward
+    #     x = self.residual_ff(x, self.feed_forward_block)
+    #     return x
+    
+    def forward(self, x: torch.Tensor, gate: torch.Tensor | None = None):
+        x = self.residual_attn(
+            x,
+            lambda x_norm: self.self_attention_block(x_norm, x_norm, x_norm, gate=gate)
+        )
         x = self.residual_ff(x, self.feed_forward_block)
         return x
 
@@ -366,9 +409,14 @@ class Decoder(nn.Module):
         self.layers = layers
         self.norm   = LayerNormalization(d_model)
 
-    def forward(self, x: torch.Tensor):
+    # def forward(self, x: torch.Tensor):
+    #     for layer in self.layers:
+    #         x = layer(x)
+    #     return self.norm(x)
+
+    def forward(self, x: torch.Tensor, gate: torch.Tensor | None = None):
         for layer in self.layers:
-            x = layer(x)
+            x = layer(x, gate=gate)
         return self.norm(x)
 
 ##############################################################################
@@ -400,6 +448,7 @@ class Transformer(nn.Module):
                  d_model: int, 
                  n_layers: int, 
                  n_heads: int,
+                 num_users: int,
                  d_ff: int, 
                  nb_features: int,
                  dropout: float, 
@@ -416,6 +465,7 @@ class Transformer(nn.Module):
         )
 
         self.pos_enc   = PositionalEncoding(d_model, max_seq_len, dropout)
+        self.gate = UserHeadGate(num_users=num_users, num_heads=n_heads)
 
         # Build N decoder blocks
         blocks = []
@@ -442,21 +492,35 @@ class Transformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, input_seq: torch.Tensor, return_hidden=False):
-        """
-        input_seq: (B, seq_len) integer tokens
-        returns:   (B, seq_len, vocab_size)
-        """
+    # def forward(self, input_seq: torch.Tensor, return_hidden=False):
+    #     """
+    #     input_seq: (B, seq_len) integer tokens
+    #     returns:   (B, seq_len, vocab_size)
+    #     """
+    #     x = self.token_embed(input_seq)
+    #     x = self.pos_enc(x)
+    #     x = self.decoder(x)
+    #     logits = self.projection(x)
+    #     # logits = self.decision_head(x)
+
+    #     if return_hidden:
+    #         return logits, x
+    #     return logits
+    def forward(self, input_seq: torch.Tensor, user_ids: torch.LongTensor | None = None, return_hidden=False):
         x = self.token_embed(input_seq)
         x = self.pos_enc(x)
-        x = self.decoder(x)
+
+        gate = None
+        if user_ids is not None:
+            gate = self.gate(user_ids)   # (B, H)
+
+        x = self.decoder(x, gate=gate)
         logits = self.projection(x)
-        # logits = self.decision_head(x)
 
         if return_hidden:
             return logits, x
         return logits
-
+    
 ##############################################################################
 # 12. Build function
 ##############################################################################
