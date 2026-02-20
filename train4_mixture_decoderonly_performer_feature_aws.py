@@ -602,11 +602,12 @@ def evaluate(
         y_pred = pred_dec[mask].long()               # (N,)
 
         # Flatten prob/logp on masked positions (prevents shape bugs)
-        prob_flat = prob_dec[mask]                   # (N, V)
-        if prob_flat.size(-1) < 10:
-            continue
-
-        scores_9 = prob_flat[:, 1:10]            # (N, 9)
+        # prob_flat = prob_dec[mask]                   # (N, V)
+        # if prob_flat.size(-1) < 10:
+        #     continue
+        # scores_9 = prob_flat[:, 1:10]            # (N, 9)
+        
+        scores_9 = prob_dec[mask]            # (N, 9)
 
         # --- hit ---
         total += y_true.numel()
@@ -629,7 +630,7 @@ def evaluate(
 
         # --- NLL (on corrected logits) ---
         if compute_nll:
-            logp_flat = F.log_softmax(logits, dim=-1)[mask]     # (N, V)
+            logp_flat = F.log_softmax(logits_dec, dim=-1)[mask]     # (N, V)
             lp_true = logp_flat.gather(1, y_true.unsqueeze(1)).squeeze(1)
             nll_sum += (-lp_true).sum().item()
             nll_cnt += lp_true.numel()
@@ -945,11 +946,9 @@ def train_model(cfg: Dict[str, Any],
                 logits_dec = logits[:, :, 1:10]                  # (B, n_slots, 9)
                 probs_dec  = torch.softmax(logits_dec, -1).cpu().numpy()
 
-                fp.write(json.dumps({"uid": u, "probs_dec_1to9": probs_dec[i].tolist()}) + "\n")
-
-                # for u, p in zip(uids, probs):
-                #     fp.write(json.dumps({"uid": u, "probs": p.tolist()}) + "\n")
-
+                for i, u in enumerate(uids):
+                    fp.write(json.dumps({"uid": u, "probs_dec_1to9": probs_dec[i].tolist()}) + "\n")
+                    
         # Upload gzipped predictions and delete local temp
         pred_s3_key = f"CV/predictions/{tmp_pred.name}"
         _upload_and_unlink(tmp_pred, bucket, pred_s3_key, s3, gzip_json=True)

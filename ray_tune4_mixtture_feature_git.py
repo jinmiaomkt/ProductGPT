@@ -89,7 +89,8 @@ def trainable_ray(config: dict):
         "dropout": config["dropout"],
         "lr": config["lr"],
         "weight": config["weight"],
-        "gamma": config["gamma"],
+        # "gamma": config["gamma"],
+        "gamma": config.get("gamma", 0.0),
         "warmup_steps": config["warmup_steps"],
         # optional keys your trainer may read:
         "dropout_attn": config["dropout"],
