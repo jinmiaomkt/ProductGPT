@@ -467,39 +467,141 @@ def evaluate(
     # 1..8 alternate {1,10}, decision 9 is 0
     rev_vec = torch.tensor([1, 10, 1, 10, 1, 10, 1, 10, 0], device=dev, dtype=torch.float32)
 
-    for batch in loader:
-        x = batch["aggregate_input"].to(dev)   # (B, Tsrc)
-        tgt = batch["label"].to(dev)           # (B, Ttgt) aligned with decision slots
+    # for batch in loader:
+    #     x = batch["aggregate_input"].to(dev)   # (B, Tsrc)
+    #     tgt = batch["label"].to(dev)           # (B, Ttgt) aligned with decision slots
 
-        # decision positions in the *model output time axis*
+    #     # decision positions in the *model output time axis*
+    #     pos = torch.arange(ai_rate - 1, x.size(1), ai_rate, device=dev)
+
+    #     logits = model(x)[:, pos, :]           # (B, n_slots, V)
+
+    #     if logit_bias is not None:
+    #         logits = logits - logit_bias.to(device=logits.device, dtype=logits.dtype)
+
+    #     # full softmax over vocab; we will *evaluate* on labels 1..9
+    #     prob = F.softmax(logits, dim=-1)       # (B, n_slots, V)
+    #     pred = prob.argmax(dim=-1)             # (B, n_slots)
+
+    #     # valid evaluation targets: decisions 1..9 only
+    #     mask = (tgt >= 1) & (tgt <= 9)         # (B, n_slots)
+    #     if mask.sum().item() == 0:
+    #         continue
+
+    #     y_true = tgt[mask].to(torch.int64)     # (N,)
+    #     y_pred = pred[mask].to(torch.int64)    # (N,)
+
+    #     # --- hit (accuracy) ---
+    #     total += y_true.numel()
+    #     correct += (y_true == y_pred).sum().item()
+
+    #     # --- macro-F1 counts over 9 classes ---
+    #     # predictions outside 1..9 do not contribute to pred_cnt (matches sklearn(labels=...))
+    #     y_true_np = y_true.cpu().numpy()
+    #     y_pred_np = y_pred.cpu().numpy()
+
+    #     for c in range(1, 10):
+    #         idx = c - 1
+    #         tmask = (y_true_np == c)
+    #         pmask = (y_pred_np == c)
+    #         true_cnt[idx] += int(tmask.sum())
+    #         pred_cnt[idx] += int(pmask.sum())
+    #         tp[idx] += int((tmask & pmask).sum())
+
+    #     # --- AUPRC: store only 9-class scores (classes 1..9) ---
+    #     # shape (N, 9)
+    #     # scores_9 = prob[mask, 1:10].detach().cpu().numpy().astype(np.float32)
+
+    #     # prob: [B, T_dec, C]
+    #     # mask must be [B, T_dec]
+    #     if mask.shape[1] != prob.shape[1]:
+    #         # Best: rebuild mask from the labels that correspond to prob's positions.
+    #         # If you already have y aligned with prob, use that.
+    #         # Otherwise, as a safe fallback, truncate (only OK if prob corresponds to the prefix).
+    #         mask = mask[:, :prob.shape[1]]
+
+    #     # safer indexing: first apply mask (-> [num_true, C]), then slice classes
+    #     prob_sel = prob[mask]                 # [num_true, C]
+    #     scores_9 = prob_sel[:, 1:10]          # [num_true, 9]
+
+    #     # y_true_chunks.append(y_true_np.astype(np.int64))
+    #     y_true_chunks.append(y_true.detach().cpu().numpy())  # or .long() if needed
+
+    #     # y_score_chunks.append(scores_9)
+    #     y_score_chunks.append(scores_9.detach().float().cpu().numpy())
+    #     y_score_all = np.concatenate(y_score_chunks, axis=0)
+
+    #     # --- optional: unweighted NLL on corrected logits (proper scoring rule) ---
+    #     if compute_nll:
+    #         logp = F.log_softmax(logits, dim=-1)  # (B, n_slots, V)
+    #         # gather log prob at true class
+    #         lp_true = logp[mask].gather(dim=-1, index=y_true.unsqueeze(-1)).squeeze(-1)
+    #         nll_sum += (-lp_true).sum().item()
+    #         nll_cnt += lp_true.numel()
+
+    #     # --- optional: revenue MAE using corrected probs (consistent with Option A) ---
+    #     if compute_rev_mae:
+    #         # (N, 9)
+    #         p9 = prob[mask, 1:10]
+    #         exp_rev = (p9 * rev_vec.to(dtype=p9.dtype)).sum(dim=-1)     # (N,)
+    #         true_rev = rev_vec[(y_true - 1).clamp(0, 8)].to(dtype=exp_rev.dtype)
+    #         rev_sum += torch.abs(exp_rev - true_rev).sum().item()
+    #         rev_cnt += exp_rev.numel()
+
+    for batch in loader:
+        x = batch["aggregate_input"].to(dev)     # (B, Tsrc)
+        tgt_full = batch["label"].to(dev)        # could be (B, n_slots) OR (B, Tsrc)
+
+        # decision positions on the source/time axis
         pos = torch.arange(ai_rate - 1, x.size(1), ai_rate, device=dev)
 
-        logits = model(x)[:, pos, :]           # (B, n_slots, V)
+        # model output (you expect either (B, Tsrc, V) or already (B, n_slots, V))
+        logits_full = model(x)
+
+        # Align logits to decision slots
+        if logits_full.size(1) == x.size(1):
+            logits = logits_full[:, pos, :]      # (B, n_slots, V)
+        else:
+            logits = logits_full                 # assume already (B, n_slots, V)
 
         if logit_bias is not None:
             logits = logits - logit_bias.to(device=logits.device, dtype=logits.dtype)
 
-        # full softmax over vocab; we will *evaluate* on labels 1..9
-        prob = F.softmax(logits, dim=-1)       # (B, n_slots, V)
-        pred = prob.argmax(dim=-1)             # (B, n_slots)
+        prob = F.softmax(logits, dim=-1)         # (B, n_slots, V)
+        pred = prob.argmax(dim=-1)              # (B, n_slots)
 
-        # valid evaluation targets: decisions 1..9 only
-        mask = (tgt >= 1) & (tgt <= 9)         # (B, n_slots)
+        # ---- Align labels to decision slots ----
+        if tgt_full.size(1) == prob.size(1):
+            tgt_dec = tgt_full                   # already (B, n_slots)
+        elif tgt_full.size(1) == x.size(1):
+            tgt_dec = tgt_full[:, pos]           # take decision positions from full axis
+        elif tgt_full.size(1) > prob.size(1):
+            tgt_dec = tgt_full[:, :prob.size(1)] # fallback
+        else:
+            tgt_dec = F.pad(tgt_full, (0, prob.size(1) - tgt_full.size(1)), value=PAD_ID)
+
+        mask = (tgt_dec >= 1) & (tgt_dec <= 9)   # (B, n_slots)
         if mask.sum().item() == 0:
             continue
 
-        y_true = tgt[mask].to(torch.int64)     # (N,)
-        y_pred = pred[mask].to(torch.int64)    # (N,)
+        y_true = tgt_dec[mask].long()            # (N,)
+        y_pred = pred[mask].long()               # (N,)
 
-        # --- hit (accuracy) ---
+        # Flatten prob/logp on masked positions (prevents shape bugs)
+        prob_flat = prob[mask]                   # (N, V)
+        if prob_flat.size(-1) < 10:
+            # can't evaluate decisions 1..9 safely
+            continue
+
+        scores_9 = prob_flat[:, 1:10]            # (N, 9)
+
+        # --- hit ---
         total += y_true.numel()
         correct += (y_true == y_pred).sum().item()
 
-        # --- macro-F1 counts over 9 classes ---
-        # predictions outside 1..9 do not contribute to pred_cnt (matches sklearn(labels=...))
-        y_true_np = y_true.cpu().numpy()
-        y_pred_np = y_pred.cpu().numpy()
-
+        # --- macro-F1 counts ---
+        y_true_np = y_true.detach().cpu().numpy()
+        y_pred_np = y_pred.detach().cpu().numpy()
         for c in range(1, 10):
             idx = c - 1
             tmask = (y_true_np == c)
@@ -508,45 +610,24 @@ def evaluate(
             pred_cnt[idx] += int(pmask.sum())
             tp[idx] += int((tmask & pmask).sum())
 
-        # --- AUPRC: store only 9-class scores (classes 1..9) ---
-        # shape (N, 9)
-        # scores_9 = prob[mask, 1:10].detach().cpu().numpy().astype(np.float32)
-
-        # prob: [B, T_dec, C]
-        # mask must be [B, T_dec]
-        if mask.shape[1] != prob.shape[1]:
-            # Best: rebuild mask from the labels that correspond to prob's positions.
-            # If you already have y aligned with prob, use that.
-            # Otherwise, as a safe fallback, truncate (only OK if prob corresponds to the prefix).
-            mask = mask[:, :prob.shape[1]]
-
-        # safer indexing: first apply mask (-> [num_true, C]), then slice classes
-        prob_sel = prob[mask]                 # [num_true, C]
-        scores_9 = prob_sel[:, 1:10]          # [num_true, 9]
-
-        # y_true_chunks.append(y_true_np.astype(np.int64))
-        y_true_chunks.append(y_true.detach().cpu().numpy())  # or .long() if needed
-
-        # y_score_chunks.append(scores_9)
+        # --- AUPRC chunks ---
+        y_true_chunks.append(y_true_np.astype(np.int64))
         y_score_chunks.append(scores_9.detach().float().cpu().numpy())
-        y_score_all = np.concatenate(y_score_chunks, axis=0)
 
-        # --- optional: unweighted NLL on corrected logits (proper scoring rule) ---
+        # --- NLL (on corrected logits) ---
         if compute_nll:
-            logp = F.log_softmax(logits, dim=-1)  # (B, n_slots, V)
-            # gather log prob at true class
-            lp_true = logp[mask].gather(dim=-1, index=y_true.unsqueeze(-1)).squeeze(-1)
+            logp_flat = F.log_softmax(logits, dim=-1)[mask]     # (N, V)
+            lp_true = logp_flat.gather(1, y_true.unsqueeze(1)).squeeze(1)
             nll_sum += (-lp_true).sum().item()
             nll_cnt += lp_true.numel()
 
-        # --- optional: revenue MAE using corrected probs (consistent with Option A) ---
+        # --- revenue MAE ---
         if compute_rev_mae:
-            # (N, 9)
-            p9 = prob[mask, 1:10]
-            exp_rev = (p9 * rev_vec.to(dtype=p9.dtype)).sum(dim=-1)     # (N,)
+            exp_rev = (scores_9 * rev_vec.to(dtype=scores_9.dtype)).sum(dim=-1)  # (N,)
             true_rev = rev_vec[(y_true - 1).clamp(0, 8)].to(dtype=exp_rev.dtype)
             rev_sum += torch.abs(exp_rev - true_rev).sum().item()
             rev_cnt += exp_rev.numel()
+
 
     if total == 0:
         return {"nll": float("nan"), "hit": float("nan"), "f1_macro": float("nan"),

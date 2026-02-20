@@ -129,7 +129,7 @@ def trainable_ray(config: dict):
     train_model(cfg, report_fn=report_fn if in_tune else None, stop_check_fn=stop_check_fn)
 
     # Run training; MUST call report_fn each epoch inside train_model
-    train_model(cfg, report_fn=report_fn, stop_check_fn=stop_check_fn)
+    # train_model(cfg, report_fn=report_fn, stop_check_fn=stop_check_fn)
 
 
 def main():
