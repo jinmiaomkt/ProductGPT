@@ -63,6 +63,8 @@ def trainable_ray(config: dict):
         "uids_test": uids_test,
         "uids_trainval": uids_trainval,
         "ai_rate": 15,
+        "do_infer": config.get("do_infer", False),   
+        # IMPORTANT: disable inference during tuning
         "num_epochs": config.get("num_epochs", 120),
         # optional: speed-up stage-A tuning on a small dataset:
         "data_frac": config.get("data_frac", 1.0),          # requires your build_dataloaders patch
@@ -95,14 +97,32 @@ def trainable_ray(config: dict):
         "label_smoothing": config.get("label_smoothing", 0.0),
     })
 
-    # include trial name in model_basename to avoid collisions
-    trial_name = session.get_trial_name()
+    # # include trial name in model_basename to avoid collisions
+    # trial_name = session.get_trial_name()
+    # cfg["model_basename"] = f"MyProductGPT_RT_{trial_name}"
+
+    # # ---- report_fn to Ray ----
+    # def report_fn(m: dict):
+    #     # Ray expects numbers; keep it flat
+    #     session.report(m)
+
+    # Detect whether we are running inside a Ray Tune session
+    try:
+        trial_name = session.get_trial_name()
+        in_tune = True
+    except Exception:
+        trial_name = "manual"
+        in_tune = False
+
     cfg["model_basename"] = f"MyProductGPT_RT_{trial_name}"
 
-    # ---- report_fn to Ray ----
     def report_fn(m: dict):
-        # Ray expects numbers; keep it flat
-        session.report(m)
+        # Only report when inside Tune; Stage-B retrain is outside Tune
+        if in_tune:
+            session.report(m)
+
+    train_model(cfg, report_fn=report_fn if in_tune else None, stop_check_fn=stop_check_fn)
+
 
     # ---- optional stop function: Ray can signal stop via should_checkpoint / etc.
     # ASHA will stop a trial by raising a TuneError internally after report.
@@ -142,6 +162,7 @@ def main():
         "gamma": tune.uniform(0.8, 1.5),
         "warmup_steps": tune.choice([500, 1000, 2000]),
         "label_smoothing": tune.uniform(0.0, 0.1),
+        "do_infer": False,
 
         # You can make d_ff depend on d_model inside trainable if you want.
         # For simplicity: sample a multiplier then compute d_ff = min(d_model*m, 512)
@@ -198,6 +219,7 @@ def main():
         "augment_train": True,
         "permute_repeat": 1,     # optionally >1 if you implemented sample_index correctly
         "num_epochs": 200,
+        "do_infer": True,
     })
 
     print("\n===== RETRAIN BEST ON FULL DATA WITH AUGMENT =====")
