@@ -121,14 +121,12 @@ def trainable_ray(config: dict):
         if in_tune:
             session.report(m)
 
-    train_model(cfg, report_fn=report_fn if in_tune else None, stop_check_fn=stop_check_fn)
-
-
     # ---- optional stop function: Ray can signal stop via should_checkpoint / etc.
     # ASHA will stop a trial by raising a TuneError internally after report.
     # You usually don't need stop_check_fn, but here’s a safe placeholder:
     def stop_check_fn() -> bool:
         return False
+    train_model(cfg, report_fn=report_fn if in_tune else None, stop_check_fn=stop_check_fn)
 
     # Run training; MUST call report_fn each epoch inside train_model
     train_model(cfg, report_fn=report_fn, stop_check_fn=stop_check_fn)
