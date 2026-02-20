@@ -22,7 +22,8 @@ def load_json_dataset(
     """
     keep: Optional[Set[str]] = set(keep_uids) if keep_uids is not None else None
 
-    def _uid_matches(rec_uid, keep_set: Set[str] | None) -> bool:
+    # def _uid_matches(rec_uid, keep_set: Set[str] | None) -> bool:
+    def _uid_matches(rec_uid, keep_set: Optional[Set[str]]) -> bool:
         if keep_set is None:
             return True
         if rec_uid is None:
