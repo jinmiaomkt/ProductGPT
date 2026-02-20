@@ -7,7 +7,7 @@ import boto3
 import torch
 
 from config4 import get_config
-from train4_decoderonly_performer_feature_aws import train_model
+from train4_mixture_decoderonly_performer_feature_aws import train_model
 
 import ray
 from ray import tune
