@@ -108,7 +108,24 @@ class TransformerDataset(Dataset):
         self._lab_cache: List[torch.Tensor] = []
         self._uid_cache: List[str] = []
 
-        self.uid_to_index = {str(u): i for i, u in enumerate(sorted({rec.get("uid","") for rec in self.data}))}
+        # self.uid_to_index = {str(u): i for i, u in enumerate(sorted({rec.get("uid","") for rec in self.data}))}
+        # self.num_users = len(self.uid_to_index)
+
+        # Collect normalized user ids (handle scalar or list)
+        uid_values = []
+
+        for rec in self.data:
+            uid = rec.get("uid", "")
+            if isinstance(uid, (list, tuple, set)):
+                for u in uid:
+                    if u is not None:
+                        uid_values.append(str(u))
+            else:
+                if uid is not None:
+                    uid_values.append(str(uid))
+
+        unique_uids = sorted(set(uid_values))
+        self.uid_to_index = {u: i for i, u in enumerate(unique_uids)}
         self.num_users = len(self.uid_to_index)
 
         for rec in self.data:
