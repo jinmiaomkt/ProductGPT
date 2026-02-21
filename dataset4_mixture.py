@@ -50,20 +50,6 @@ def load_json_dataset(
             # return [rec for rec in data if isinstance(rec, dict) and rec.get("uid") in keep]
             return [rec for rec in data if isinstance(rec, dict) and _uid_matches(rec.get("uid"), keep)]
 
-        # # JSONL
-        # out: List[Dict[str, Any]] = []
-        # for line in f:
-        #     line = line.strip()
-        #     if not line:
-        #         continue
-        #     rec = json.loads(line)
-        #     if not isinstance(rec, dict):
-        #         continue
-        #     if keep is not None and rec.get("uid") not in keep:
-        #         continue
-        #     out.append(rec)
-        # return out
-
         # JSONL
         out: List[Dict[str, Any]] = []
         for line in f:
@@ -121,6 +107,9 @@ class TransformerDataset(Dataset):
         self._enc_cache: List[torch.Tensor] = []
         self._lab_cache: List[torch.Tensor] = []
         self._uid_cache: List[str] = []
+
+        self.uid_to_index = {str(u): i for i, u in enumerate(sorted({rec.get("uid","") for rec in self.data}))}
+        self.num_users = len(self.uid_to_index)
 
         for rec in self.data:
             uid = rec.get("uid", "")
@@ -251,8 +240,9 @@ class TransformerDataset(Dataset):
         enc_input = self._enc_cache[idx].clone()   # clone so permutation doesn't corrupt cache
         label_tensor = self._lab_cache[idx]
         uid = self._uid_cache[idx]
+        user_id = self.uid_to_index.get(uid, 0)   # or reserve an UNK user bucket
 
         # IMPORTANT: use (idx, sample_index) so RepeatWithPermutation creates distinct permutations
         self._permute_obtained_inplace(enc_input, idx=idx, sample_index=sample_index)
 
-        return {"uid": uid, "aggregate_input": enc_input, "label": label_tensor}
+        return {"uid": uid, "aggregate_input": enc_input, "label": label_tensor,     "user_id": torch.tensor(user_id, dtype=torch.long)}

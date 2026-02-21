@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import pandas as pd
 import numpy as np
+from typing import Optional
 
 df = pd.read_excel("/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx", sheet_name=0)
 
@@ -491,22 +492,8 @@ class Transformer(nn.Module):
         for p in self.parameters():
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
-
-    # def forward(self, input_seq: torch.Tensor, return_hidden=False):
-    #     """
-    #     input_seq: (B, seq_len) integer tokens
-    #     returns:   (B, seq_len, vocab_size)
-    #     """
-    #     x = self.token_embed(input_seq)
-    #     x = self.pos_enc(x)
-    #     x = self.decoder(x)
-    #     logits = self.projection(x)
-    #     # logits = self.decision_head(x)
-
-    #     if return_hidden:
-    #         return logits, x
-    #     return logits
-    def forward(self, input_seq: torch.Tensor, user_ids: torch.LongTensor | None = None, return_hidden=False):
+    
+    def forward(self, input_seq: torch.Tensor, user_ids: Optional[torch.LongTensor] = None, return_hidden=False):
         x = self.token_embed(input_seq)
         x = self.pos_enc(x)
 
@@ -529,6 +516,7 @@ def build_transformer(vocab_size_src: int,
                       max_seq_len: int,
                       d_model: int,
                       n_layers: int,
+                      num_users: int,
                       n_heads: int,
                       d_ff: int,
                       dropout: float,
@@ -544,6 +532,7 @@ def build_transformer(vocab_size_src: int,
         d_model      = d_model,
         n_layers     = n_layers,
         n_heads      = n_heads,
+        num_users    = num_users,
         d_ff         = d_ff,
         dropout      = dropout,
         nb_features  = nb_features,
