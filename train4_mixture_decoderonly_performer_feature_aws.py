@@ -638,9 +638,15 @@ def evaluate(
         y_score_chunks.append(scores_9.detach().float().cpu().numpy())
 
         # --- NLL (on corrected logits) ---
+        # if compute_nll:
+        #     logp_flat = F.log_softmax(logits_dec, dim=-1)[mask]     # (N, V)
+        #     lp_true = logp_flat.gather(1, y_true.unsqueeze(1)).squeeze(1)
+        #     nll_sum += (-lp_true).sum().item()
+        #     nll_cnt += lp_true.numel()
+
         if compute_nll:
-            logp_flat = F.log_softmax(logits_dec, dim=-1)[mask]     # (N, V)
-            lp_true = logp_flat.gather(1, y_true.unsqueeze(1)).squeeze(1)
+            logp_flat = F.log_softmax(logits_aligned, dim=-1)[mask]   # (N, 10), indexed by labels 0..9
+            lp_true = logp_flat.gather(1, y_true.unsqueeze(1)).squeeze(1)  # y_true stays 1..9
             nll_sum += (-lp_true).sum().item()
             nll_cnt += lp_true.numel()
 
