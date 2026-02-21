@@ -108,29 +108,16 @@ class TransformerDataset(Dataset):
         self._lab_cache: List[torch.Tensor] = []
         self._uid_cache: List[str] = []
 
-        # self.uid_to_index = {str(u): i for i, u in enumerate(sorted({rec.get("uid","") for rec in self.data}))}
-        # self.num_users = len(self.uid_to_index)
+        # Build user-id vocabulary from one normalized key per record
+        unique_uids = sorted({self._normalize_uid(rec.get("uid", "")) for rec in self.data})
 
-        # Collect normalized user ids (handle scalar or list)
-        uid_values = []
-
-        for rec in self.data:
-            uid = rec.get("uid", "")
-            if isinstance(uid, (list, tuple, set)):
-                for u in uid:
-                    if u is not None:
-                        uid_values.append(str(u))
-            else:
-                if uid is not None:
-                    uid_values.append(str(uid))
-
-        unique_uids = sorted(set(uid_values))
-        self.uid_to_index = {u: i for i, u in enumerate(unique_uids)}
-        self.num_users = len(self.uid_to_index)
+        # Optional but recommended: reserve 0 as UNK
+        self.uid_to_index = {u: i + 1 for i, u in enumerate(unique_uids)}
+        self.num_users = len(self.uid_to_index) + 1   # +1 for UNK bucket at index 0
 
         for rec in self.data:
-            uid = rec.get("uid", "")
-
+            # uid = rec.get("uid", "")
+            uid = self._normalize_uid(rec.get("uid", ""))
             agg = rec["AggregateInput"]
             src_txt = " ".join(map(str, agg)) if isinstance(agg, (list, tuple)) else str(agg)
             ai_ids = self._pad(self.tok_src.encode(src_txt).ids, self.seq_len_ai)
@@ -155,6 +142,23 @@ class TransformerDataset(Dataset):
     def __len__(self):
         return len(self.data)
 
+    def _normalize_uid(self, uid) -> str:
+        """
+        Convert uid to a deterministic, hashable string key.
+        Handles scalar uid and list/tuple/set uid.
+        """
+        if uid is None:
+            return ""
+
+        if isinstance(uid, (list, tuple, set)):
+            vals = [str(x) for x in uid if x is not None]
+            if not vals:
+                return ""
+            # composite key for ambiguous/multi uid records
+            return "|".join(sorted(vals))
+
+        return str(uid)
+    
     def _pad(self, ids, L):
         ids = ids[:L]
         if len(ids) < L:
