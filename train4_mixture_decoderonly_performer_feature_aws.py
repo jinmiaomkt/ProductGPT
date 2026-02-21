@@ -402,7 +402,8 @@ def build_dataloaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, Data
     # ── train/val/test ─────────────────────────────────────────────────
     augment_train = bool(cfg.get("augment_train", True))  # <<< IMPORTANT TOGGLE
     train_ds = wrap(tr_split, augment=augment_train)
-
+    cfg["num_users"] = train_ds.num_users
+    
     rep = int(cfg.get("permute_repeat", 1))
     if rep > 1:
         train_ds = RepeatWithPermutation(train_ds, repeat_factor=rep)
@@ -479,6 +480,7 @@ def build_model(cfg: Dict[str, Any], feat_tensor: torch.Tensor) -> nn.Module:
         d_model=cfg["d_model"],
         n_layers=cfg["N"],
         n_heads=cfg["num_heads"],
+        num_users=cfg["num_users"],
         dropout=cfg["dropout"],
         nb_features=cfg["nb_features"],
         kernel_type=cfg["kernel_type"],
@@ -793,7 +795,9 @@ def train_model(cfg: Dict[str, Any],
             x = batch["aggregate_input"].to(device)
             tgt = batch["label"].to(device)
             pos = torch.arange(cfg["ai_rate"] - 1, cfg["seq_len_ai"], cfg["ai_rate"], device=device)
-            logits = engine(x)[:, pos, :]
+            # logits = engine(x)[:, pos, :]
+            u = batch["user_id"].to(device)  # (B,)
+            logits = engine(x, u)[:, pos, :]
             tgt_ = tgt.clone()
 
             # Skip batches with no labels (optional; FocalLoss is already safe)
@@ -935,10 +939,9 @@ def train_model(cfg: Dict[str, Any],
             for batch in tqdm(inf_dl, desc="Infer 30-campaign set"):
                 x   = batch["aggregate_input"].to(device)
                 uids = batch["uid"]  # list[str] length B
-                # logits = engine(x)[:, cfg["ai_rate"]-1::cfg["ai_rate"], :]
-                # probs  = torch.softmax(logits, -1).cpu().numpy()   # (B, N, 60)
 
-                logits = engine(x)[:, cfg["ai_rate"]-1::cfg["ai_rate"], :]  # (B, n_slots, V)
+                u = batch["user_id"].to(device)  # (B,)
+                logits = engine(x, u)[:, cfg["ai_rate"]-1::cfg["ai_rate"], :]
 
                 if logit_bias is not None:
                     logits = logits - logit_bias.to(device=logits.device, dtype=logits.dtype)
@@ -948,7 +951,7 @@ def train_model(cfg: Dict[str, Any],
 
                 for i, u in enumerate(uids):
                     fp.write(json.dumps({"uid": u, "probs_dec_1to9": probs_dec[i].tolist()}) + "\n")
-                    
+
         # Upload gzipped predictions and delete local temp
         pred_s3_key = f"CV/predictions/{tmp_pred.name}"
         _upload_and_unlink(tmp_pred, bucket, pred_s3_key, s3, gzip_json=True)

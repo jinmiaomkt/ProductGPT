@@ -79,6 +79,7 @@ def trainable_ray(config: dict):
     d_model, num_heads = config["dm_heads"]
     cfg["d_model"] = d_model
     cfg["num_heads"] = num_heads
+    cfg["num_users"] = len(uids_trainval)  # or len(train_user_ids) if you build a mapping
     cfg["d_ff"] = min(int(d_model * config["dff_mult"]), 512)
 
     # ---- rest of HP ----
