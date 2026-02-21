@@ -580,7 +580,14 @@ def evaluate(
 
         # Evaluate ONLY over decision classes 1..9:
         logits_dec = logits[:, :, 1:10]               # (B, n_slots, 9)
-        prob_dec   = F.softmax(logits_dec, dim=-1)    # (B, n_slots, 9)
+        # prob_dec   = F.softmax(logits_dec, dim=-1)    # (B, n_slots, 9)
+        
+        neg_col = torch.full_like(logits_dec[..., :1], torch.finfo(logits_dec.dtype).min)
+        logits_aligned = torch.cat([neg_col, logits_dec], dim=-1)   # (B, n_slots, 10), valid labels 1..9
+
+        prob_aligned = F.softmax(logits_aligned, dim=-1)             # (B, n_slots, 10)
+        prob_dec = prob_aligned[:, :, 1:10]             
+        
         pred_dec   = prob_dec.argmax(dim=-1) + 1      # back to label space 1..9
 
         # prob = F.softmax(logits, dim=-1)         # (B, n_slots, V)
