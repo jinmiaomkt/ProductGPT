@@ -418,6 +418,160 @@ def _macro_f1_from_counts(tp: np.ndarray, pred_cnt: np.ndarray, true_cnt: np.nda
         f1s.append(f1)
     return float(np.mean(f1s)) if f1s else float("nan")
 
+# @torch.no_grad()
+# def evaluate(
+#     loader,
+#     model,
+#     dev: torch.device,
+#     *,
+#     ai_rate: int,
+#     logit_bias: torch.Tensor | None = None,
+#     compute_nll: bool = True,
+#     compute_rev_mae: bool = True,
+# ) -> dict:
+#     """
+#     Returns metrics computed on decision positions only (labels in 1..9).
+
+#     logit_bias:
+#       If provided, we do: logits_corr = logits - logit_bias (broadcast over batch/time).
+#       For class-weight correction (Option A), set logit_bias[c] = log(weight[c]).
+#       Example: only class 9 weighted by w -> logit_bias[9] = log(w), others 0.
+
+#     Metrics returned:
+#       hit (accuracy), f1_macro, auprc_macro, plus optional nll and rev_mae.
+#     """
+#     if loader is None:
+#         return {"nll": float("nan"), "hit": float("nan"), "f1_macro": float("nan"),
+#                 "auprc_macro": float("nan"), "rev_mae": float("nan")}
+
+#     model.eval()
+
+#     # streaming counters for hit + macro-F1 over classes 1..9
+#     tp = np.zeros(9, dtype=np.int64)
+#     pred_cnt = np.zeros(9, dtype=np.int64)
+#     true_cnt = np.zeros(9, dtype=np.int64)
+#     correct = 0
+#     total = 0
+
+#     # AUPRC needs all scores/labels (but only 9-class scores)
+#     y_true_chunks: list[np.ndarray] = []
+#     y_score_chunks: list[np.ndarray] = []
+
+#     # optional proper scoring / revenue diagnostics
+#     nll_sum = 0.0
+#     nll_cnt = 0
+#     rev_sum = 0.0
+#     rev_cnt = 0
+
+#     # revenue vector for decisions 1..9 (your original)
+#     # 1..8 alternate {1,10}, decision 9 is 0
+#     rev_vec = torch.tensor([1, 10, 1, 10, 1, 10, 1, 10, 0], device=dev, dtype=torch.float32)
+
+    
+
+#     for batch in loader:
+#         x = batch["aggregate_input"].to(dev)     # (B, Tsrc)
+#         tgt_full = batch["label"].to(dev)        # could be (B, n_slots) OR (B, Tsrc)
+
+#         # decision positions on the source/time axis
+#         pos = torch.arange(ai_rate - 1, x.size(1), ai_rate, device=dev)
+
+#         # model output (you expect either (B, Tsrc, V) or already (B, n_slots, V))
+#         logits_full = model(x)
+
+#         # Align logits to decision slots
+#         if logits_full.size(1) == x.size(1):
+#             logits = logits_full[:, pos, :]      # (B, n_slots, V)
+#         else:
+#             logits = logits_full                 # assume already (B, n_slots, V)
+
+#         if logit_bias is not None:
+#             logits = logits - logit_bias.to(device=logits.device, dtype=logits.dtype)
+
+#         prob = F.softmax(logits, dim=-1)         # (B, n_slots, V)
+#         pred = prob.argmax(dim=-1)              # (B, n_slots)
+
+#         # ---- Align labels to decision slots ----
+#         if tgt_full.size(1) == prob.size(1):
+#             tgt_dec = tgt_full                   # already (B, n_slots)
+#         elif tgt_full.size(1) == x.size(1):
+#             tgt_dec = tgt_full[:, pos]           # take decision positions from full axis
+#         elif tgt_full.size(1) > prob.size(1):
+#             tgt_dec = tgt_full[:, :prob.size(1)] # fallback
+#         else:
+#             tgt_dec = F.pad(tgt_full, (0, prob.size(1) - tgt_full.size(1)), value=PAD_ID)
+
+#         mask = (tgt_dec >= 1) & (tgt_dec <= 9)   # (B, n_slots)
+#         if mask.sum().item() == 0:
+#             continue
+
+#         y_true = tgt_dec[mask].long()            # (N,)
+#         y_pred = pred[mask].long()               # (N,)
+
+#         # Flatten prob/logp on masked positions (prevents shape bugs)
+#         prob_flat = prob[mask]                   # (N, V)
+#         if prob_flat.size(-1) < 10:
+#             # can't evaluate decisions 1..9 safely
+#             continue
+
+#         scores_9 = prob_flat[:, 1:10]            # (N, 9)
+
+#         # --- hit ---
+#         total += y_true.numel()
+#         correct += (y_true == y_pred).sum().item()
+
+#         # --- macro-F1 counts ---
+#         y_true_np = y_true.detach().cpu().numpy()
+#         y_pred_np = y_pred.detach().cpu().numpy()
+#         for c in range(1, 10):
+#             idx = c - 1
+#             tmask = (y_true_np == c)
+#             pmask = (y_pred_np == c)
+#             true_cnt[idx] += int(tmask.sum())
+#             pred_cnt[idx] += int(pmask.sum())
+#             tp[idx] += int((tmask & pmask).sum())
+
+#         # --- AUPRC chunks ---
+#         y_true_chunks.append(y_true_np.astype(np.int64))
+#         y_score_chunks.append(scores_9.detach().float().cpu().numpy())
+
+#         # --- NLL (on corrected logits) ---
+#         if compute_nll:
+#             logp_flat = F.log_softmax(logits, dim=-1)[mask]     # (N, V)
+#             lp_true = logp_flat.gather(1, y_true.unsqueeze(1)).squeeze(1)
+#             nll_sum += (-lp_true).sum().item()
+#             nll_cnt += lp_true.numel()
+
+#         # --- revenue MAE ---
+#         if compute_rev_mae:
+#             exp_rev = (scores_9 * rev_vec.to(dtype=scores_9.dtype)).sum(dim=-1)  # (N,)
+#             true_rev = rev_vec[(y_true - 1).clamp(0, 8)].to(dtype=exp_rev.dtype)
+#             rev_sum += torch.abs(exp_rev - true_rev).sum().item()
+#             rev_cnt += exp_rev.numel()
+
+
+#     if total == 0:
+#         return {"nll": float("nan"), "hit": float("nan"), "f1_macro": float("nan"),
+#                 "auprc_macro": float("nan"), "rev_mae": float("nan")}
+
+#     hit = correct / total
+#     f1_macro = _macro_f1_from_counts(tp, pred_cnt, true_cnt)
+
+#     # AUPRC macro
+#     y_true_all = np.concatenate(y_true_chunks, axis=0)
+#     y_score_all = np.concatenate(y_score_chunks, axis=0)  # (N, 9)
+#     y_bin = label_binarize(y_true_all, classes=DECISION_CLASSES)  # (N, 9)
+#     auprc_macro = float(average_precision_score(y_bin, y_score_all, average="macro"))
+
+#     out = {
+#         "hit": float(hit),
+#         "f1_macro": float(f1_macro),
+#         "auprc_macro": float(auprc_macro),
+#     }
+#     out["nll"] = float(nll_sum / max(1, nll_cnt)) if compute_nll else float("nan")
+#     out["rev_mae"] = float(rev_sum / max(1, rev_cnt)) if compute_rev_mae else float("nan")
+#     return out
+
 @torch.no_grad()
 def evaluate(
     loader,
@@ -432,17 +586,26 @@ def evaluate(
     """
     Returns metrics computed on decision positions only (labels in 1..9).
 
+    Supports BOTH model output styles:
+      1) full-vocab logits (e.g., V=60, decision labels are token IDs 1..9)
+      2) decision-only logits (V=9, corresponding to decision labels 1..9)
+
     logit_bias:
-      If provided, we do: logits_corr = logits - logit_bias (broadcast over batch/time).
-      For class-weight correction (Option A), set logit_bias[c] = log(weight[c]).
-      Example: only class 9 weighted by w -> logit_bias[9] = log(w), others 0.
+      If provided, subtracts a bias vector before softmax / NLL.
+      - full-vocab case: bias is expected to align with full vocab (V)
+      - decision-only case (V=9): if a full-vocab bias is provided, we use bias[1:10]
 
     Metrics returned:
       hit (accuracy), f1_macro, auprc_macro, plus optional nll and rev_mae.
     """
     if loader is None:
-        return {"nll": float("nan"), "hit": float("nan"), "f1_macro": float("nan"),
-                "auprc_macro": float("nan"), "rev_mae": float("nan")}
+        return {
+            "nll": float("nan"),
+            "hit": float("nan"),
+            "f1_macro": float("nan"),
+            "auprc_macro": float("nan"),
+            "rev_mae": float("nan"),
+        }
 
     model.eval()
 
@@ -453,7 +616,7 @@ def evaluate(
     correct = 0
     total = 0
 
-    # AUPRC needs all scores/labels (but only 9-class scores)
+    # AUPRC needs all scores/labels (only 9-class scores)
     y_true_chunks: list[np.ndarray] = []
     y_score_chunks: list[np.ndarray] = []
 
@@ -463,143 +626,109 @@ def evaluate(
     rev_sum = 0.0
     rev_cnt = 0
 
-    # revenue vector for decisions 1..9 (your original)
-    # 1..8 alternate {1,10}, decision 9 is 0
+    # revenue vector for decisions 1..9
+    # decisions 1..8 alternate {1,10}; decision 9 -> 0
     rev_vec = torch.tensor([1, 10, 1, 10, 1, 10, 1, 10, 0], device=dev, dtype=torch.float32)
 
-    # for batch in loader:
-    #     x = batch["aggregate_input"].to(dev)   # (B, Tsrc)
-    #     tgt = batch["label"].to(dev)           # (B, Ttgt) aligned with decision slots
-
-    #     # decision positions in the *model output time axis*
-    #     pos = torch.arange(ai_rate - 1, x.size(1), ai_rate, device=dev)
-
-    #     logits = model(x)[:, pos, :]           # (B, n_slots, V)
-
-    #     if logit_bias is not None:
-    #         logits = logits - logit_bias.to(device=logits.device, dtype=logits.dtype)
-
-    #     # full softmax over vocab; we will *evaluate* on labels 1..9
-    #     prob = F.softmax(logits, dim=-1)       # (B, n_slots, V)
-    #     pred = prob.argmax(dim=-1)             # (B, n_slots)
-
-    #     # valid evaluation targets: decisions 1..9 only
-    #     mask = (tgt >= 1) & (tgt <= 9)         # (B, n_slots)
-    #     if mask.sum().item() == 0:
-    #         continue
-
-    #     y_true = tgt[mask].to(torch.int64)     # (N,)
-    #     y_pred = pred[mask].to(torch.int64)    # (N,)
-
-    #     # --- hit (accuracy) ---
-    #     total += y_true.numel()
-    #     correct += (y_true == y_pred).sum().item()
-
-    #     # --- macro-F1 counts over 9 classes ---
-    #     # predictions outside 1..9 do not contribute to pred_cnt (matches sklearn(labels=...))
-    #     y_true_np = y_true.cpu().numpy()
-    #     y_pred_np = y_pred.cpu().numpy()
-
-    #     for c in range(1, 10):
-    #         idx = c - 1
-    #         tmask = (y_true_np == c)
-    #         pmask = (y_pred_np == c)
-    #         true_cnt[idx] += int(tmask.sum())
-    #         pred_cnt[idx] += int(pmask.sum())
-    #         tp[idx] += int((tmask & pmask).sum())
-
-    #     # --- AUPRC: store only 9-class scores (classes 1..9) ---
-    #     # shape (N, 9)
-    #     # scores_9 = prob[mask, 1:10].detach().cpu().numpy().astype(np.float32)
-
-    #     # prob: [B, T_dec, C]
-    #     # mask must be [B, T_dec]
-    #     if mask.shape[1] != prob.shape[1]:
-    #         # Best: rebuild mask from the labels that correspond to prob's positions.
-    #         # If you already have y aligned with prob, use that.
-    #         # Otherwise, as a safe fallback, truncate (only OK if prob corresponds to the prefix).
-    #         mask = mask[:, :prob.shape[1]]
-
-    #     # safer indexing: first apply mask (-> [num_true, C]), then slice classes
-    #     prob_sel = prob[mask]                 # [num_true, C]
-    #     scores_9 = prob_sel[:, 1:10]          # [num_true, 9]
-
-    #     # y_true_chunks.append(y_true_np.astype(np.int64))
-    #     y_true_chunks.append(y_true.detach().cpu().numpy())  # or .long() if needed
-
-    #     # y_score_chunks.append(scores_9)
-    #     y_score_chunks.append(scores_9.detach().float().cpu().numpy())
-    #     y_score_all = np.concatenate(y_score_chunks, axis=0)
-
-    #     # --- optional: unweighted NLL on corrected logits (proper scoring rule) ---
-    #     if compute_nll:
-    #         logp = F.log_softmax(logits, dim=-1)  # (B, n_slots, V)
-    #         # gather log prob at true class
-    #         lp_true = logp[mask].gather(dim=-1, index=y_true.unsqueeze(-1)).squeeze(-1)
-    #         nll_sum += (-lp_true).sum().item()
-    #         nll_cnt += lp_true.numel()
-
-    #     # --- optional: revenue MAE using corrected probs (consistent with Option A) ---
-    #     if compute_rev_mae:
-    #         # (N, 9)
-    #         p9 = prob[mask, 1:10]
-    #         exp_rev = (p9 * rev_vec.to(dtype=p9.dtype)).sum(dim=-1)     # (N,)
-    #         true_rev = rev_vec[(y_true - 1).clamp(0, 8)].to(dtype=exp_rev.dtype)
-    #         rev_sum += torch.abs(exp_rev - true_rev).sum().item()
-    #         rev_cnt += exp_rev.numel()
+    def _align_labels_to_slots(
+        tgt_full: torch.Tensor,
+        n_slots: int,
+        x_len: int,
+        pos: torch.Tensor,
+    ) -> torch.Tensor:
+        """Align labels to decision-slot axis."""
+        if tgt_full.size(1) == n_slots:
+            return tgt_full
+        elif tgt_full.size(1) == x_len:
+            return tgt_full[:, pos]
+        elif tgt_full.size(1) > n_slots:
+            return tgt_full[:, :n_slots]
+        else:
+            return F.pad(tgt_full, (0, n_slots - tgt_full.size(1)), value=PAD_ID)
 
     for batch in loader:
-        x = batch["aggregate_input"].to(dev)     # (B, Tsrc)
-        tgt_full = batch["label"].to(dev)        # could be (B, n_slots) OR (B, Tsrc)
+        x = batch["aggregate_input"].to(dev)   # (B, Tsrc)
+        tgt_full = batch["label"].to(dev)      # (B, n_slots) OR (B, Tsrc)
 
-        # decision positions on the source/time axis
+        # decision positions on source/time axis
         pos = torch.arange(ai_rate - 1, x.size(1), ai_rate, device=dev)
 
-        # model output (you expect either (B, Tsrc, V) or already (B, n_slots, V))
+        # model output: either (B, Tsrc, V) or already (B, n_slots, V)
         logits_full = model(x)
 
-        # Align logits to decision slots
         if logits_full.size(1) == x.size(1):
-            logits = logits_full[:, pos, :]      # (B, n_slots, V)
+            logits = logits_full[:, pos, :]    # (B, n_slots, V_out)
         else:
-            logits = logits_full                 # assume already (B, n_slots, V)
+            logits = logits_full               # (B, n_slots, V_out)
 
+        V_out = logits.size(-1)
+
+        # Apply logit bias safely for both output styles
         if logit_bias is not None:
-            logits = logits - logit_bias.to(device=logits.device, dtype=logits.dtype)
+            bias = logit_bias.to(device=logits.device, dtype=logits.dtype)
+            if bias.numel() == V_out:
+                logits = logits - bias
+            elif V_out == 9 and bias.numel() >= 10:
+                # full-vocab bias provided, but model outputs decision-only classes 1..9
+                logits = logits - bias[1:10]
+            else:
+                # Shape mismatch; better to fail loudly than silently compute nonsense
+                raise ValueError(
+                    f"logit_bias shape mismatch: logits last dim={V_out}, "
+                    f"logit_bias numel={bias.numel()}"
+                )
 
-        prob = F.softmax(logits, dim=-1)         # (B, n_slots, V)
-        pred = prob.argmax(dim=-1)              # (B, n_slots)
+        # ------------------------------------------------------------
+        # Support BOTH output styles:
+        #   (A) decision-only logits: V_out == 9  (classes correspond to labels 1..9)
+        #   (B) full-vocab logits:    V_out >= 10 (decision labels are token IDs 1..9)
+        # ------------------------------------------------------------
+        if V_out == 9:
+            # decision-only logits correspond to labels 1..9
+            prob_dec = F.softmax(logits, dim=-1)          # (B, n_slots, 9)
+            pred = prob_dec.argmax(dim=-1) + 1            # back to label space 1..9
 
-        # ---- Align labels to decision slots ----
-        if tgt_full.size(1) == prob.size(1):
-            tgt_dec = tgt_full                   # already (B, n_slots)
-        elif tgt_full.size(1) == x.size(1):
-            tgt_dec = tgt_full[:, pos]           # take decision positions from full axis
-        elif tgt_full.size(1) > prob.size(1):
-            tgt_dec = tgt_full[:, :prob.size(1)] # fallback
+            tgt_dec = _align_labels_to_slots(tgt_full, prob_dec.size(1), x.size(1), pos)
+
+            mask = (tgt_dec >= 1) & (tgt_dec <= 9)        # (B, n_slots)
+            if mask.sum().item() == 0:
+                continue
+
+            y_true = tgt_dec[mask].long()                 # (N,) in 1..9
+            y_pred = pred[mask].long()                    # (N,) in 1..9
+
+            prob_flat = prob_dec[mask]                    # (N, 9)
+            if prob_flat.size(-1) != 9:
+                continue
+
+            scores_9 = prob_flat                          # already decision classes 1..9
+
         else:
-            tgt_dec = F.pad(tgt_full, (0, prob.size(1) - tgt_full.size(1)), value=PAD_ID)
+            # full-vocab logits
+            prob = F.softmax(logits, dim=-1)              # (B, n_slots, V_out)
+            pred = prob.argmax(dim=-1)                    # (B, n_slots), token-ID space
 
-        mask = (tgt_dec >= 1) & (tgt_dec <= 9)   # (B, n_slots)
-        if mask.sum().item() == 0:
-            continue
+            tgt_dec = _align_labels_to_slots(tgt_full, prob.size(1), x.size(1), pos)
 
-        y_true = tgt_dec[mask].long()            # (N,)
-        y_pred = pred[mask].long()               # (N,)
+            mask = (tgt_dec >= 1) & (tgt_dec <= 9)        # only decision labels
+            if mask.sum().item() == 0:
+                continue
 
-        # Flatten prob/logp on masked positions (prevents shape bugs)
-        prob_flat = prob[mask]                   # (N, V)
-        if prob_flat.size(-1) < 10:
-            # can't evaluate decisions 1..9 safely
-            continue
+            y_true = tgt_dec[mask].long()                 # (N,) in 1..9
+            y_pred = pred[mask].long()                    # (N,) token IDs (may be outside 1..9)
 
-        scores_9 = prob_flat[:, 1:10]            # (N, 9)
+            prob_flat = prob[mask]                        # (N, V_out)
+            if prob_flat.size(-1) < 10:
+                # can't safely slice decision IDs 1..9
+                continue
 
-        # --- hit ---
+            scores_9 = prob_flat[:, 1:10]                 # (N, 9), token IDs 1..9
+
+        # --- hit (accuracy on true decision positions) ---
         total += y_true.numel()
         correct += (y_true == y_pred).sum().item()
 
-        # --- macro-F1 counts ---
+        # --- macro-F1 counts over classes 1..9 ---
         y_true_np = y_true.detach().cpu().numpy()
         y_pred_np = y_pred.detach().cpu().numpy()
         for c in range(1, 10):
@@ -616,8 +745,16 @@ def evaluate(
 
         # --- NLL (on corrected logits) ---
         if compute_nll:
-            logp_flat = F.log_softmax(logits, dim=-1)[mask]     # (N, V)
-            lp_true = logp_flat.gather(1, y_true.unsqueeze(1)).squeeze(1)
+            if V_out == 9:
+                # logits indexed 0..8 correspond to labels 1..9
+                logp_flat = F.log_softmax(logits, dim=-1)[mask]  # (N, 9)
+                y_true_0based = (y_true - 1).clamp(0, 8)
+                lp_true = logp_flat.gather(1, y_true_0based.unsqueeze(1)).squeeze(1)
+            else:
+                # full vocab logits use token IDs directly
+                logp_flat = F.log_softmax(logits, dim=-1)[mask]  # (N, V_out)
+                lp_true = logp_flat.gather(1, y_true.unsqueeze(1)).squeeze(1)
+
             nll_sum += (-lp_true).sum().item()
             nll_cnt += lp_true.numel()
 
@@ -628,19 +765,27 @@ def evaluate(
             rev_sum += torch.abs(exp_rev - true_rev).sum().item()
             rev_cnt += exp_rev.numel()
 
-
     if total == 0:
-        return {"nll": float("nan"), "hit": float("nan"), "f1_macro": float("nan"),
-                "auprc_macro": float("nan"), "rev_mae": float("nan")}
+        return {
+            "nll": float("nan"),
+            "hit": float("nan"),
+            "f1_macro": float("nan"),
+            "auprc_macro": float("nan"),
+            "rev_mae": float("nan"),
+        }
 
     hit = correct / total
     f1_macro = _macro_f1_from_counts(tp, pred_cnt, true_cnt)
 
     # AUPRC macro
-    y_true_all = np.concatenate(y_true_chunks, axis=0)
-    y_score_all = np.concatenate(y_score_chunks, axis=0)  # (N, 9)
+    y_true_all = np.concatenate(y_true_chunks, axis=0)   # (N,)
+    y_score_all = np.concatenate(y_score_chunks, axis=0) # (N, 9)
     y_bin = label_binarize(y_true_all, classes=DECISION_CLASSES)  # (N, 9)
-    auprc_macro = float(average_precision_score(y_bin, y_score_all, average="macro"))
+
+    try:
+        auprc_macro = float(average_precision_score(y_bin, y_score_all, average="macro"))
+    except Exception:
+        auprc_macro = float("nan")
 
     out = {
         "hit": float(hit),
@@ -873,19 +1018,6 @@ def train_model(cfg: Dict[str, Any],
             print(f"[S3] downloaded best ckpt for test → s3://{bucket}/{ck_key}")
         except Exception as e:
             print(f"[WARN] Could not download ckpt for test: {e}")
-
-    # ---- test ---------------------------------------------------------
-    # if ckpt_path.exists():
-    #     state = torch.load(ckpt_path, map_location=device)
-    #     engine.module.load_state_dict(state["model_state_dict"])
-
-    #     t_loss,t_ppl,t_all,t_stop,t_after,t_tr = evaluate(test_dl, engine, device, loss_fn, pad_id, tok_tgt, cfg["ai_rate"])
-        
-    #     print(f"\n** TEST ** Loss={t_loss:.4f}  PPL={t_ppl:.4f}")
-    #     for tag,d in (("all",t_all),("STOP_cur",t_stop),
-    #                   ("after_STOP",t_after),("transition",t_tr)):
-    #         print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
-    #               f"AUPRC={d['auprc']:.4f}")
     
     # ---- test ---------------------------------------------------------
     # Default placeholders so final_meta never crashes
