@@ -687,7 +687,7 @@ def train_model(cfg: Dict[str, Any],
     print("Using device:", device)
 
     uid = (
-        f"featurebased_performerfeatures{cfg['nb_features']}"
+        f"mixture_performerfeatures{cfg['nb_features']}"
         f"_dmodel{cfg['d_model']}_ff{cfg['d_ff']}_N{cfg['N']}"
         f"_heads{cfg['num_heads']}_lr{cfg['lr']}_w{cfg['weight']}"
         f"_fold{cfg['fold_id']}"          # <-- add this
@@ -704,8 +704,8 @@ def train_model(cfg: Dict[str, Any],
 
     s3 = _s3_client()
     bucket = cfg["s3_bucket"]
-    ck_key = f"FullProductGPT/performer/FeatureBased/checkpoints/{ckpt_path.name}"
-    js_key = f"FullProductGPT/performer/FeatureBased/metrics/{json_path.name}"
+    ck_key = f"Mixture/performer/FeatureBased/checkpoints/{ckpt_path.name}"
+    js_key = f"Mixture/performer/FeatureBased/metrics/{json_path.name}"
     print(f"[INFO] artefacts → s3://{bucket}/{ck_key} and s3://{bucket}/{js_key}")
 
     # --- data ----------------------------------------------------------
@@ -982,7 +982,7 @@ def train_model(cfg: Dict[str, Any],
 
     final_meta_path = metrics_dir / f"FullProductGPT_{uid}_final.json"
     final_meta_path.write_text(json.dumps(_json_safe(final_meta), indent=2))
-    _upload_and_unlink(final_meta_path, bucket, f"FullProductGPT/performer/FeatureBased/metrics/{final_meta_path.name}", s3)
+    _upload_and_unlink(final_meta_path, bucket, f"Mixture/performer/FeatureBased/metrics/{final_meta_path.name}", s3)
 
     # Nothing else to save locally; the "best" ckpt & metrics were already sent to S3
     ckpt_path.unlink(missing_ok=True)
