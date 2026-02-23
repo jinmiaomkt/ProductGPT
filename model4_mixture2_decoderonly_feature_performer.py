@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import math
 import random
 import torch
@@ -419,13 +418,6 @@ class Decoder(nn.Module):
         for layer in self.layers:
             x = layer(x, gate=gate)
         return self.norm(x)
-from __future__ import annotations
-
-from typing import Optional
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
 
 ##############################################################################
 # 10. ProjectionLayer (mixture output head over H projections)
