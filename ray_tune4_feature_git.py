@@ -146,7 +146,7 @@ def main():
     param_space = {
         # stage-A knobs (optional)
         "num_epochs": 120,
-        "data_frac": 0.05,          # << cheap tuning (requires build_dataloaders patch)
+        "data_frac": 0.25,          # << cheap tuning (requires build_dataloaders patch)
         "augment_train": False,     # << disable expensive permutation augmentation during tuning
         "permute_repeat": 1,
 
@@ -215,8 +215,9 @@ def main():
     final_cfg.update({
         "data_frac": 1.0,
         "augment_train": True,
-        "permute_repeat": 1,     # optionally >1 if you implemented sample_index correctly
+        "permute_repeat": 3,     # optionally >1 if you implemented sample_index correctly
         "num_epochs": 200,
+        "tolerance": 10,
         "do_infer": True,
     })
 
