@@ -811,7 +811,8 @@ def build_transformer(vocab_size_src: int,
                       nb_features: int,
                       feature_tensor: torch.Tensor,
                       special_token_ids: torch.Tensor,
-                      kernel_type: str="exp"):
+                      kernel_type: str="exp",
+                      projection_mix_space: str = "prob"):
     
     transformer = Transformer(
         vocab_size_src   = vocab_size_src,
@@ -826,7 +827,8 @@ def build_transformer(vocab_size_src: int,
         nb_features  = nb_features,
         feature_tensor = feature_tensor,
         special_token_ids = special_token_ids,
-        kernel_type  = kernel_type
+        kernel_type  = kernel_type,
+        projection_mix_space = "prob"
     )
 
     for p in transformer.parameters():
