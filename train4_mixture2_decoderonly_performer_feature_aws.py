@@ -464,10 +464,10 @@ def _unwrap_model(m):
 
 def _projection_mix_space(m) -> str:
     """
-    Try to read model.projection_mix_space; fall back to 'logit'.
+    Try to read model.projection_mix_space; fall back to 'prob'.
     """
     mm = _unwrap_model(m)
-    return getattr(mm, "projection_mix_space", "logit")
+    return getattr(mm, "projection_mix_space", "prob")
 
 def _to_logits_like(output: torch.Tensor, mix_space: str, eps: float = 1e-12) -> torch.Tensor:
     """
@@ -528,23 +528,6 @@ def _show(tag: str, metrics: Tuple[float, float, dict, dict, dict, dict]) -> Non
               f"AUPRC={d['auprc']:.4f}")
 
 # ══════════════════════════════ 8. Model builder ═════════════════════=
-# def build_model(cfg: Dict[str, Any], feat_tensor: torch.Tensor) -> nn.Module:
-#     return build_transformer(
-#         vocab_size_tgt=cfg["vocab_size_tgt"],
-#         vocab_size_src=cfg["vocab_size_src"],
-#         max_seq_len=cfg["seq_len_ai"],
-#         d_model=cfg["d_model"],
-#         n_layers=cfg["N"],
-#         n_heads=cfg["num_heads"],
-#         num_users=cfg["num_users"],
-#         dropout=cfg["dropout"],
-#         nb_features=cfg["nb_features"],
-#         kernel_type=cfg["kernel_type"],
-#         d_ff=cfg["d_ff"],
-#         feature_tensor=feat_tensor,
-#         special_token_ids=SPECIAL_IDS,
-#     )
-
 def build_model(cfg: Dict[str, Any], feat_tensor: torch.Tensor) -> nn.Module:
     return build_transformer(
         vocab_size_tgt=cfg["vocab_size_tgt"],
@@ -581,176 +564,6 @@ def _macro_f1_from_counts(tp: np.ndarray, pred_cnt: np.ndarray, true_cnt: np.nda
         f1   = (2 * prec * rec / (prec + rec)) if (prec + rec) > 0 else 0.0
         f1s.append(f1)
     return float(np.mean(f1s)) if f1s else float("nan")
-
-# @torch.no_grad()
-# def evaluate(
-#     loader,
-#     model,
-#     dev: torch.device,
-#     *,
-#     ai_rate: int,
-#     logit_bias: torch.Tensor | None = None,
-#     compute_nll: bool = True,
-#     compute_rev_mae: bool = True,
-# ) -> dict:
-#     """
-#     Returns metrics computed on decision positions only (labels in 1..9).
-
-#     logit_bias:
-#       If provided, we do: logits_corr = logits - logit_bias (broadcast over batch/time).
-#       For class-weight correction (Option A), set logit_bias[c] = log(weight[c]).
-#       Example: only class 9 weighted by w -> logit_bias[9] = log(w), others 0.
-
-#     Metrics returned:
-#       hit (accuracy), f1_macro, auprc_macro, plus optional nll and rev_mae.
-#     """
-#     if loader is None:
-#         return {"nll": float("nan"), "hit": float("nan"), "f1_macro": float("nan"),
-#                 "auprc_macro": float("nan"), "rev_mae": float("nan")}
-
-#     model.eval()
-
-#     # streaming counters for hit + macro-F1 over classes 1..9
-#     tp = np.zeros(9, dtype=np.int64)
-#     pred_cnt = np.zeros(9, dtype=np.int64)
-#     true_cnt = np.zeros(9, dtype=np.int64)
-#     correct = 0
-#     total = 0
-
-#     # AUPRC needs all scores/labels (but only 9-class scores)
-#     y_true_chunks: list[np.ndarray] = []
-#     y_score_chunks: list[np.ndarray] = []
-
-#     # optional proper scoring / revenue diagnostics
-#     nll_sum = 0.0
-#     nll_cnt = 0
-#     rev_sum = 0.0
-#     rev_cnt = 0
-
-#     # revenue vector for decisions 1..9 (your original)
-#     # 1..8 alternate {1,10}, decision 9 is 0
-#     rev_vec = torch.tensor([1, 10, 1, 10, 1, 10, 1, 10, 0], device=dev, dtype=torch.float32)
-
-#     for batch in loader:
-#         x = batch["aggregate_input"].to(dev)     # (B, Tsrc)
-#         tgt_full = batch["label"].to(dev)        # could be (B, n_slots) OR (B, Tsrc)
-
-#         # decision positions on the source/time axis
-#         pos = torch.arange(ai_rate - 1, x.size(1), ai_rate, device=dev)
-
-#         # model output (you expect either (B, Tsrc, V) or already (B, n_slots, V))
-#         logits_full = model(x)
-
-#         # Align logits to decision slots
-#         if logits_full.size(1) == x.size(1):
-#             logits = logits_full[:, pos, :]      # (B, n_slots, V)
-#         else:
-#             logits = logits_full                 # assume already (B, n_slots, V)
-
-#         # (optional) analytic correction only when logit_bias is not None
-#         if logit_bias is not None:
-#             logits = logits - logit_bias.to(device=logits.device, dtype=logits.dtype)
-
-#         # Evaluate ONLY over decision classes 1..9:
-#         logits_dec = logits[:, :, 1:10]               # (B, n_slots, 9)
-#         # prob_dec   = F.softmax(logits_dec, dim=-1)    # (B, n_slots, 9)
-        
-#         neg_col = torch.full_like(logits_dec[..., :1], torch.finfo(logits_dec.dtype).min)
-#         logits_aligned = torch.cat([neg_col, logits_dec], dim=-1)   # (B, n_slots, 10), valid labels 1..9
-
-#         prob_aligned = F.softmax(logits_aligned, dim=-1)             # (B, n_slots, 10)
-#         prob_dec = prob_aligned[:, :, 1:10]             
-        
-#         pred_dec   = prob_dec.argmax(dim=-1) + 1      # back to label space 1..9
-
-#         # prob = F.softmax(logits, dim=-1)         # (B, n_slots, V)
-#         # pred = prob.argmax(dim=-1)              # (B, n_slots)
-
-#         # ---- Align labels to decision slots ----
-#         if tgt_full.size(1) == prob_dec.size(1):
-#             tgt_dec = tgt_full                   # already (B, n_slots)
-#         elif tgt_full.size(1) == x.size(1):
-#             tgt_dec = tgt_full[:, pos]           # take decision positions from full axis
-#         elif tgt_full.size(1) > prob_dec.size(1):
-#             tgt_dec = tgt_full[:, :prob_dec.size(1)] # fallback
-#         else:
-#             tgt_dec = F.pad(tgt_full, (0, prob_dec.size(1) - tgt_full.size(1)), value=PAD_ID)
-
-#         mask = (tgt_dec >= 1) & (tgt_dec <= 9)   # (B, n_slots)
-#         if mask.sum().item() == 0:
-#             continue
-
-#         y_true = tgt_dec[mask].long()            # (N,)
-#         y_pred = pred_dec[mask].long()               # (N,)
-
-#         # Flatten prob/logp on masked positions (prevents shape bugs)
-#         # prob_flat = prob_dec[mask]                   # (N, V)
-#         # if prob_flat.size(-1) < 10:
-#         #     continue
-#         # scores_9 = prob_flat[:, 1:10]            # (N, 9)
-        
-#         scores_9 = prob_dec[mask]            # (N, 9)
-
-#         # --- hit ---
-#         total += y_true.numel()
-#         correct += (y_true == y_pred).sum().item()
-
-#         # --- macro-F1 counts ---
-#         y_true_np = y_true.detach().cpu().numpy()
-#         y_pred_np = y_pred.detach().cpu().numpy()
-#         for c in range(1, 10):
-#             idx = c - 1
-#             tmask = (y_true_np == c)
-#             pmask = (y_pred_np == c)
-#             true_cnt[idx] += int(tmask.sum())
-#             pred_cnt[idx] += int(pmask.sum())
-#             tp[idx] += int((tmask & pmask).sum())
-
-#         # --- AUPRC chunks ---
-#         y_true_chunks.append(y_true_np.astype(np.int64))
-#         y_score_chunks.append(scores_9.detach().float().cpu().numpy())
-
-#         # --- NLL (on corrected logits) ---
-#         # if compute_nll:
-#         #     logp_flat = F.log_softmax(logits_dec, dim=-1)[mask]     # (N, V)
-#         #     lp_true = logp_flat.gather(1, y_true.unsqueeze(1)).squeeze(1)
-#         #     nll_sum += (-lp_true).sum().item()
-#         #     nll_cnt += lp_true.numel()
-
-#         if compute_nll:
-#             logp_flat = F.log_softmax(logits_aligned, dim=-1)[mask]   # (N, 10), indexed by labels 0..9
-#             lp_true = logp_flat.gather(1, y_true.unsqueeze(1)).squeeze(1)  # y_true stays 1..9
-#             nll_sum += (-lp_true).sum().item()
-#             nll_cnt += lp_true.numel()
-
-#         # --- revenue MAE ---
-#         if compute_rev_mae:
-#             exp_rev = (scores_9 * rev_vec.to(dtype=scores_9.dtype)).sum(dim=-1)  # (N,)
-#             true_rev = rev_vec[(y_true - 1).clamp(0, 8)].to(dtype=exp_rev.dtype)
-#             rev_sum += torch.abs(exp_rev - true_rev).sum().item()
-#             rev_cnt += exp_rev.numel()
-
-#     if total == 0:
-#         return {"nll": float("nan"), "hit": float("nan"), "f1_macro": float("nan"),
-#                 "auprc_macro": float("nan"), "rev_mae": float("nan")}
-
-#     hit = correct / total
-#     f1_macro = _macro_f1_from_counts(tp, pred_cnt, true_cnt)
-
-#     # AUPRC macro
-#     y_true_all = np.concatenate(y_true_chunks, axis=0)
-#     y_score_all = np.concatenate(y_score_chunks, axis=0)  # (N, 9)
-#     y_bin = label_binarize(y_true_all, classes=DECISION_CLASSES)  # (N, 9)
-#     auprc_macro = float(average_precision_score(y_bin, y_score_all, average="macro"))
-
-#     out = {
-#         "hit": float(hit),
-#         "f1_macro": float(f1_macro),
-#         "auprc_macro": float(auprc_macro),
-#     }
-#     out["nll"] = float(nll_sum / max(1, nll_cnt)) if compute_nll else float("nan")
-#     out["rev_mae"] = float(rev_sum / max(1, rev_cnt)) if compute_rev_mae else float("nan")
-#     return out
 
 @torch.no_grad()
 def evaluate(
@@ -1016,127 +829,6 @@ def train_model(cfg: Dict[str, Any],
     # ---- training -----------------------------------------------------
     best_val_loss, patience = None, 0
 
-#     best_val_metrics = {
-#     "val_nll": float("nan"),
-#     "val_epoch": -1,
-#     "val_hit": float("nan"),
-#     "val_f1_macro": float("nan"),
-#     "val_auprc_macro": float("nan"),
-#     "weight_class9": float(cfg["weight"]),
-#     "logit_bias_class9": float(logit_bias[9].item()),
-# }
-
-#     best_val_nll = None          # or float("inf") if you prefer
-#     best_val_epoch = -1
-#     for ep in range(cfg["num_epochs"]):
-#         if hasattr(train_dl.dataset, "set_epoch"):
-#             train_dl.dataset.set_epoch(ep)
-#         engine.train()
-#         engine.gate.use_mean_gate = False
-#         running = 0.0
-#         for batch in tqdm(train_dl, desc=f"Ep {ep:02d}"):
-#             x = batch["aggregate_input"].to(device)
-#             tgt = batch["label"].to(device)
-#             pos = torch.arange(cfg["ai_rate"] - 1, cfg["seq_len_ai"], cfg["ai_rate"], device=device)
-#             # logits = engine(x)[:, pos, :]
-#             u = batch["user_id"].to(device)  # (B,)
-#             logits = engine(x, u)[:, pos, :]
-#             tgt_ = tgt.clone()
-
-#             # Skip batches with no labels (optional; FocalLoss is already safe)
-#             if not (tgt_ != pad_id).any():
-#                 continue
-
-#             loss = loss_fn(logits, tgt_)
-
-#             engine.zero_grad()
-#             engine.backward(loss)
-#             engine.step()
-#             running += loss.item()
-        
-#        # ---- update mean gate ----
-#         engine.gate.update_mean_gate()
-#         engine.gate.use_mean_gate = True
-
-#         # ---- validation ----------------------------------------------
-#         if cfg.get("gamma", 0.0) != 0.0 and logit_bias is not None:
-#             raise RuntimeError("Analytic correction must be OFF when gamma>0 (focal).")
-
-#         v = evaluate(
-#             val_dl,
-#             engine.module,            # underlying nn.Module
-#             device,
-#             ai_rate=cfg["ai_rate"],
-#             logit_bias=logit_bias,    # analytic odds correction
-#             compute_nll=True,         # selection metric
-#             compute_rev_mae=False,    # keep eval simple
-#         )
-
-#         # Basic console log (single line)
-#         print(
-#             f"Epoch {ep:02d}  ValNLL={v['nll']:.4f}  "
-#             f"Hit={v['hit']:.4f}  F1={v['f1_macro']:.4f}  AUPRC={v['auprc_macro']:.4f}"
-#         )
-
-#         # ---- Ray Tune / external reporting ----
-#         if report_fn is not None:
-#             report_fn({
-#                 "epoch": ep,
-#                 "val_nll": v["nll"],                 # <<< use this in Ray Tune (mode="min")
-#                 "val_hit": v["hit"],
-#                 "val_f1_macro": v["f1_macro"],
-#                 "val_auprc_macro": v["auprc_macro"],
-#             })
-
-#         # Allow scheduler to terminate the trial early
-#         if stop_check_fn is not None and stop_check_fn():
-#             print("[INFO] External early-stop triggered.")
-#             break
-
-#         print(f"[INFO] artefacts → s3://{bucket}/{ck_key} and s3://{bucket}/{js_key}")
-
-#         # ---- model selection / early stopping (by corrected unweighted NLL) ----
-#         val_nll = v["nll"]
-#         if best_val_nll is None or val_nll < best_val_nll:
-#             best_val_nll, patience, best_val_epoch = val_nll, 0, ep
-
-#             best_val_metrics = {
-#                 "val_nll": best_val_nll,
-#                 "val_epoch": best_val_epoch,
-#                 "val_hit": v["hit"],
-#                 "val_f1_macro": v["f1_macro"],
-#                 "val_auprc_macro": v["auprc_macro"],
-#                 # reproducibility of the analytic correction
-#                 "weight_class9": float(cfg["weight"]),
-#                 "logit_bias_class9": float(logit_bias[9].item()),
-#             }
-
-#             ckpt = {
-#                 "epoch": ep,
-#                 "best_val_nll": best_val_nll,
-#                 "best_val_epoch": best_val_epoch,
-#                 "model_state_dict": engine.module.state_dict(),
-#                 "weight_class9": float(cfg["weight"]),
-#                 "logit_bias_class9": float(logit_bias[9].item()),
-#             }
-
-#             # save best checkpoint & metrics
-#             torch.save(ckpt, ckpt_path)
-#             json_path.write_text(json.dumps(_json_safe(best_val_metrics), indent=2))
-
-#             if s3:
-#                 s3.upload_file(
-#                     str(json_path), bucket, js_key,
-#                     ExtraArgs={"ContentType": "application/json"},
-#                 )
-#                 s3.upload_file(str(ckpt_path), bucket, ck_key)
-
-#         else:
-#             patience += 1
-#             if patience >= cfg["patience"]:
-#                 print("Early stopping (by val_nll).")
-#                 break
-
     # ---- training -----------------------------------------------------
     best_val_metrics = {
         "val_nll": float("nan"),
@@ -1346,34 +1038,6 @@ def train_model(cfg: Dict[str, Any],
             f"\n** TEST ** NLL={t['nll']:.4f}  Hit={t['hit']:.4f}  "
             f"F1={t['f1_macro']:.4f}  AUPRC={t['auprc_macro']:.4f}  RevMAE={t['rev_mae']:.4f}"
         )
-
-    # # ------------------ inference on full 30 campaigns ------------------
-    # if cfg.get("do_infer", True):
-    #     inf_dl, _, _, _ = build_dataloaders({**cfg, "mode": "infer"})
-
-    #     # Write to a gzipped temp file in /tmp to keep root disk small
-    #     tmp_pred = Path("/tmp") / f"{uid}_predictions.jsonl.gz"
-
-    #     with gzip.open(tmp_pred, "wt", encoding="utf-8") as fp, torch.no_grad():
-    #         for batch in tqdm(inf_dl, desc="Infer 30-campaign set"):
-    #             x   = batch["aggregate_input"].to(device)
-    #             uids = batch["uid"]  # list[str] length B
-
-    #             u = batch["user_id"].to(device)  # (B,)
-    #             logits = engine(x, u)[:, cfg["ai_rate"]-1::cfg["ai_rate"], :]
-
-    #             if logit_bias is not None:
-    #                 logits = logits - logit_bias.to(device=logits.device, dtype=logits.dtype)
-
-    #             logits_dec = logits[:, :, 1:10]                  # (B, n_slots, 9)
-    #             probs_dec  = torch.softmax(logits_dec, -1).cpu().numpy()
-
-    #             for i, u in enumerate(uids):
-    #                 fp.write(json.dumps({"uid": u, "probs_dec_1to9": probs_dec[i].tolist()}) + "\n")
-
-    #     # Upload gzipped predictions and delete local temp
-    #     pred_s3_key = f"CV/predictions/{tmp_pred.name}"
-    #     _upload_and_unlink(tmp_pred, bucket, pred_s3_key, s3, gzip_json=True)
 
     # ------------------ inference on full 30 campaigns ------------------
     if cfg.get("do_infer", True):

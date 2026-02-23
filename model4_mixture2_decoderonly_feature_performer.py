@@ -451,7 +451,7 @@ class UserMixtureOutputHead(nn.Module):
         num_users: int,
         num_mix_heads: int,
         *,
-        mix_space: str = "logit",     # "logit" or "prob"
+        mix_space: str = "prob",     # "logit" or "prob"
         use_bias: bool = True,
         init_uniform_mix: bool = True,
     ):
