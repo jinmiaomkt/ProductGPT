@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-predict_productgpt_and_eval.py
+predict_mixture2_and_eval.py
 
 End-to-end:
   - Run inference for 9-way decision probabilities (every ai_rate steps)
@@ -9,16 +9,7 @@ End-to-end:
   - Save CSV tables (and optional predictions) locally and upload to S3
 
 Usage (example):
-python3 predict_productgpt_and_eval.py \
-  --data /home/ec2-user/data/clean_list_int_wide4_simple6_FeatureBasedTrain.json \
-  --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
-  --ckpt /path/to/FullProductGPT_featurebased_performerfeatures32_dmodel96_ff192_N3_heads4_lr..._w4_fold0.pt \
-  --feat-xlsx /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx \
-  --s3 s3://productgptbucket/YourEvalRuns/PhaseB/ \
-  --pred-out /tmp/preds_phaseB.jsonl.gz \
-  --uids-val /tmp/uids_val.txt \
-  --uids-test /tmp/uids_test.txt \
-  --fold-id 0
+
 
 Notes:
   - Requires IAM role or AWS creds for S3 upload.
@@ -73,6 +64,7 @@ def parse_hp_from_ckpt_name(ckpt_path: Path) -> dict:
 from config4 import get_config
 from model4_decoderonly_feature_performer import build_transformer
 from train1_decision_only_performer_aws import _ensure_jsonl, JsonLineDataset, _build_tok
+from dataset4_productgpt import load_json_dataset
 
 # Optional: silence Intel/LLVM OpenMP clash on macOS
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
@@ -95,6 +87,11 @@ def parse_args():
     p.add_argument("--thresh", type=float, default=0.5, help="Threshold for Hit/F1")
     p.add_argument("--seed",   type=int, default=33, help="Reproduce 80/10/10 split when no UID files are provided")
 
+    p.add_argument("--fold-spec", default="s3://productgptbucket/folds/productgptfolds.json",
+                help="Same SPEC_URI used by Phase-B training")
+    p.add_argument("--train-file", default="",
+                help="Training json used to reproduce Phase-B split (default: cfg['filepath'])")
+    
     # EXACT-MATCH UID overrides (local path or s3://bucket/key, one UID per line)
     p.add_argument("--uids-val",  default="", help="Text file (or s3://...) with validation UIDs, one per line")
     p.add_argument("--uids-test", default="", help="Text file (or s3://...) with test UIDs, one per line")
@@ -179,6 +176,51 @@ def load_uid_set(path_or_s3: str) -> Set[str]:
             continue
         uids.add(line)
     return uids
+
+def load_json_from_local_or_s3(path_or_s3: str) -> dict:
+    if path_or_s3.startswith("s3://"):
+        return json.loads(s3_read_text(path_or_s3))
+    return json.loads(Path(path_or_s3).read_text())
+
+def phaseb_val_test_uids(cfg: dict, fold_id: int, fold_spec_uri: str) -> tuple[Set[str], Set[str]]:
+    """
+    Reproduce Phase-B split EXACTLY:
+      - exclude fold holdout uids (uids_test)
+      - load raw with keep_uids=uids_trainval
+      - random_split(raw, [0.8,0.1,0.1], generator seed=33)
+    """
+    spec = load_json_from_local_or_s3(fold_spec_uri)
+
+    # same as ray_tune4_feature_git.py
+    uids_test_fold = [u for u, f in spec["assignment"].items() if f == fold_id]
+    uids_trainval  = [u for u in spec["assignment"] if u not in set(uids_test_fold)]
+    if not uids_trainval:
+        raise ValueError(f"No uids_trainval found for fold_id={fold_id}")
+
+    # IMPORTANT: load the same raw order as training
+    raw = load_json_dataset(cfg["filepath"], keep_uids=set(uids_trainval))
+
+    # Phase-B uses data_frac=1.0 (no subsample). If you ever want to match Phase-A,
+    # you must also reproduce _deterministic_subsample(raw, data_frac, subsample_seed=33).
+
+    n = len(raw)
+    n_train = int(0.8 * n)
+    n_val   = int(0.1 * n)
+    n_test  = n - n_train - n_val
+    if n_val == 0 or n_test == 0:
+        raise ValueError(f"Not enough data to split: n={n} -> train/val/test={n_train}/{n_val}/{n_test}")
+
+    g = torch.Generator().manual_seed(33)  # EXACT match to training build_dataloaders
+    tr_i, va_i, te_i = random_split(range(n), [n_train, n_val, n_test], generator=g)
+
+    val_uids  = {flat_uid(raw[i]["uid"]) for i in va_i.indices}
+    test_uids = {flat_uid(raw[i]["uid"]) for i in te_i.indices}
+
+    overlap = val_uids & test_uids
+    if overlap:
+        raise RuntimeError(f"val/test overlap (should never happen): {list(overlap)[:5]}")
+
+    return val_uids, test_uids
 
 # ================= Data / Labels =================
 def to_int_vec(x):
@@ -346,10 +388,32 @@ def main():
             return "val" if u in uids_val_override else "test" if u in uids_test_override else "train"
 
         print(f"[INFO] Using EXACT UID lists: val={len(uids_val_override)}, test={len(uids_test_override)}")
+    # else:
+    #     which_split = build_splits(records, seed=args.seed)
+    #     print(f"[INFO] Using fallback 80/10/10 split with seed={args.seed}")
     else:
-        which_split = build_splits(records, seed=args.seed)
-        print(f"[INFO] Using fallback 80/10/10 split with seed={args.seed}")
+        # ===== EXACT Phase-B split (matches training) =====
+        # fold id used by training is encoded in checkpoint name
+        fold_for_split = hp["fold_id"]
 
+        # ensure cfg["filepath"] matches Phase-B training file
+        if args.train_file:
+            cfg["filepath"] = args.train_file  # override if provided
+
+        uids_val, uids_test = phaseb_val_test_uids(cfg, fold_for_split, args.fold_spec)
+
+        tmp_val = Path("/tmp") / f"phaseb_fold{fold_for_split}_val_uids.txt"
+        tmp_te  = Path("/tmp") / f"phaseb_fold{fold_for_split}_test_uids.txt"
+        tmp_val.write_text("\n".join(sorted(uids_val)))
+        tmp_te.write_text("\n".join(sorted(uids_test)))
+        print(f"[INFO] Wrote UID lists: {tmp_val} and {tmp_te}")
+
+        def which_split(u):
+            return "val" if u in uids_val else "test" if u in uids_test else "train"
+
+        print(f"[INFO] Using Phase-B EXACT split: fold={fold_for_split}, "
+            f"val={len(uids_val)}, test={len(uids_test)} (seed=33)")
+        
     # ---------- DataLoader ----------
     ds = PredictDataset(data_path, pad_id=pad_id)
     loader = DataLoader(
