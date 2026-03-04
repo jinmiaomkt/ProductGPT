@@ -1,9 +1,9 @@
+from __future__ import annotations
 import json
 import gzip
 import torch
 from torch.utils.data import Dataset
 from typing import Any, Dict, List, Optional, Iterable, Set
-from __future__ import annotations
 
 def load_json_dataset(
     path: str,
