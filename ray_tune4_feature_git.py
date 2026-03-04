@@ -81,30 +81,23 @@ def trainable_ray(config: dict):
     cfg["num_heads"] = num_heads
     cfg["d_ff"] = min(int(d_model * config["dff_mult"]), 512)
 
-    # ---- rest of HP ----
     cfg.update({
-        "nb_features": config["nb_features"],
-        # "d_ff": config["d_ff"],
-        "N": config["N"],
-        "dropout": config["dropout"],
-        "lr": config["lr"],
-        "weight": config["weight"],
-        "gamma": config["gamma"],
-        "warmup_steps": config["warmup_steps"],
+        "nb_features": config.get("nb_features", cfg["nb_features"]),
+        "N": config.get("N", cfg["N"]),
+        "dropout": config.get("dropout", cfg["dropout"]),
+        "lr": config.get("lr", cfg["lr"]),
+        "weight": config.get("weight", cfg["weight"]),
+
+        # FIX: allow older trials that don't have gamma
+        "gamma": config.get("gamma", cfg.get("gamma", 0.0)),
+
+        "warmup_steps": config.get("warmup_steps", cfg.get("warmup_steps", 500)),
+
         # optional keys your trainer may read:
-        "dropout_attn": config["dropout"],
-        "dropout_ffn":  config["dropout"],
+        "dropout_attn": config.get("dropout", cfg["dropout"]),
+        "dropout_ffn":  config.get("dropout", cfg["dropout"]),
         "label_smoothing": config.get("label_smoothing", 0.0),
     })
-
-    # # include trial name in model_basename to avoid collisions
-    # trial_name = session.get_trial_name()
-    # cfg["model_basename"] = f"MyProductGPT_RT_{trial_name}"
-
-    # # ---- report_fn to Ray ----
-    # def report_fn(m: dict):
-    #     # Ray expects numbers; keep it flat
-    #     session.report(m)
 
     # Detect whether we are running inside a Ray Tune session
     try:
