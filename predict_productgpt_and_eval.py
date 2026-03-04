@@ -300,6 +300,7 @@ def main():
     args = parse_args()
     data_path   = _ensure_jsonl(args.data)
     ckpt_path   = Path(args.ckpt)
+    hp = parse_hp_from_ckpt_name(ckpt_path)  # <-- MUST be defined before split logic
     label_path  = Path(args.labels)
     feat_path   = Path(args.feat_xlsx)
     s3_prefix   = args.s3 if args.s3.endswith("/") else (args.s3 + "/")
@@ -374,7 +375,7 @@ def main():
     #             special_token_ids=SPECIAL_IDS
     #         ).to(device).eval()
 
-    hp = parse_hp_from_ckpt_name(ckpt_path)
+    # hp = parse_hp_from_ckpt_name(ckpt_path)
 
     # Ensure seq_len matches training
     cfg["seq_len_ai"] = cfg["seq_len_tgt"] * cfg["ai_rate"]
