@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import gzip
+from html import parser
 import json
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -17,6 +18,8 @@ from config4 import get_config
 from model4_decoderonly_feature_performer import build_transformer  # adjust if needed
 
 import copy
+
+AI_RATE = 15
 
 @dataclass
 class TraceCfg:
@@ -71,7 +74,6 @@ def _trace_emit(rec: dict, do_print: bool = True, fout: Optional[TextIO] = None)
 # ----------------------------
 # Constants / Token meanings
 # ----------------------------
-AI_RATE = 15
 SOS_DEC_ID = 10                 # from your main()
 EOS_PROD_ID_LOCAL = 57          # from your main()
 SOS_PROD_ID_LOCAL = 58          # from your main()
@@ -984,17 +986,17 @@ def rarity_from_token(tok: int) -> int:
         return 4
     return 3
 
-def decision_to_banner_and_pulls(dec: int) -> Tuple[str, int]:
-    if dec == 1: return "regular", 1
-    if dec == 2: return "regular", 10
-    if dec == 3: return "figure_a", 1
-    if dec == 4: return "figure_a", 10
-    if dec == 5: return "figure_b", 1
-    if dec == 6: return "figure_b", 10
-    if dec == 7: return "weapon", 1
-    if dec == 8: return "weapon", 10
-    if dec == 9: return "none", 0
-    return "unknown", 0
+# def decision_to_banner_and_pulls(dec: int) -> Tuple[str, int]:
+#     if dec == 1: return "regular", 1
+#     if dec == 2: return "regular", 10
+#     if dec == 3: return "figure_a", 1
+#     if dec == 4: return "figure_a", 10
+#     if dec == 5: return "figure_b", 1
+#     if dec == 6: return "figure_b", 10
+#     if dec == 7: return "weapon", 1
+#     if dec == 8: return "weapon", 10
+#     if dec == 9: return "none", 0
+#     return "unknown", 0
 
 def bannerstate_from_dict(d: Dict[str, Any]) -> BannerState:
     return BannerState(
@@ -1554,6 +1556,8 @@ def generate_campaign28_step2_simulated_outcomes(
         seq_full.extend(block)
         seq_c28.extend(block)
 
+        seq_full = trim_to_ctx(seq_full, max_ctx_tokens, AI_RATE)   # <--- add this
+
         x = torch.tensor(seq_full, dtype=torch.long, device=device).unsqueeze(0)
         logits = model(x)
         logits_at_decpos = logits[0, -1, :]
@@ -1688,7 +1692,9 @@ def main():
                         help="Campaign 28 firm action tokens (4 ints): [figA, figB, wep1, wep2]")
     parser.add_argument("--fixed_outcomes", nargs=10, type=int, default=[0] * 10,
                         help="Step=1 only: 10 frozen outcome tokens used for Campaign 28 steps >= 1")
-
+    parser.add_argument("--max_ctx_tokens", type=int, default=1024,
+                    help="Trim context to this many tokens (0 = no trim).")
+    
     parser.add_argument("--max_steps28", type=int, default=500)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--greedy", action="store_true")
@@ -1839,11 +1845,11 @@ def main():
 
             # optional: infer init_prev_dec from row["Decision"]
             init_prev_dec = args.init_prev_dec
-            if init_prev_dec is None and "Decision" in row:
+            if init_prev_dec is None:
                 try:
                     decs = parse_int_sequence(row["Decision"])
                     if len(decs) > 0:
-                        init_prev_dec = int(decs[-1])
+                        init_prev_dec = int(history_tokens[-1])
                 except Exception:
                     pass
 
