@@ -34,6 +34,7 @@ from contextlib import nullcontext
 from pathlib import Path
 from collections import defaultdict, Counter
 from typing import List, Dict, Set
+from dataset4_productgpt import load_json_dataset
 
 import numpy as np
 import pandas as pd
@@ -98,6 +99,20 @@ def parse_args():
     # EXACT-MATCH UID overrides (local path or s3://bucket/key, one UID per line)
     p.add_argument("--uids-val",  default="", help="Text file (or s3://...) with validation UIDs, one per line")
     p.add_argument("--uids-test", default="", help="Text file (or s3://...) with test UIDs, one per line")
+
+    # --- Phase-B exact split reproduction (when no --uids-val/test are provided) ---
+    p.add_argument("--fold-spec", default="s3://productgptbucket/folds/productgptfolds.json",
+                   help="Fold assignment JSON (same as training SPEC_URI)")
+    p.add_argument("--split-from", default="",
+                   help="Dataset path to reproduce split (default: cfg['filepath'])")
+    p.add_argument("--split-seed", type=int, default=33,
+                   help="Seed used by training random_split (Phase-B default=33)")
+    p.add_argument("--split-data-frac", type=float, default=1.0,
+                   help="Match training data_frac (Phase-B=1.0; Phase-A might be 0.25/0.05)")
+    p.add_argument("--split-subsample-seed", type=int, default=33,
+                   help="Match training subsample_seed (default=33)")
+    p.add_argument("--dump-uids", default="",
+                   help="Optional: local folder to write uids_val.txt / uids_test.txt")
 
     # Optional fold index to route outputs under .../fold{ID}/
     p.add_argument("--fold-id", type=int, default=-1, help="If >=0, upload outputs under .../fold{ID}/")
@@ -179,6 +194,70 @@ def load_uid_set(path_or_s3: str) -> Set[str]:
             continue
         uids.add(line)
     return uids
+
+def load_json_from_local_or_s3(path_or_s3: str) -> dict:
+    if path_or_s3.startswith("s3://"):
+        return json.loads(s3_read_text(path_or_s3))
+    return json.loads(Path(path_or_s3).read_text())
+
+def deterministic_subsample_indices(n: int, frac: float, seed: int) -> set[int]:
+    """Exactly matches your training _deterministic_subsample logic."""
+    if frac >= 1.0:
+        return set(range(n))
+    k = max(1, int(n * frac))
+    rng = __import__("random").Random(seed)
+    idx = list(range(n))
+    rng.shuffle(idx)
+    return set(idx[:k])
+
+def phase_split_uids_exact(
+    *,
+    fold_id: int,
+    fold_spec_uri: str,
+    split_from_path: str,
+    split_seed: int,
+    data_frac: float,
+    subsample_seed: int,
+) -> tuple[set[str], set[str]]:
+    """
+    Reproduce training split exactly:
+      - get uids_trainval from fold-spec (exclude fold holdout)
+      - raw = load_json_dataset(split_from_path, keep_uids=uids_trainval)
+      - optional deterministic subsample (if data_frac < 1)
+      - random_split with torch.Generator().manual_seed(split_seed)
+    """
+    spec = load_json_from_local_or_s3(fold_spec_uri)
+
+    uids_test_fold = [u for u, f in spec["assignment"].items() if f == fold_id]
+    uids_trainval  = [u for u in spec["assignment"] if u not in set(uids_test_fold)]
+    if not uids_trainval:
+        raise ValueError(f"No uids_trainval found for fold_id={fold_id}")
+
+    raw = load_json_dataset(split_from_path, keep_uids=set(uids_trainval))
+
+    # Match training deterministic subsample behavior
+    keep = deterministic_subsample_indices(len(raw), data_frac, subsample_seed)
+    if len(keep) != len(raw):
+        raw = [raw[i] for i in range(len(raw)) if i in keep]
+
+    n = len(raw)
+    n_train = int(0.8 * n)
+    n_val   = int(0.1 * n)
+    n_test  = n - n_train - n_val
+    if n_val <= 0 or n_test <= 0:
+        raise ValueError(f"Not enough data to split: n={n} -> {n_train}/{n_val}/{n_test}")
+
+    g = torch.Generator().manual_seed(split_seed)
+    _, va_i, te_i = random_split(range(n), [n_train, n_val, n_test], generator=g)
+
+    val_uids  = {flat_uid(raw[i]["uid"]) for i in va_i.indices}
+    test_uids = {flat_uid(raw[i]["uid"]) for i in te_i.indices}
+
+    overlap = val_uids & test_uids
+    if overlap:
+        raise RuntimeError(f"Split overlap (should not happen): {list(overlap)[:5]}")
+
+    return val_uids, test_uids
 
 # ================= Data / Labels =================
 def to_int_vec(x):
@@ -347,9 +426,39 @@ def main():
             return "val" if u in uids_val_override else "test" if u in uids_test_override else "train"
 
         print(f"[INFO] Using EXACT UID lists: val={len(uids_val_override)}, test={len(uids_test_override)}")
+    # else:
+    #     which_split = build_splits(records, seed=args.seed)
+    #     print(f"[INFO] Using fallback 80/10/10 split with seed={args.seed}")
     else:
-        which_split = build_splits(records, seed=args.seed)
-        print(f"[INFO] Using fallback 80/10/10 split with seed={args.seed}")
+        # ===== reproduce training split EXACTLY (Phase-B compatible) =====
+        fold_for_split = args.fold_id if (args.fold_id is not None and args.fold_id >= 0) else hp["fold_id"]
+
+        split_from_path = args.split_from.strip() or cfg["filepath"]
+
+        uids_val_override, uids_test_override = phase_split_uids_exact(
+            fold_id=fold_for_split,
+            fold_spec_uri=args.fold_spec,
+            split_from_path=split_from_path,
+            split_seed=args.split_seed,
+            data_frac=args.split_data_frac,
+            subsample_seed=args.split_subsample_seed,
+        )
+
+        def which_split(u):
+            return "val" if u in uids_val_override else "test" if u in uids_test_override else "train"
+
+        print(f"[INFO] Using EXACT training split via fold-spec:"
+              f" fold={fold_for_split}, val={len(uids_val_override)}, test={len(uids_test_override)}, "
+              f"seed={args.split_seed}, data_frac={args.split_data_frac}")
+
+        # optional: dump the uid lists locally for reuse
+        if args.dump_uids:
+            out = Path(args.dump_uids)
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "uids_val.txt").write_text("\n".join(sorted(uids_val_override)) + "\n")
+            (out / "uids_test.txt").write_text("\n".join(sorted(uids_test_override)) + "\n")
+            print(f"[INFO] Wrote UID lists to: {out}/uids_val.txt and {out}/uids_test.txt")
+
 
     # ---------- DataLoader ----------
     ds = PredictDataset(data_path, pad_id=pad_id)
