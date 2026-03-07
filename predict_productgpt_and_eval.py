@@ -360,22 +360,6 @@ def main():
 
     # ---------- Model ----------
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # model  = build_transformer(
-    #             vocab_size_tgt=cfg["vocab_size_tgt"],
-    #             vocab_size_src=cfg["vocab_size_src"],
-    #             d_model=128, 
-    #             n_layers=6, 
-    #             n_heads=4, 
-    #             d_ff=128, 
-    #             dropout=0.0,
-    #             nb_features=16, 
-    #             max_seq_len=15360,
-    #             kernel_type=cfg["kernel_type"],
-    #             feature_tensor=load_feature_tensor(feat_path),
-    #             special_token_ids=SPECIAL_IDS
-    #         ).to(device).eval()
-
-    # hp = parse_hp_from_ckpt_name(ckpt_path)
 
     # Ensure seq_len matches training
     cfg["seq_len_ai"] = cfg["seq_len_tgt"] * cfg["ai_rate"]
@@ -426,12 +410,6 @@ def main():
         for batch in loader:
             x    = batch["x"].to(device)
             uids = batch["uid"]
-            # logits -> probs
-            # probs_all = torch.softmax(model(x), dim=-1)         # (B, L, V)
-            # pos       = torch.arange(cfg["ai_rate"]-1, x.size(1), cfg["ai_rate"], device=device)
-            # # pull decision probs at decision positions
-            # prob_dec_focus = probs_all[:, pos, :][..., focus_ids]  # (B, N, 9)
-
             logits_full = model(x)  # (B, T, V) or (B, Nslots, V)
 
             pos = torch.arange(cfg["ai_rate"] - 1, x.size(1), cfg["ai_rate"], device=device)
