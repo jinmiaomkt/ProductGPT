@@ -521,7 +521,13 @@ def main():
             uids = batch["uid"]
             logits_full = model(x)  # (B, T, V) or (B, Nslots, V)
 
-            pos = torch.arange(cfg["ai_rate"] - 1, x.size(1), cfg["ai_rate"], device=device)
+            # pos = torch.arange(cfg["ai_rate"] - 1, x.size(1), cfg["ai_rate"], device=device)
+
+            if x.size(1) < cfg["ai_rate"]:
+                # No decision slot exists in this batch (sequence too short)
+                pos = torch.empty((0,), dtype=torch.long, device=device)
+            else:
+                pos = torch.arange(cfg["ai_rate"] - 1, x.size(1), cfg["ai_rate"], device=device)
 
             # Align to decision-slot axis
             if logits_full.size(1) == x.size(1):
