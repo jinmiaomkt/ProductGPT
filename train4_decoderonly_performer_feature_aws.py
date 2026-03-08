@@ -139,6 +139,171 @@ def build_tokenizer_src() -> Tokenizer:  # with product IDs
 def build_tokenizer_tgt() -> Tokenizer:  # decisions only
     return _base_tokeniser()
 
+# ══════════════════════════════ NEW: Class weight computation ═════════
+def compute_class_weights(
+    train_loader: DataLoader,
+    num_classes: int = 9,
+    tau: float = 0.5,
+    pad_id: int = 0,
+) -> torch.Tensor:
+    """
+    Count decision-class frequencies from the training set,
+    return inverse-frequency weights with temperature tau.
+
+    Args:
+        train_loader: training DataLoader
+        num_classes:  9 (decisions 1..9)
+        tau:          temperature; 0 = uniform, 1 = full inverse-frequency
+        pad_id:       label to ignore
+
+    Returns:
+        (9,) float tensor, index 0 → class 1, ..., index 8 → class 9
+        Normalized so that mean weight = 1.0.
+    """
+    counts = torch.zeros(num_classes, dtype=torch.float64)
+
+    for batch in train_loader:
+        labels = batch["label"].view(-1)
+        for c in range(1, 10):
+            counts[c - 1] += (labels == c).sum().item()
+
+    # Guard against zero counts
+    counts = counts.clamp(min=1.0)
+
+    N = counts.sum()
+    K = float(num_classes)
+    freq = counts / N                                      # (9,)
+    raw_weight = 1.0 / (K * freq)                          # (9,)
+    tempered = raw_weight.pow(tau)                          # (9,)
+
+    # Normalize so mean weight = 1 (keeps loss scale stable)
+    tempered = tempered / tempered.mean()
+
+    print(f"[INFO] Class frequencies:  {(freq * 100).numpy().round(2)}%")
+    print(f"[INFO] Class weights (tau={tau}): {tempered.float().numpy().round(4)}")
+
+    return tempered.float()
+
+# ══════════════════════════════ NEW: Vector Scaling Calibrator ════════
+class VectorScaling(nn.Module):
+    """
+    Post-hoc calibration: learns per-class scale (a) and shift (b)
+    on decision logits. 2*K = 18 parameters for K=9 classes.
+    """
+    def __init__(self, n_classes: int = 9):
+        super().__init__()
+        self.a = nn.Parameter(torch.ones(n_classes))
+        self.b = nn.Parameter(torch.zeros(n_classes))
+
+    def forward(self, logits_dec: torch.Tensor) -> torch.Tensor:
+        """
+        logits_dec: (..., 9) raw decision logits (NOT softmaxed)
+        returns:    (..., 9) calibrated probabilities summing to 1
+        """
+        return F.softmax(self.a * logits_dec + self.b, dim=-1)
+
+
+def fit_vector_scaling(
+    logits_val: torch.Tensor,
+    labels_val: torch.Tensor,
+    n_classes: int = 9,
+    max_iter: int = 200,
+) -> VectorScaling:
+    """
+    Fit vector scaling calibrator on validation decision logits.
+
+    Args:
+        logits_val: (N, 9) decision logits from val set (raw, no correction)
+        labels_val: (N,)   ground truth labels in {1..9}
+        n_classes:  9
+        max_iter:   LBFGS iterations
+
+    Returns:
+        Fitted VectorScaling module
+    """
+    cal = VectorScaling(n_classes)
+
+    # Move to same device as input
+    device = logits_val.device
+    cal = cal.to(device)
+
+    labels_0based = (labels_val - 1).clamp(0, n_classes - 1).long()
+
+    optimizer = torch.optim.LBFGS(cal.parameters(), lr=0.5, max_iter=max_iter)
+
+    def closure():
+        optimizer.zero_grad()
+        p = cal(logits_val)
+        loss = F.nll_loss(torch.log(p + 1e-12), labels_0based)
+        loss.backward()
+        return loss
+
+    optimizer.step(closure)
+
+    # Report fitted parameters
+    print(f"[CALIBRATOR] a = {cal.a.data.cpu().numpy().round(4)}")
+    print(f"[CALIBRATOR] b = {cal.b.data.cpu().numpy().round(4)}")
+
+    return cal
+
+
+def collect_val_logits(
+    val_loader: DataLoader,
+    model: nn.Module,
+    device: torch.device,
+    ai_rate: int,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Run model on validation set, collect raw 9-class decision logits and labels.
+
+    Returns:
+        logits_all: (N, 9) raw decision logits
+        labels_all: (N,)   labels in {1..9}
+    """
+    model.eval()
+    logits_chunks = []
+    label_chunks = []
+
+    with torch.no_grad():
+        for batch in val_loader:
+            x = batch["aggregate_input"].to(device)
+            tgt_full = batch["label"].to(device)
+
+            pos = torch.arange(ai_rate - 1, x.size(1), ai_rate, device=device)
+            logits_full = model(x)
+
+            if logits_full.size(1) == x.size(1):
+                logits = logits_full[:, pos, :]
+            else:
+                logits = logits_full
+
+            # Extract 9-class decision logits
+            V_out = logits.size(-1)
+            if V_out == 9:
+                logits_dec = logits
+            else:
+                logits_dec = logits[..., 1:10]       # (B, n_slots, 9)
+
+            # Align labels
+            n_slots = logits_dec.size(1)
+            if tgt_full.size(1) == n_slots:
+                tgt_dec = tgt_full
+            elif tgt_full.size(1) == x.size(1):
+                tgt_dec = tgt_full[:, pos]
+            elif tgt_full.size(1) > n_slots:
+                tgt_dec = tgt_full[:, :n_slots]
+            else:
+                tgt_dec = F.pad(tgt_full, (0, n_slots - tgt_full.size(1)), value=PAD_ID)
+
+            mask = (tgt_dec >= 1) & (tgt_dec <= 9)
+            if mask.sum().item() == 0:
+                continue
+
+            logits_chunks.append(logits_dec[mask])       # (N_batch, 9)
+            label_chunks.append(tgt_dec[mask].long())    # (N_batch,)
+
+    return torch.cat(logits_chunks, dim=0), torch.cat(label_chunks, dim=0)
+
 # ══════════════════════════════ 4. Losses ═════════════════════════════
 class FocalLoss(nn.Module):
     """Multi‑class focal loss with optional class weights."""
@@ -425,7 +590,9 @@ def evaluate(
     dev: torch.device,
     *,
     ai_rate: int,
-    logit_bias: torch.Tensor | None = None,
+    # logit_bias: torch.Tensor | None = None,
+    logit_bias_9: torch.Tensor | None = None,
+    calibrator: VectorScaling | None = None,
     compute_nll: bool = True,
     compute_rev_mae: bool = True,
 ) -> dict:
@@ -509,66 +676,99 @@ def evaluate(
 
         V_out = logits.size(-1)
 
-        # Apply logit bias safely for both output styles
-        if logit_bias is not None:
-            bias = logit_bias.to(device=logits.device, dtype=logits.dtype)
-            if bias.numel() == V_out:
-                logits = logits - bias
-            elif V_out == 9 and bias.numel() >= 10:
-                # full-vocab bias provided, but model outputs decision-only classes 1..9
-                logits = logits - bias[1:10]
-            else:
-                # Shape mismatch; better to fail loudly than silently compute nonsense
-                raise ValueError(
-                    f"logit_bias shape mismatch: logits last dim={V_out}, "
-                    f"logit_bias numel={bias.numel()}"
-                )
-
-        # ------------------------------------------------------------
-        # Support BOTH output styles:
-        #   (A) decision-only logits: V_out == 9  (classes correspond to labels 1..9)
-        #   (B) full-vocab logits:    V_out >= 10 (decision labels are token IDs 1..9)
-        # ------------------------------------------------------------
+        # ──────────────────────────────────────────────────────
+        # FIX: Extract decision logits BEFORE softmax
+        # ──────────────────────────────────────────────────────
         if V_out == 9:
-            # decision-only logits correspond to labels 1..9
-            prob_dec = F.softmax(logits, dim=-1)          # (B, n_slots, 9)
-            pred = prob_dec.argmax(dim=-1) + 1            # back to label space 1..9
-
-            tgt_dec = _align_labels_to_slots(tgt_full, prob_dec.size(1), x.size(1), pos)
-
-            mask = (tgt_dec >= 1) & (tgt_dec <= 9)        # (B, n_slots)
-            if mask.sum().item() == 0:
-                continue
-
-            y_true = tgt_dec[mask].long()                 # (N,) in 1..9
-            y_pred = pred[mask].long()                    # (N,) in 1..9
-
-            prob_flat = prob_dec[mask]                    # (N, 9)
-            if prob_flat.size(-1) != 9:
-                continue
-
-            scores_9 = prob_flat                          # already decision classes 1..9
-
+            logits_dec = logits                              # already 9-class
         else:
-            # full-vocab logits
-            prob = F.softmax(logits, dim=-1)              # (B, n_slots, V_out)
-            pred = prob.argmax(dim=-1)                    # (B, n_slots), token-ID space
+            logits_dec = logits[..., 1:10]                   # (B, n_slots, 9)
 
-            tgt_dec = _align_labels_to_slots(tgt_full, prob.size(1), x.size(1), pos)
+        # ──────────────────────────────────────────────────────
+        # Compute probabilities: either calibrator or analytic
+        # ──────────────────────────────────────────────────────
+        if calibrator is not None:
+            # Post-hoc calibration (takes raw logits, returns probs)
+            prob_dec = calibrator(logits_dec)                 # (B, n_slots, 9)
+        else:
+            # Analytic correction then softmax
+            if logit_bias_9 is not None:
+                bias = logit_bias_9.to(device=logits_dec.device, dtype=logits_dec.dtype)
+                logits_dec = logits_dec - bias                # (B, n_slots, 9) - (9,)
+            prob_dec = F.softmax(logits_dec, dim=-1)          # (B, n_slots, 9), sums to 1
 
-            mask = (tgt_dec >= 1) & (tgt_dec <= 9)        # only decision labels
-            if mask.sum().item() == 0:
-                continue
+        pred = prob_dec.argmax(dim=-1) + 1                    # back to label space 1..9
 
-            y_true = tgt_dec[mask].long()                 # (N,) in 1..9
-            y_pred = pred[mask].long()                    # (N,) token IDs (may be outside 1..9)
+        tgt_dec = _align_labels_to_slots(tgt_full, prob_dec.size(1), x.size(1), pos)
 
-            prob_flat = prob[mask]                        # (N, V_out)
-            if prob_flat.size(-1) < 10:
-                # can't safely slice decision IDs 1..9
-                continue
+        mask = (tgt_dec >= 1) & (tgt_dec <= 9)
+        if mask.sum().item() == 0:
+            continue
 
-            scores_9 = prob_flat[:, 1:10]                 # (N, 9), token IDs 1..9
+        y_true = tgt_dec[mask].long()
+        y_pred = pred[mask].long()
+        scores_9 = prob_dec[mask]                             # (N, 9)
+
+        # # Apply logit bias safely for both output styles
+        # if logit_bias is not None:
+        #     bias = logit_bias.to(device=logits.device, dtype=logits.dtype)
+        #     if bias.numel() == V_out:
+        #         logits = logits - bias
+        #     elif V_out == 9 and bias.numel() >= 10:
+        #         # full-vocab bias provided, but model outputs decision-only classes 1..9
+        #         logits = logits - bias[1:10]
+        #     else:
+        #         # Shape mismatch; better to fail loudly than silently compute nonsense
+        #         raise ValueError(
+        #             f"logit_bias shape mismatch: logits last dim={V_out}, "
+        #             f"logit_bias numel={bias.numel()}"
+        #         )
+
+        # # ------------------------------------------------------------
+        # # Support BOTH output styles:
+        # #   (A) decision-only logits: V_out == 9  (classes correspond to labels 1..9)
+        # #   (B) full-vocab logits:    V_out >= 10 (decision labels are token IDs 1..9)
+        # # ------------------------------------------------------------
+        # if V_out == 9:
+        #     # decision-only logits correspond to labels 1..9
+        #     prob_dec = F.softmax(logits, dim=-1)          # (B, n_slots, 9)
+        #     pred = prob_dec.argmax(dim=-1) + 1            # back to label space 1..9
+
+        #     tgt_dec = _align_labels_to_slots(tgt_full, prob_dec.size(1), x.size(1), pos)
+
+        #     mask = (tgt_dec >= 1) & (tgt_dec <= 9)        # (B, n_slots)
+        #     if mask.sum().item() == 0:
+        #         continue
+
+        #     y_true = tgt_dec[mask].long()                 # (N,) in 1..9
+        #     y_pred = pred[mask].long()                    # (N,) in 1..9
+
+        #     prob_flat = prob_dec[mask]                    # (N, 9)
+        #     if prob_flat.size(-1) != 9:
+        #         continue
+
+        #     scores_9 = prob_flat                          # already decision classes 1..9
+
+        # else:
+        #     # full-vocab logits
+        #     prob = F.softmax(logits, dim=-1)              # (B, n_slots, V_out)
+        #     pred = prob.argmax(dim=-1)                    # (B, n_slots), token-ID space
+
+        #     tgt_dec = _align_labels_to_slots(tgt_full, prob.size(1), x.size(1), pos)
+
+        #     mask = (tgt_dec >= 1) & (tgt_dec <= 9)        # only decision labels
+        #     if mask.sum().item() == 0:
+        #         continue
+
+        #     y_true = tgt_dec[mask].long()                 # (N,) in 1..9
+        #     y_pred = pred[mask].long()                    # (N,) token IDs (may be outside 1..9)
+
+        #     prob_flat = prob[mask]                        # (N, V_out)
+        #     if prob_flat.size(-1) < 10:
+        #         # can't safely slice decision IDs 1..9
+        #         continue
+
+        #     scores_9 = prob_flat[:, 1:10]                 # (N, 9), token IDs 1..9
 
         # --- hit (accuracy on true decision positions) ---
         total += y_true.numel()
@@ -591,18 +791,26 @@ def evaluate(
 
         # --- NLL (on corrected logits) ---
         if compute_nll:
-            if V_out == 9:
-                # logits indexed 0..8 correspond to labels 1..9
-                logp_flat = F.log_softmax(logits, dim=-1)[mask]  # (N, 9)
-                y_true_0based = (y_true - 1).clamp(0, 8)
-                lp_true = logp_flat.gather(1, y_true_0based.unsqueeze(1)).squeeze(1)
-            else:
-                # full vocab logits use token IDs directly
-                logp_flat = F.log_softmax(logits, dim=-1)[mask]  # (N, V_out)
-                lp_true = logp_flat.gather(1, y_true.unsqueeze(1)).squeeze(1)
-
+            # Use the SAME logits_dec (before or after correction) for NLL
+            # For proper NLL, we use the corrected/calibrated distribution
+            logp_dec = torch.log(prob_dec + 1e-12)[mask]      # (N, 9)
+            y_true_0based = (y_true - 1).clamp(0, 8)
+            lp_true = logp_dec.gather(1, y_true_0based.unsqueeze(1)).squeeze(1)
             nll_sum += (-lp_true).sum().item()
             nll_cnt += lp_true.numel()
+
+            # if V_out == 9:
+            #     # logits indexed 0..8 correspond to labels 1..9
+            #     logp_flat = F.log_softmax(logits, dim=-1)[mask]  # (N, 9)
+            #     y_true_0based = (y_true - 1).clamp(0, 8)
+            #     lp_true = logp_flat.gather(1, y_true_0based.unsqueeze(1)).squeeze(1)
+            # else:
+            #     # full vocab logits use token IDs directly
+            #     logp_flat = F.log_softmax(logits, dim=-1)[mask]  # (N, V_out)
+            #     lp_true = logp_flat.gather(1, y_true.unsqueeze(1)).squeeze(1)
+
+            # nll_sum += (-lp_true).sum().item()
+            # nll_cnt += lp_true.numel()
 
         # --- revenue MAE ---
         if compute_rev_mae:
@@ -675,30 +883,35 @@ def train_model(cfg: Dict[str, Any],
     train_dl, val_dl, test_dl, tok_tgt = build_dataloaders(cfg)
     pad_id = tok_tgt.token_to_id("[PAD]")
 
-    # ── optional deterministic subsample for hyperparam search ──
-    # cfg["data_frac"] in (0,1] e.g., 0.05 for 5% of records
-    # data_frac = float(cfg.get("data_frac", 1.0))
-    # subsample_seed = int(cfg.get("subsample_seed", 33))
-    # raw = _deterministic_subsample(raw, data_frac, subsample_seed)
-
     # --- model ---------------------------------------------------------
     feat_tensor = load_feature_tensor(FEAT_FILE)
     model = build_model(cfg, feat_tensor).to(device)
 
-    # ---- QAT stub (optional) -----------------------------------------
-    # model.qconfig = torch.quantization.get_default_qat_qconfig("fbgemm")
-    # torch.quantization.prepare_qat(model, inplace=True)
+ # ──────────────────────────────────────────────────────────
+    # CHANGED: compute per-class weights from training data
+    # ──────────────────────────────────────────────────────────
+    tau = float(cfg.get("tau", 0.5))
+    dec_weights_9 = compute_class_weights(train_dl, num_classes=9, tau=tau, pad_id=pad_id)
+
+    # Map 9-class weights into full vocab space for loss function
+    full_weights = torch.ones(cfg["vocab_size_tgt"], device=device)
+    for c in range(9):
+        full_weights[c + 1] = dec_weights_9[c]    # class 1 → index 1, ..., class 9 → index 9
+
+    loss_fn = FocalLoss(cfg["gamma"], pad_id, full_weights)
 
     # ---- criterion ----------------------------------------------------
     weights = torch.ones(cfg["vocab_size_tgt"], device=device)
     weights[9] = cfg["weight"]
     loss_fn = FocalLoss(cfg["gamma"], pad_id, weights)
 
-    # Analytic correction at eval/infer time:
-    # If training used class weight w_c in weighted CE, then p_train(y|x) ∝ w_y * p_true(y|x).
-    # So to recover p_true, subtract log(w_c) from logits before softmax.
-    logit_bias = torch.zeros(cfg["vocab_size_tgt"], device=device, dtype=torch.float32)
-    logit_bias[9] = math.log(cfg["weight"])   # only class 9 was upweighted
+  # ──────────────────────────────────────────────────────────
+    # CHANGED: per-class logit bias for analytic correction (all 9 classes)
+    # ──────────────────────────────────────────────────────────
+    logit_bias_9 = torch.log(dec_weights_9).to(device=device, dtype=torch.float32)  # (9,)
+
+    print(f"[INFO] loss=FocalLoss(gamma={cfg['gamma']}) with per-class weights (tau={tau})")
+    print(f"[INFO] logit_bias_9 = {logit_bias_9.cpu().numpy().round(4)}")
 
     # ---- DeepSpeed ----------------------------------------------------
     ds_cfg = {
@@ -749,9 +962,12 @@ def train_model(cfg: Dict[str, Any],
     "val_epoch": -1,
     "val_hit": float("nan"),
     "val_f1_macro": float("nan"),
-    "val_auprc_macro": float("nan"),
-    "weight_class9": float(cfg["weight"]),
-    "logit_bias_class9": float(logit_bias[9].item()),
+    "val_auprc_macro": float("nan"),        
+    "class_weights_9": dec_weights_9.cpu().tolist(),
+    # "weight_class9": float(cfg["weight"]),
+    # "logit_bias_9": float(logit_bias_9[9].item()),
+    "logit_bias_9": logit_bias_9.cpu().tolist(),
+    "tau": tau,
 }
 
     best_val_nll = None          # or float("inf") if you prefer
@@ -780,14 +996,28 @@ def train_model(cfg: Dict[str, Any],
             running += loss.item()
         
         # ---- validation ----------------------------------------------
+        # v = evaluate(
+        #     val_dl,
+        #     engine.module,            # underlying nn.Module
+        #     device,
+        #     ai_rate=cfg["ai_rate"],
+        #     logit_bias=logit_bias,    # analytic odds correction
+        #     compute_nll=True,         # selection metric
+        #     compute_rev_mae=False,    # keep eval simple
+        # )
+
+        # ──────────────────────────────────────────────────────
+        # CHANGED: pass logit_bias_9 (9-dim) instead of full-vocab bias
+        # ──────────────────────────────────────────────────────
         v = evaluate(
             val_dl,
-            engine.module,            # underlying nn.Module
+            engine.module,
             device,
             ai_rate=cfg["ai_rate"],
-            logit_bias=logit_bias,    # analytic odds correction
-            compute_nll=True,         # selection metric
-            compute_rev_mae=False,    # keep eval simple
+            logit_bias_9=logit_bias_9,    # (9,) per-class correction
+            calibrator=None,              # no calibrator during training
+            compute_nll=True,
+            compute_rev_mae=False,
         )
 
         # Basic console log (single line)
@@ -824,9 +1054,10 @@ def train_model(cfg: Dict[str, Any],
                 "val_hit": v["hit"],
                 "val_f1_macro": v["f1_macro"],
                 "val_auprc_macro": v["auprc_macro"],
-                # reproducibility of the analytic correction
-                "weight_class9": float(cfg["weight"]),
-                "logit_bias_class9": float(logit_bias[9].item()),
+                # ──── CHANGED: save all 9 weights and biases ────
+                "class_weights_9": dec_weights_9.cpu().tolist(),
+                "logit_bias_9": logit_bias_9.cpu().tolist(),
+                "tau": tau,
             }
 
             ckpt = {
@@ -834,8 +1065,10 @@ def train_model(cfg: Dict[str, Any],
                 "best_val_nll": best_val_nll,
                 "best_val_epoch": best_val_epoch,
                 "model_state_dict": engine.module.state_dict(),
-                "weight_class9": float(cfg["weight"]),
-                "logit_bias_class9": float(logit_bias[9].item()),
+                # ──── CHANGED: save all 9 weights and biases ────
+                "class_weights_9": dec_weights_9.cpu().tolist(),
+                "logit_bias_9": logit_bias_9.cpu().tolist(),
+                "tau": tau,
             }
 
             # save best checkpoint & metrics
@@ -871,22 +1104,51 @@ def train_model(cfg: Dict[str, Any],
         "auprc_macro": float("nan"), "rev_mae": float("nan")}
 
     if ckpt_path.exists():
-        state = torch.load(ckpt_path, map_location=device)
-        engine.module.load_state_dict(state["model_state_dict"])
+         state = torch.load(ckpt_path, map_location=device)
+         engine.module.load_state_dict(state["model_state_dict"])
+         print("\n[INFO] Fitting vector scaling calibrator on validation set...")
+         logits_val, labels_val = collect_val_logits(val_dl, engine.module, device, cfg["ai_rate"])
+         calibrator = fit_vector_scaling(logits_val, labels_val)
+         
+         cal_path = ckpt_dir / f"calibrator_{uid}.pt"
+         torch.save({"a": calibrator.a.data, "b": calibrator.b.data}, cal_path)
+         cal_s3_key = f"FullProductGPT/performer/FeatureBased/checkpoints/{cal_path.name}"
+         if s3:
+            s3.upload_file(str(cal_path), bucket, cal_s3_key)
+            print(f"[S3] calibrator → s3://{bucket}/{cal_s3_key}")
 
-        t = evaluate(
+        # Test with calibrator (preferred) AND with analytic correction (for comparison)
+         t_cal = evaluate(
             test_dl,
             engine.module,
             device,
             ai_rate=cfg["ai_rate"],
-            logit_bias=logit_bias,
+            logit_bias_9=None,
+            calibrator=calibrator,
             compute_nll=True,
             compute_rev_mae=True,
         )
 
-        print(
-            f"\n** TEST ** NLL={t['nll']:.4f}  Hit={t['hit']:.4f}  "
-            f"F1={t['f1_macro']:.4f}  AUPRC={t['auprc_macro']:.4f}  RevMAE={t['rev_mae']:.4f}"
+         t_analytic = evaluate(
+            test_dl,
+            engine.module,
+            device,
+            ai_rate=cfg["ai_rate"],
+            logit_bias_9=logit_bias_9,
+            calibrator=None,
+            compute_nll=True,
+            compute_rev_mae=True,
+        )
+
+         t = t_cal  # Use calibrated version as primary
+
+         print(
+            f"\n** TEST (calibrated) ** NLL={t_cal['nll']:.4f}  Hit={t_cal['hit']:.4f}  "
+            f"F1={t_cal['f1_macro']:.4f}  AUPRC={t_cal['auprc_macro']:.4f}  RevMAE={t_cal['rev_mae']:.4f}"
+        )
+         print(
+            f"** TEST (analytic)   ** NLL={t_analytic['nll']:.4f}  Hit={t_analytic['hit']:.4f}  "
+            f"F1={t_analytic['f1_macro']:.4f}  AUPRC={t_analytic['auprc_macro']:.4f}  RevMAE={t_analytic['rev_mae']:.4f}"
         )
 
     # ------------------ inference on full 30 campaigns ------------------

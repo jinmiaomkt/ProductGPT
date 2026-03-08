@@ -86,11 +86,9 @@ def trainable_ray(config: dict):
         "N": config.get("N", cfg["N"]),
         "dropout": config.get("dropout", cfg["dropout"]),
         "lr": config.get("lr", cfg["lr"]),
-        "weight": config.get("weight", cfg["weight"]),
-
-        # FIX: allow older trials that don't have gamma
-        "gamma": config.get("gamma", cfg.get("gamma", 0.0)),
-
+        "weight": 1,
+        "gamma": config.get("gamma", 0.0),  
+        "tau": config.get("tau", 0.5),              # NEW: inverse-frequency temperature
         "warmup_steps": config.get("warmup_steps", cfg.get("warmup_steps", 500)),
 
         # optional keys your trainer may read:
@@ -139,7 +137,7 @@ def main():
     param_space = {
         # stage-A knobs (optional)
         "num_epochs": 120,
-        "data_frac": 0.15,          # << cheap tuning (requires build_dataloaders patch)
+        "data_frac": 0.5,          # << cheap tuning (requires build_dataloaders patch)
         "augment_train": False,     # << disable expensive permutation augmentation during tuning
         "permute_repeat": 1,
 
@@ -149,8 +147,9 @@ def main():
         "N": tune.randint(2, 8),                   # 4..8
         "dropout": tune.uniform(0.0, 0.2),
         "lr": tune.loguniform(1e-4, 1e-3),
-        "weight": tune.choice([1, 2, 4, 6, 8, 12, 16, 20, 24, 32]),
-        "gamma": tune.uniform(0, 0),
+        "weight": 1,
+        "tau": tune.uniform(0.3, 0.7),              # NEW: inverse-frequency temperature
+        "gamma": 0.0,
         "warmup_steps": tune.choice([500, 1000, 2000]),
         "label_smoothing": tune.uniform(0.0, 0.1),
         "do_infer": False,
@@ -207,8 +206,8 @@ def main():
     final_cfg = best_cfg.copy()
     final_cfg.update({
         "data_frac": 1.0,
-        "augment_train": True,
-        "permute_repeat": 3,     # optionally >1 if you implemented sample_index correctly
+        "augment_train": False,
+        "permute_repeat": 1,     # optionally >1 if you implemented sample_index correctly
         "num_epochs": 200,
         "tolerance": 10,
         "do_infer": True,
