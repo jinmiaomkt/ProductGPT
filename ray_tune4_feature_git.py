@@ -135,8 +135,8 @@ def main():
 
     # ---- Valid (d_model, heads) combos to satisfy divisibility + head_dim>=16 ----
     valid_dm_heads = []
-    for dm in [64, 96, 128]:
-        for h in [4, 6, 8]:
+    for dm in [32, 48, 64]:
+        for h in [2, 4, 6]:
             if dm % h == 0 and (dm // h) >= 16:
                 valid_dm_heads.append((dm, h))
 
@@ -151,7 +151,7 @@ def main():
         # hyperparams
         "nb_features": tune.choice([32, 48, 64]),
         "dm_heads": tune.choice(valid_dm_heads),   # couples d_model and num_heads safely
-        "N": tune.randint(2, 8),                   # 4..8
+        "N": tune.randint(2, 6),                   # 4..8
         "dropout": tune.uniform(0.0, 0.2),
         "lr": tune.loguniform(1e-4, 1e-3),
         "weight": 1,
