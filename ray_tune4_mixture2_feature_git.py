@@ -188,7 +188,7 @@ def main():
             scheduler=asha,
         ),
         run_config=ray.air.RunConfig(
-            name="Mixture2_RayTune",
+            name="Mixture2_RayTune_small",
             storage_path=str(Path("./ray_results").resolve()),
         ),
         param_space=param_space,
