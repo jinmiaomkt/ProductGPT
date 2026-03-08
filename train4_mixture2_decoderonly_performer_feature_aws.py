@@ -955,6 +955,11 @@ def train_model(cfg: Dict[str, Any],
         },
     }
 
+    import gc
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        
     engine, optimizer, _, _ = deepspeed.initialize(model=model, model_parameters=model.parameters(), config=ds_cfg)
 
     # ---- (optional) preload ------------------------------------------
