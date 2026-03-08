@@ -117,11 +117,18 @@ def trainable_ray(config: dict):
     # You usually don't need stop_check_fn, but here’s a safe placeholder:
     def stop_check_fn() -> bool:
         return False
-    train_model(cfg, report_fn=report_fn if in_tune else None, stop_check_fn=stop_check_fn)
+    # train_model(cfg, report_fn=report_fn if in_tune else None, stop_check_fn=stop_check_fn)
 
-    # Run training; MUST call report_fn each epoch inside train_model
-    # train_model(cfg, report_fn=report_fn, stop_check_fn=stop_check_fn)
-
+    try:
+        train_model(cfg, report_fn=report_fn if in_tune else None, 
+                    stop_check_fn=stop_check_fn)
+    except torch.cuda.OutOfMemoryError:
+        torch.cuda.empty_cache()
+        print("[WARN] OOM — skipping this trial")
+        if in_tune:
+            session.report({"epoch": 0, "val_nll": float("inf"),
+                            "val_hit": 0.0, "val_f1_macro": 0.0,
+                            "val_auprc_macro": 0.0})
 
 def main():
     ray.init(ignore_reinit_error=True)
