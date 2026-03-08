@@ -14,6 +14,7 @@ from ray import tune
 from ray.air import session
 from ray.tune.search.hyperopt import HyperOptSearch
 from ray.tune.schedulers import ASHAScheduler
+from datetime import datetime
 
 # -------------------- your fold logic --------------------
 FOLD_ID  = 0
@@ -191,10 +192,15 @@ def main():
             search_alg=algo,
             scheduler=asha,
         ),
+        run_name = f"ProductGPT_RayTune_smallDM_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         run_config=ray.air.RunConfig(
-            name="ProductGPT_RayTune",
+            name=run_name,
             storage_path=str(Path("./ray_results").resolve()),
         ),
+        #run_config=ray.air.RunConfig(
+        #     name="ProductGPT_RayTune",
+        #     storage_path=str(Path("./ray_results").resolve()),
+        # ),
         param_space=param_space,
     )
 
