@@ -183,27 +183,21 @@ def main():
         mode="min",
     )
 
-    # ---- Run config ----
     tuner = tune.Tuner(
         tune.with_resources(trainable_ray, resources={"cpu": 4, "gpu": 1}),
         tune_config=tune.TuneConfig(
-            num_samples=300,     # like your JMR example
+            num_samples=300,
             max_concurrent_trials=1,
             search_alg=algo,
             scheduler=asha,
         ),
-        run_name = f"ProductGPT_RayTune_smallDM_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         run_config=ray.air.RunConfig(
-            name=run_name,
+            name="ProductGPT_RayTune",
             storage_path=str(Path("./ray_results").resolve()),
         ),
-        #run_config=ray.air.RunConfig(
-        #     name="ProductGPT_RayTune",
-        #     storage_path=str(Path("./ray_results").resolve()),
-        # ),
         param_space=param_space,
     )
-
+    
     results = tuner.fit()
 
     best = results.get_best_result(metric="val_nll", mode="min")
