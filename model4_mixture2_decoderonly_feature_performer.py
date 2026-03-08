@@ -675,7 +675,7 @@ class Transformer(nn.Module):
         feature_tensor: torch.Tensor,
         special_token_ids: torch.Tensor,
         kernel_type: str = "exp",
-        projection_mix_space: str = "prob",   # "prob" or "logit"
+        projection_mix_space: str = projection_mix_space,   # "prob" or "logit"
     ):
         super().__init__()
 

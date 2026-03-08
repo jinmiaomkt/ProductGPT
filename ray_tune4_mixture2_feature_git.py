@@ -1,4 +1,4 @@
-# ray_tune4_feature_git.py
+# ray_tune4_mixture2_feature_git.py
 from __future__ import annotations
 
 import os, json, socket
