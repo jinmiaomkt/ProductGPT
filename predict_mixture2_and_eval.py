@@ -10,7 +10,6 @@ End-to-end:
 
 Usage (example):
 
-
 Notes:
   - Requires IAM role or AWS creds for S3 upload.
   - Prints the AUC table to stdout on the AWS server.
@@ -62,7 +61,7 @@ def parse_hp_from_ckpt_name(ckpt_path: Path) -> dict:
     }
 # --- Project imports (must exist in your repo) ---
 from config4 import get_config
-from model4_decoderonly_feature_performer import build_transformer
+from model4_mixture2_decoderonly_feature_performer import build_transformer
 from train1_decision_only_performer_aws import _ensure_jsonl, JsonLineDataset, _build_tok
 from dataset4_productgpt import load_json_dataset
 
@@ -347,6 +346,8 @@ def main():
     s3_prefix   = args.s3 if args.s3.endswith("/") else (args.s3 + "/")
     pred_out    = args.pred_out
 
+    hp = parse_hp_from_ckpt_name(ckpt_path)
+
     # If fold-id provided, nest under that folder
     if args.fold_id is not None and args.fold_id >= 0:
         s3_prefix_effective = s3_join_folder(s3_prefix, f"fold{args.fold_id}")
@@ -388,9 +389,6 @@ def main():
             return "val" if u in uids_val_override else "test" if u in uids_test_override else "train"
 
         print(f"[INFO] Using EXACT UID lists: val={len(uids_val_override)}, test={len(uids_test_override)}")
-    # else:
-    #     which_split = build_splits(records, seed=args.seed)
-    #     print(f"[INFO] Using fallback 80/10/10 split with seed={args.seed}")
     else:
         # ===== EXACT Phase-B split (matches training) =====
         # fold id used by training is encoded in checkpoint name
@@ -423,22 +421,6 @@ def main():
 
     # ---------- Model ----------
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # model  = build_transformer(
-    #             vocab_size_tgt=cfg["vocab_size_tgt"],
-    #             vocab_size_src=cfg["vocab_size_src"],
-    #             d_model=128, 
-    #             n_layers=6, 
-    #             n_heads=4, 
-    #             d_ff=128, 
-    #             dropout=0.0,
-    #             nb_features=16, 
-    #             max_seq_len=15360,
-    #             kernel_type=cfg["kernel_type"],
-    #             feature_tensor=load_feature_tensor(feat_path),
-    #             special_token_ids=SPECIAL_IDS
-    #         ).to(device).eval()
-
-    hp = parse_hp_from_ckpt_name(ckpt_path)
 
     # Ensure seq_len matches training
     cfg["seq_len_ai"] = cfg["seq_len_tgt"] * cfg["ai_rate"]
@@ -518,13 +500,13 @@ def main():
                 elif V_out >= 10:
                     logits[..., 9] -= math.log(weight_class9)
 
-            probs = torch.softmax(logits, dim=-1)
+            # probs = torch.softmax(logits, dim=-1)
 
             # Extract 9-way decision probs for classes 1..9
             if V_out == 9:
-                prob_dec_9 = probs                      # already (B, Nslots, 9)
+                prob_dec_9 = logits                      # already (B, Nslots, 9)
             else:
-                prob_dec_9 = probs[..., 1:10]           # token IDs 1..9 -> 9 columns
+                prob_dec_9 = logits[..., 1:10]           # token IDs 1..9 -> 9 columns
 
             prob_dec_focus = prob_dec_9                 # (B, N, 9)
 

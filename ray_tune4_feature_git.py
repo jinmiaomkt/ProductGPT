@@ -139,18 +139,18 @@ def main():
     param_space = {
         # stage-A knobs (optional)
         "num_epochs": 120,
-        "data_frac": 0.25,          # << cheap tuning (requires build_dataloaders patch)
+        "data_frac": 0.15,          # << cheap tuning (requires build_dataloaders patch)
         "augment_train": False,     # << disable expensive permutation augmentation during tuning
         "permute_repeat": 1,
 
         # hyperparams
         "nb_features": tune.choice([32, 48, 64]),
         "dm_heads": tune.choice(valid_dm_heads),   # couples d_model and num_heads safely
-        "N": tune.randint(2, 4),                   # 4..8
+        "N": tune.randint(2, 8),                   # 4..8
         "dropout": tune.uniform(0.0, 0.2),
         "lr": tune.loguniform(1e-4, 1e-3),
-        "weight": tune.choice([1, 2, 4, 6, 8]),
-        "gamma": tune.uniform(0.8, 1.5),
+        "weight": tune.choice([1, 2, 4, 6, 8, 12, 16, 20, 24, 32]),
+        "gamma": tune.uniform(0, 0),
         "warmup_steps": tune.choice([500, 1000, 2000]),
         "label_smoothing": tune.uniform(0.0, 0.1),
         "do_infer": False,
