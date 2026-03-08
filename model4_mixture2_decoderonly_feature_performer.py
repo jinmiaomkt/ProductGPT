@@ -675,7 +675,7 @@ class Transformer(nn.Module):
         feature_tensor: torch.Tensor,
         special_token_ids: torch.Tensor,
         kernel_type: str = "exp",
-        projection_mix_space: str = projection_mix_space,   # "prob" or "logit"
+        projection_mix_space: str = "prob",   # "prob" or "logit"
     ):
         super().__init__()
 
@@ -828,7 +828,7 @@ def build_transformer(vocab_size_src: int,
         feature_tensor = feature_tensor,
         special_token_ids = special_token_ids,
         kernel_type  = kernel_type,
-        projection_mix_space = "prob"
+        projection_mix_space = projection_mix_space,
     )
 
     for p in transformer.parameters():

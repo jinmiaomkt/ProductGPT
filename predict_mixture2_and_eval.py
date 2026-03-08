@@ -29,12 +29,37 @@ import numpy as np
 import pandas as pd
 import torch
 import re
+import math
 
 from torch.utils.data import DataLoader, random_split
 from tokenizers import Tokenizer
 from sklearn.metrics import (
     roc_auc_score, accuracy_score, f1_score, average_precision_score,
 )
+
+# ══════════ VectorScaling (must match training) ══════════
+class VectorScaling(torch.nn.Module):
+    def __init__(self, n_classes=9):
+        super().__init__()
+        self.a = torch.nn.Parameter(torch.ones(n_classes))
+        self.b = torch.nn.Parameter(torch.zeros(n_classes))
+
+    def forward(self, logits_dec):
+        return F.softmax(self.a * logits_dec + self.b, dim=-1)
+
+
+def load_calibrator(ckpt_path, device):
+    uid_part = ckpt_path.stem.replace("FullProductGPT_", "")
+    cal_path = ckpt_path.parent / f"calibrator_{uid_part}.pt"
+    if not cal_path.exists():
+        print(f"[INFO] No calibrator at {cal_path}")
+        return None
+    cal = VectorScaling(9).to(device)
+    state = torch.load(cal_path, map_location=device)
+    cal.a.data = state["a"].to(device)
+    cal.b.data = state["b"].to(device)
+    print(f"[INFO] Loaded calibrator: a={cal.a.data.cpu().numpy().round(4)}, b={cal.b.data.cpu().numpy().round(4)}")
+    return cal
 
 def parse_hp_from_ckpt_name(ckpt_path: Path) -> dict:
     """
@@ -285,39 +310,73 @@ def load_feature_tensor(xls_path: Path) -> torch.Tensor:
     return torch.from_numpy(arr)
 
 # ================= Dataset & Collate =============
-class PredictDataset(JsonLineDataset):
-    def __init__(self, path, pad_id: int):
+class PredictDatasetWithUserID(JsonLineDataset):
+    """Extends PredictDataset to also return user_id integer."""
+    def __init__(self, path, pad_id, uid_to_index):
         super().__init__(path)
         self.pad_id = pad_id
-    def to_int_or_pad(self, tok: str) -> int:
-        try:
-            return int(tok)
-        except ValueError:
-            return self.pad_id
+        self.uid_to_index = uid_to_index
+
     def __getitem__(self, idx):
-        row     = super().__getitem__(idx)
+        row = super().__getitem__(idx)
         seq_raw = row["AggregateInput"]
         if isinstance(seq_raw, list):
-            if len(seq_raw) == 1 and isinstance(seq_raw[0], str):
-                seq_str = seq_raw[0]
-            else:
-                seq_str = " ".join(map(str, seq_raw))
+            seq_str = seq_raw[0] if len(seq_raw) == 1 and isinstance(seq_raw[0], str) else " ".join(map(str, seq_raw))
         else:
             seq_str = str(seq_raw)
-        toks  = [self.to_int_or_pad(t) for t in seq_str.strip().split()]
-        uid   = row["uid"][0] if isinstance(row["uid"], list) else row["uid"]
-        return {"uid": flat_uid(uid), "x": torch.tensor(toks, dtype=torch.long)}
 
-def collate_fn(pad_id: int):
+        toks = []
+        for t in seq_str.strip().split():
+            try:
+                toks.append(int(t))
+            except ValueError:
+                toks.append(self.pad_id)
+
+        uid_raw = row["uid"][0] if isinstance(row["uid"], list) else row["uid"]
+        uid = flat_uid(uid_raw)
+
+        # Normalize uid for lookup (same as MixtureTransformerDataset._normalize_uid)
+        user_id = self.uid_to_index.get(uid, 0)  # 0 = UNK
+
+        return {"uid": uid, "x": torch.tensor(toks, dtype=torch.long),
+                "user_id": torch.tensor(user_id, dtype=torch.long)}
+
+def collate_fn_with_uid(pad_id):
     def _inner(batch):
         uids = [b["uid"] for b in batch]
+        user_ids = torch.stack([b["user_id"] for b in batch])
         lens = [len(b["x"]) for b in batch]
         Lmax = max(lens)
-        X    = torch.full((len(batch), Lmax), pad_id, dtype=torch.long)
-        for i,(item,L) in enumerate(zip(batch,lens)):
-            X[i,:L] = item["x"]
-        return {"uid": uids, "x": X}
+        X = torch.full((len(batch), Lmax), pad_id, dtype=torch.long)
+        for i, (item, L) in enumerate(zip(batch, lens)):
+            X[i, :L] = item["x"]
+        return {"uid": uids, "x": X, "user_id": user_ids}
     return _inner
+
+def build_uid_to_index(cfg, fold_spec_uri, fold_id):
+    """
+    Build the same uid_to_index mapping that training used.
+    This ensures user_id integers match the trained embeddings.
+    """
+    spec = load_json_from_local_or_s3(fold_spec_uri)
+    uids_test_fold = [u for u, f in spec["assignment"].items() if f == fold_id]
+    uids_trainval = [u for u in spec["assignment"] if u not in set(uids_test_fold)]
+
+    raw = load_json_dataset(cfg["filepath"], keep_uids=set(uids_trainval))
+
+    def normalize_uid(uid):
+        if uid is None: return ""
+        if isinstance(uid, (list, tuple, set)):
+            vals = [str(x) for x in uid if x is not None]
+            return "|".join(sorted(vals)) if vals else ""
+        return str(uid)
+
+    unique_uids = sorted({normalize_uid(rec.get("uid", "")) for rec in raw})
+    uid_to_index = {u: i + 1 for i, u in enumerate(unique_uids)}
+    num_users = len(uid_to_index) + 1
+
+    print(f"[INFO] Built uid_to_index: {num_users} users (including UNK=0)")
+    return uid_to_index, num_users
 
 # =================== Metrics Setup ===============
 BIN_TASKS = {
@@ -411,13 +470,18 @@ def main():
 
         print(f"[INFO] Using Phase-B EXACT split: fold={fold_for_split}, "
             f"val={len(uids_val)}, test={len(uids_test)} (seed=33)")
-        
-    # ---------- DataLoader ----------
-    ds = PredictDataset(data_path, pad_id=pad_id)
-    loader = DataLoader(
-        ds, batch_size=cfg["batch_size"], shuffle=False,
-        collate_fn=collate_fn(pad_id)
-    )
+    
+    # ──────────────────────────────────────────────────────
+    # FIX: Build user-id mapping (same as training used)
+    # ──────────────────────────────────────────────────────
+    uid_to_index, num_users = build_uid_to_index(cfg, args.fold_spec, hp["fold_id"])
+
+    # ──────────────────────────────────────────────────────
+    # FIX: Dataset now returns user_id
+    # ──────────────────────────────────────────────────────
+    ds = PredictDatasetWithUserID(data_path, pad_id=pad_id, uid_to_index=uid_to_index)
+    loader = DataLoader(ds, batch_size=cfg["batch_size"], shuffle=False,
+                        collate_fn=collate_fn_with_uid(pad_id))
 
     # ---------- Model ----------
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -425,19 +489,16 @@ def main():
     # Ensure seq_len matches training
     cfg["seq_len_ai"] = cfg["seq_len_tgt"] * cfg["ai_rate"]
 
+    # ──────────────────────────────────────────────────────
+    # FIX: pass num_users to build_transformer (was missing)
+    # ──────────────────────────────────────────────────────
     model = build_transformer(
-        vocab_size_tgt=cfg["vocab_size_tgt"],
-        vocab_size_src=cfg["vocab_size_src"],
-        max_seq_len=cfg["seq_len_ai"],
-        d_model=hp["d_model"],
-        n_layers=hp["N"],
-        n_heads=hp["num_heads"],
-        d_ff=hp["d_ff"],
-        dropout=0.0,                      # inference dropout off
-        nb_features=hp["nb_features"],
-        kernel_type=cfg["kernel_type"],
-        feature_tensor=load_feature_tensor(feat_path),
-        special_token_ids=SPECIAL_IDS,
+        vocab_size_tgt=cfg["vocab_size_tgt"], vocab_size_src=cfg["vocab_size_src"],
+        max_seq_len=cfg["seq_len_ai"], d_model=hp["d_model"], n_layers=hp["N"],
+        n_heads=hp["num_heads"], d_ff=hp["d_ff"], dropout=0.0,
+        nb_features=hp["nb_features"], kernel_type=cfg["kernel_type"],
+        feature_tensor=load_feature_tensor(feat_path), special_token_ids=SPECIAL_IDS,
+        num_users=num_users,            # FIX: was missing entirely
     ).to(device).eval()
 
     weight_class9 = hp["weight"]
@@ -454,67 +515,94 @@ def main():
              state["module"]           if "module" in state           else state
     model.load_state_dict(clean_state_dict(raw_sd), strict=True)
 
+    # # Optional predictions writer
+    # pred_writer = None
+    # if pred_out:
+    #     pred_writer = smart_open_w(pred_out)
+
+    # Set mean projection gate from training users
+    train_user_ids = sorted(uid_to_index.values())
+    model.set_projection_mean_gate_from_train_users(train_user_ids)
+    if hasattr(model.gate, "update_mean_gate"):
+        model.gate.update_mean_gate()
+        model.gate.use_mean_gate = True
+
+    # Load calibration
+    calibrator = None
+    logit_bias_9 = None
+
+    if args.calibration == "calibrator":
+        calibrator = load_calibrator(ckpt_path, device)
+        if calibrator is None:
+            print("[WARN] No calibrator found, falling back to analytic")
+            args.calibration = "analytic"
+
+    if args.calibration == "analytic":
+        if "logit_bias_9" in state:
+            logit_bias_9 = torch.tensor(state["logit_bias_9"], device=device, dtype=torch.float32)
+        else:
+            logit_bias_9 = torch.zeros(9, device=device, dtype=torch.float32)
+            w = hp["weight"]
+            if w != 1:
+                logit_bias_9[8] = math.log(w)
+        print(f"[INFO] logit_bias_9 = {logit_bias_9.cpu().numpy().round(4)}")
+
+    print(f"[INFO] Calibration: {args.calibration}")    
+
+    # ---------- Inference + streaming eval ----------
+
     # ---------- Metric accumulators ----------
     scores       = defaultdict(lambda: {"y": [], "p": []})
     length_note  = Counter()
     accept = reject = 0
     accept_users = {"val": set(), "test": set(), "train": set()}
-
-    # Optional predictions writer
-    pred_writer = None
-    if pred_out:
-        pred_writer = smart_open_w(pred_out)
-
-    # ---------- Inference + streaming eval ----------
-    focus_ids = torch.arange(1, 10, device=device)  # decision classes 1..9
+    pred_writer = smart_open_w(args.pred_out) if args.pred_out else None
+    
     with torch.no_grad():
         for batch in loader:
-            x    = batch["x"].to(device)
+            x = batch["x"].to(device)
+            user_ids = batch["user_id"].to(device)
             uids = batch["uid"]
-            # logits -> probs
-            # probs_all = torch.softmax(model(x), dim=-1)         # (B, L, V)
-            # pos       = torch.arange(cfg["ai_rate"]-1, x.size(1), cfg["ai_rate"], device=device)
-            # # pull decision probs at decision positions
-            # prob_dec_focus = probs_all[:, pos, :][..., focus_ids]  # (B, N, 9)
-
-            logits_full = model(x)  # (B, T, V) or (B, Nslots, V)
-
             pos = torch.arange(cfg["ai_rate"] - 1, x.size(1), cfg["ai_rate"], device=device)
+            if pos.numel() == 0:
+                continue
 
-            # Align to decision-slot axis
-            if logits_full.size(1) == x.size(1):
-                logits = logits_full[:, pos, :]     # (B, Nslots, V)
+            # ──────────────────────────────────────────────────
+            # FIX: Get hidden states + per-head logits + alpha
+            # ──────────────────────────────────────────────────
+            _, hidden = model(x, user_ids, projection_gate_mode="mean", return_hidden=True)
+
+            proj_result = model.projection(
+                hidden, user_idx=user_ids, gate_mode="mean",
+                return_alpha=True, return_head_logits=True,
+            )
+            _, alpha, head_logits = proj_result  # alpha:(B,H), head_logits:(B,T,H,V)
+
+            if head_logits.size(1) == x.size(1):
+                head_logits = head_logits[:, pos, :, :]
+
+            # ──────────────────────────────────────────────────
+            # FIX: Per-head correction in 9-class subspace
+            # ──────────────────────────────────────────────────
+            head_logits_dec = head_logits[..., 1:10]  # (B, Nslots, H, 9)
+            alpha_bt = alpha[:, None, :, None]         # (B, 1, H, 1)
+
+            if calibrator is not None:
+                mixed = (alpha_bt * head_logits_dec).sum(dim=2)
+                prob_dec_9 = calibrator(mixed)
+            elif logit_bias_9 is not None:
+                bias = logit_bias_9.to(device=device, dtype=head_logits_dec.dtype)
+                corrected = F.softmax(head_logits_dec - bias, dim=-1)
+                prob_dec_9 = (alpha_bt * corrected).sum(dim=2)
             else:
-                logits = logits_full                # (B, Nslots, V)
+                hp_probs = F.softmax(head_logits_dec, dim=-1)
+                prob_dec_9 = (alpha_bt * hp_probs).sum(dim=2)
 
-            V_out = logits.size(-1)
-
-            # Analytic correction for class-9 upweighting (same idea as train_model)
-            # - If full vocab: class 9 is token id 9
-            # - If decision-only: class 9 is index 8 (0-based)
-            logits = logits.clone()
-            if weight_class9 is not None and weight_class9 != 1:
-                import math
-                if V_out == 9:
-                    logits[..., 8] -= math.log(weight_class9)
-                elif V_out >= 10:
-                    logits[..., 9] -= math.log(weight_class9)
-
-            # probs = torch.softmax(logits, dim=-1)
-
-            # Extract 9-way decision probs for classes 1..9
-            if V_out == 9:
-                prob_dec_9 = logits                      # already (B, Nslots, 9)
-            else:
-                prob_dec_9 = logits[..., 1:10]           # token IDs 1..9 -> 9 columns
-
-            prob_dec_focus = prob_dec_9                 # (B, N, 9)
-
+            # prob_dec_9: (B, Nslots, 9), sums to 1
 
             for i, uid in enumerate(uids):
-                probs_seq = prob_dec_focus[i].detach().cpu().numpy()  # (N, 9)
-                probs_seq = np.round(probs_seq, 6).tolist()           # list[list[float]]
-                # write predictions line if requested
+                probs_seq = prob_dec_9[i].cpu().numpy()
+                probs_seq = np.round(probs_seq, 6).tolist()
                 if pred_writer:
                     pred_writer.write(json.dumps({"uid": uid, "probs": probs_seq}) + "\n")
 
@@ -523,34 +611,24 @@ def main():
                     reject += 1
                     continue
 
-                L_pred, L_lbl = len(probs_seq), len(lbl_info["label"])
-                if L_pred != L_lbl:
-                    length_note["pred>lbl" if L_pred > L_lbl else "pred<label"] += 1
-                L = min(L_pred, L_lbl)
-
+                L = min(len(probs_seq), len(lbl_info["label"]))
                 split_tag = which_split(uid)
-                accept_users.setdefault(split_tag, set()).add(uid)
                 for t in range(L):
-                    y      = lbl_info["label"][t]
-                    idx_h  = lbl_info["idx_h"][t]
-                    feat_h = lbl_info["feat_h"][t]
-                    probs  = probs_seq[t]  # length 9, corresponds to classes 1..9
-
-                    group = period_group(idx_h, feat_h)
+                    y = lbl_info["label"][t]
+                    group = period_group(lbl_info["idx_h"][t], lbl_info["feat_h"][t])
+                    probs = probs_seq[t]
                     for task, pos_classes in BIN_TASKS.items():
                         y_bin = int(y in TASK_POSSETS[task])
-                        # decisions are 1-indexed → probs[j-1]
                         p_bin = sum(probs[j-1] for j in pos_classes)
-                        key   = (task, group, split_tag)
-                        scores[key]["y"].append(y_bin)
-                        scores[key]["p"].append(p_bin)
-
+                        scores[(task, group, split_tag)]["y"].append(y_bin)
+                        scores[(task, group, split_tag)]["p"].append(p_bin)
                 accept += 1
 
     if pred_writer:
         pred_writer.__exit__(None, None, None)  # close the context
 
     print(f"[INFO] parsed: {accept} users accepted, {reject} users missing labels.")
+
     if length_note:
         print("[INFO] length mismatches:", dict(length_note))
     # Report exact-match coverage if overrides were provided
@@ -574,8 +652,11 @@ def main():
                 prev = pos / n if n else float('nan')
                 bucket_stats.append({
                     "Task": task, "Group": grp, "Split": spl,
-                    "N": n, "Pos": pos, "Neg": neg, "Prev": round(prev, 4)
-                })
+                    # "AUC": roc_auc_score(y, p),
+                    # "Hit": accuracy_score(y, [int(v >= args.thresh) for v in p]),
+                    # "F1": f1_score(y, [int(v >= args.thresh) for v in p]),
+                    # "AUPRC": average_precision_score(y, p),
+                    "N": n, "Pos": pos, "Neg": neg, "Prev": round(prev, 4)})
 
     stats_df = pd.DataFrame(bucket_stats).sort_values(["Split","Group","Task"])
     print("\n=============  BUCKET SIZES & PREVALENCE  =======================")
@@ -602,6 +683,11 @@ def main():
                 rows.append({"Task": task, "Group": grp, "Split": spl,
                              "AUC": auc, "Hit": acc, "F1": f1, "AUPRC": auprc})
     metrics = pd.DataFrame(rows)
+    for metric in ["AUC", "Hit", "F1", "AUPRC"]:
+        tbl = (metrics.pivot(index=["Task","Group"], columns="Split", values=metric)
+               .reindex(columns=["val","test"]).round(4).sort_index())
+        print(f"\n=============  {metric}  =======================")
+        print(tbl.fillna(" NA"))
 
     def pivot(metric: str) -> pd.DataFrame:
         return (metrics

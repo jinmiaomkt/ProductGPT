@@ -89,7 +89,7 @@ def trainable_ray(config: dict):
         "N": config["N"],
         "dropout": config["dropout"],
         "lr": config["lr"],
-        "weight": config["weight"],
+        "weight": 1,
         # "gamma": config["gamma"],
         "gamma": config.get("gamma", 0.0),
         "warmup_steps": config["warmup_steps"],
@@ -142,11 +142,15 @@ def main():
         # hyperparams
         "nb_features": tune.choice([32, 48, 64]),
         "dm_heads": tune.choice(valid_dm_heads),   # couples d_model and num_heads safely
-        "N": tune.randint(2, 4),                   # 4..8
+        "N": tune.randint(3, 6),                   # 4..8
         "dropout": tune.uniform(0.0, 0.2),
         "lr": tune.loguniform(1e-4, 1e-3),
-        "weight": tune.choice([1, 4, 8, 12, 16]),
+        # "weight": tune.choice([1, 4, 8, 12, 16]),
         # "gamma": tune.uniform(0.8, 1.5),
+        
+        "tau": tune.uniform(0.3, 0.7),
+        "gamma": 0.0,                                # CHANGED: fixed at 0 (no focal)
+
         "warmup_steps": tune.choice([500, 1000, 2000]),
         "label_smoothing": tune.uniform(0.0, 0.1),
         "do_infer": False,
@@ -182,7 +186,7 @@ def main():
             scheduler=asha,
         ),
         run_config=ray.air.RunConfig(
-            name="ProductGPT_RayTune",
+            name="Mixture2_RayTune",
             storage_path=str(Path("./ray_results").resolve()),
         ),
         param_space=param_space,
@@ -203,8 +207,8 @@ def main():
     final_cfg = best_cfg.copy()
     final_cfg.update({
         "data_frac": 1.0,
-        "augment_train": True,
-        "permute_repeat": 3,     # optionally >1 if you implemented sample_index correctly
+        "augment_train": False,
+        "permute_repeat": 1,     # optionally >1 if you implemented sample_index correctly
         "num_epochs": 200,
         "tolerance": 10,       # optional”
         "do_infer": True,

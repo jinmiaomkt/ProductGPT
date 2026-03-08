@@ -139,6 +139,52 @@ def build_tokenizer_src() -> Tokenizer:  # with product IDs
 def build_tokenizer_tgt() -> Tokenizer:  # decisions only
     return _base_tokeniser()
 
+# ══════════════════════════ NEW: Class weight computation ═════════════
+def compute_class_weights(train_loader, num_classes=9, tau=0.5, pad_id=0):
+    """Inverse-frequency weights with temperature tau. Returns (9,) tensor."""
+    counts = torch.zeros(num_classes, dtype=torch.float64)
+    for batch in train_loader:
+        labels = batch["label"].view(-1)
+        for c in range(1, 10):
+            counts[c - 1] += (labels == c).sum().item()
+    counts = counts.clamp(min=1.0)
+    N = counts.sum()
+    freq = counts / N
+    raw_weight = 1.0 / (float(num_classes) * freq)
+    tempered = raw_weight.pow(tau)
+    tempered = tempered / tempered.mean()
+    print(f"[INFO] Class frequencies:  {(freq * 100).numpy().round(2)}%")
+    print(f"[INFO] Class weights (tau={tau}): {tempered.float().numpy().round(4)}")
+    return tempered.float()
+
+# ══════════════════════════ NEW: Vector Scaling Calibrator ════════════
+class VectorScaling(nn.Module):
+    def __init__(self, n_classes=9):
+        super().__init__()
+        self.a = nn.Parameter(torch.ones(n_classes))
+        self.b = nn.Parameter(torch.zeros(n_classes))
+
+    def forward(self, logits_dec):
+        return F.softmax(self.a * logits_dec + self.b, dim=-1)
+
+
+def fit_vector_scaling(logits_val, labels_val, n_classes=9, max_iter=200):
+    cal = VectorScaling(n_classes).to(logits_val.device)
+    labels_0based = (labels_val - 1).clamp(0, n_classes - 1).long()
+    optimizer = torch.optim.LBFGS(cal.parameters(), lr=0.5, max_iter=max_iter)
+
+    def closure():
+        optimizer.zero_grad()
+        p = cal(logits_val)
+        loss = F.nll_loss(torch.log(p + 1e-12), labels_0based)
+        loss.backward()
+        return loss
+
+    optimizer.step(closure)
+    print(f"[CALIBRATOR] a = {cal.a.data.cpu().numpy().round(4)}")
+    print(f"[CALIBRATOR] b = {cal.b.data.cpu().numpy().round(4)}")
+    return cal
+
 # ══════════════════════════════ 4. Losses ═════════════════════════════
 class FocalLoss(nn.Module):
     """Multi‑class focal loss with optional class weights."""
@@ -572,7 +618,9 @@ def evaluate(
     dev: torch.device,
     *,
     ai_rate: int,
-    logit_bias: torch.Tensor | None = None,
+    # logit_bias: torch.Tensor | None = None,
+    logit_bias_9: torch.Tensor | None = None,
+    calibrator: VectorScaling | None = None,
     compute_nll: bool = True,
     compute_rev_mae: bool = True,
     projection_gate_mode: str = "mean",   # NEW
@@ -621,34 +669,84 @@ def evaluate(
 
         pos = torch.arange(ai_rate - 1, x.size(1), ai_rate, device=dev)
 
-        # Model output may be logits or probs; convert to logits-like
-        raw_full = _forward_model_for_eval(
-            model=model,
-            x=x,
-            user_ids=user_ids,
-            projection_gate_mode=projection_gate_mode,
-        )  # (B,Tsrc,V) or (B,n_slots,V)
+        # ──────────────────────────────────────────────────────
+        # FIX: Get per-head logits for exact correction
+        # ──────────────────────────────────────────────────────
+        if user_ids is not None:
+            out_tuple = model(
+                x, user_ids,
+                projection_gate_mode=projection_gate_mode,
+                return_proj_alpha=True,
+            )
+        else:
+            out_tuple = model(
+                x,
+                projection_gate_mode=projection_gate_mode,
+                return_proj_alpha=True,
+            )
 
-        logits_like_full = _to_logits_like(raw_full, mix_space=mix_space)
+        # out_tuple = (mixed_output, alpha)
+        # We need head_logits too — call projection directly
+        mm = _unwrap_model(model)
+
+        # Re-forward through decoder to get hidden states
+        # (model already computed this, but we need the intermediate)
+        # Actually, let's use a cleaner approach: call with return_hidden
+        if user_ids is not None:
+            raw_out, hidden = model(
+                x, user_ids,
+                projection_gate_mode=projection_gate_mode,
+                return_hidden=True,
+            )
+        else:
+            raw_out, hidden = model(
+                x,
+                projection_gate_mode=projection_gate_mode,
+                return_hidden=True,
+            )
+
+        # Now get per-head logits from the projection layer
+        proj_result = mm.projection(
+            hidden,
+            user_idx=user_ids,
+            gate_mode=projection_gate_mode,
+            return_alpha=True,
+            return_head_logits=True,
+        )
+        # proj_result = (mixed_out, alpha, head_logits)
+        _, alpha, head_logits = proj_result  # alpha: (B,H), head_logits: (B,T,H,V)
 
         # Align to decision slots
-        if logits_like_full.size(1) == x.size(1):
-            logits = logits_like_full[:, pos, :]  # (B, n_slots, V)
+        if head_logits.size(1) == x.size(1):
+            head_logits = head_logits[:, pos, :, :]   # (B, n_slots, H, V)
+
+        # ──────────────────────────────────────────────────────
+        # FIX: Per-head correction in 9-class subspace
+        # ──────────────────────────────────────────────────────
+        head_logits_dec = head_logits[..., 1:10]      # (B, n_slots, H, 9)
+
+        if calibrator is not None:
+            # Calibrator operates on mixed logits (simpler path)
+            # First mix the head logits, then calibrate
+            alpha_bt = alpha[:, None, :, None]        # (B, 1, H, 1)
+            mixed_logits_dec = (alpha_bt * head_logits_dec).sum(dim=2)  # (B, n_slots, 9)
+            prob_dec = calibrator(mixed_logits_dec)    # (B, n_slots, 9)
+        elif logit_bias_9 is not None:
+            # EXACT per-head correction for mixture model:
+            # 1. Correct each head's logits in 9-class space
+            # 2. Softmax each head separately
+            # 3. Mix the corrected probabilities
+            bias = logit_bias_9.to(device=dev, dtype=head_logits_dec.dtype)
+            corrected_head_logits = head_logits_dec - bias  # broadcast (B,n_slots,H,9) - (9,)
+            corrected_head_probs = F.softmax(corrected_head_logits, dim=-1)  # (B,n_slots,H,9)
+            alpha_bt = alpha[:, None, :, None]        # (B, 1, H, 1)
+            prob_dec = (alpha_bt * corrected_head_probs).sum(dim=2)  # (B, n_slots, 9)
         else:
-            logits = logits_like_full             # already (B, n_slots, V)
+            # No correction: just softmax each head in 9-class space, then mix
+            head_probs = F.softmax(head_logits_dec, dim=-1)  # (B, n_slots, H, 9)
+            alpha_bt = alpha[:, None, :, None]
+            prob_dec = (alpha_bt * head_probs).sum(dim=2)    # (B, n_slots, 9)
 
-        if logit_bias is not None:
-            logits = logits - logit_bias.to(device=logits.device, dtype=logits.dtype)
-
-        # Evaluate only decision classes 1..9
-        logits_dec = logits[:, :, 1:10]  # (B, n_slots, 9)
-
-        # Build a 10-class aligned tensor so labels 1..9 can be gathered directly
-        neg_col = torch.full_like(logits_dec[..., :1], torch.finfo(logits_dec.dtype).min)
-        logits_aligned = torch.cat([neg_col, logits_dec], dim=-1)   # (B, n_slots, 10)
-
-        prob_aligned = F.softmax(logits_aligned, dim=-1)             # (B, n_slots, 10)
-        prob_dec = prob_aligned[:, :, 1:10]                          # (B, n_slots, 9)
         pred_dec = prob_dec.argmax(dim=-1) + 1                       # labels in 1..9
 
         tgt_dec = _align_labels_to_slots(
@@ -689,14 +787,14 @@ def evaluate(
 
         # --- NLL ---
         if compute_nll:
-            logp_flat = F.log_softmax(logits_aligned, dim=-1)[mask]   # (N,10)
-            lp_true = logp_flat.gather(1, y_true.unsqueeze(1)).squeeze(1)
-            nll_sum += (-lp_true).sum().item()
-            nll_cnt += lp_true.numel()
+            logp = torch.log(prob_dec + 1e-12)[mask]
+            y0 = (y_true - 1).clamp(0, 8)
+            lp = logp.gather(1, y0.unsqueeze(1)).squeeze(1)
+            nll_sum += (-lp).sum().item()
+            nll_cnt += lp.numel()
 
-        # --- revenue MAE ---
         if compute_rev_mae:
-            exp_rev = (scores_9 * rev_vec.to(dtype=scores_9.dtype)).sum(dim=-1)
+            exp_rev = (scores_9 * rev_vec.to(dtype=scores_9.dtype)).sum(-1)
             true_rev = rev_vec[(y_true - 1).clamp(0, 8)].to(dtype=exp_rev.dtype)
             rev_sum += torch.abs(exp_rev - true_rev).sum().item()
             rev_cnt += exp_rev.numel()
@@ -711,16 +809,64 @@ def evaluate(
     y_true_all = np.concatenate(y_true_chunks, axis=0)
     y_score_all = np.concatenate(y_score_chunks, axis=0)  # (N,9)
     y_bin = label_binarize(y_true_all, classes=DECISION_CLASSES)
-    auprc_macro = float(average_precision_score(y_bin, y_score_all, average="macro"))
+    # auprc_macro = float(average_precision_score(y_bin, y_score_all, average="macro"))
+    try:
+        auprc = float(average_precision_score(y_bin, y_score_all, average="macro"))
+    except Exception:
+        auprc = float("nan")
 
     out = {
         "hit": float(hit),
         "f1_macro": float(f1_macro),
-        "auprc_macro": float(auprc_macro),
+        "auprc_macro": float(auprc),
         "nll": float(nll_sum / max(1, nll_cnt)) if compute_nll else float("nan"),
         "rev_mae": float(rev_sum / max(1, rev_cnt)) if compute_rev_mae else float("nan"),
     }
     return out
+
+
+def collect_val_logits(val_loader, model, device, ai_rate, projection_gate_mode="mean"):
+    """Collect mixed 9-class decision logits from val set for calibrator fitting."""
+    model.eval()
+    mm = _unwrap_model(model)
+    logits_chunks, label_chunks = [], []
+
+    with torch.no_grad():
+        for batch in val_loader:
+            x = batch["aggregate_input"].to(device)
+            tgt_full = batch["label"].to(device)
+            user_ids = batch["user_id"].to(device) if "user_id" in batch else None
+            pos = torch.arange(ai_rate - 1, x.size(1), ai_rate, device=device)
+
+            # Get hidden states
+            if user_ids is not None:
+                _, hidden = model(x, user_ids, projection_gate_mode=projection_gate_mode, return_hidden=True)
+            else:
+                _, hidden = model(x, projection_gate_mode=projection_gate_mode, return_hidden=True)
+
+            # Get per-head logits
+            proj_result = mm.projection(hidden, user_idx=user_ids, gate_mode=projection_gate_mode,
+                                        return_alpha=True, return_head_logits=True)
+            _, alpha, head_logits = proj_result
+
+            if head_logits.size(1) == x.size(1):
+                head_logits = head_logits[:, pos, :, :]
+
+            # Mix head logits in 9-class space (for calibrator input)
+            head_logits_dec = head_logits[..., 1:10]
+            alpha_bt = alpha[:, None, :, None]
+            mixed_logits_dec = (alpha_bt * head_logits_dec).sum(dim=2)  # (B, n_slots, 9)
+
+            n_slots = mixed_logits_dec.size(1)
+            tgt_dec = _align_labels_to_slots(tgt_full, x, n_slots, pos, PAD_ID)
+            mask = (tgt_dec >= 1) & (tgt_dec <= 9)
+            if mask.sum() == 0:
+                continue
+
+            logits_chunks.append(mixed_logits_dec[mask])
+            label_chunks.append(tgt_dec[mask].long())
+
+    return torch.cat(logits_chunks), torch.cat(label_chunks)
 
 # ══════════════════════════════ 10. Training loop ════════════════════
 def train_model(cfg: Dict[str, Any],
@@ -765,25 +911,20 @@ def train_model(cfg: Dict[str, Any],
     feat_tensor = load_feature_tensor(FEAT_FILE)
     model = build_model(cfg, feat_tensor).to(device)
 
-    # ---- QAT stub (optional) -----------------------------------------
-    # model.qconfig = torch.quantization.get_default_qat_qconfig("fbgemm")
-    # torch.quantization.prepare_qat(model, inplace=True)
+    tau = float(cfg.get("tau", 0.5))
+    dec_weights_9 = compute_class_weights(train_dl, num_classes=9, tau=tau, pad_id=pad_id)
 
-    # ---- criterion ----------------------------------------------------
-    # weights = torch.ones(cfg["vocab_size_tgt"], device=device)
-    # weights[9] = cfg["weight"]
-    # loss_fn = FocalLoss(cfg["gamma"], pad_id, weights)
+    # Map into full vocab for loss function
+    full_weights = torch.ones(cfg["vocab_size_tgt"], device=device)
+    for c in range(9):
+        full_weights[c + 1] = dec_weights_9[c]
 
-    # # Analytic correction at eval/infer time:
-    # # If training used class weight w_c in weighted CE, then p_train(y|x) ∝ w_y * p_true(y|x).
-    # # So to recover p_true, subtract log(w_c) from logits before softmax.
-    # logit_bias = torch.zeros(cfg["vocab_size_tgt"], device=device, dtype=torch.float32)
-    # logit_bias[9] = math.log(cfg["weight"])   # only class 9 was upweighted
+    loss_fn = FocalLoss(cfg.get("gamma", 0.0), pad_id, full_weights)
 
-    loss_fn, logit_bias, class_weight = make_loss_and_bias(cfg, pad_id, device)
-
-    print(f"[INFO] loss= {'weighted-CE' if logit_bias is not None else 'focal'} "
-        f"(gamma={cfg.get('gamma', 0)}) | analytic_correction={'ON' if logit_bias is not None else 'OFF'}")
+    # Per-class logit bias for analytic correction (9-dim)
+    logit_bias_9 = torch.log(dec_weights_9).to(device=device, dtype=torch.float32)
+    print(f"[INFO] loss=FocalLoss(gamma={cfg.get('gamma', 0)}) with per-class weights (tau={tau})")
+    print(f"[INFO] logit_bias_9 = {logit_bias_9.cpu().numpy().round(4)}")
 
     # ---- DeepSpeed ----------------------------------------------------
     ds_cfg = {
@@ -830,16 +971,7 @@ def train_model(cfg: Dict[str, Any],
     best_val_loss, patience = None, 0
 
     # ---- training -----------------------------------------------------
-    best_val_metrics = {
-        "val_nll": float("nan"),
-        "val_epoch": -1,
-        "val_hit": float("nan"),
-        "val_f1_macro": float("nan"),
-        "val_auprc_macro": float("nan"),
-        "weight_class9": float(cfg["weight"]),
-        "logit_bias_class9": float(logit_bias[9].item()) if logit_bias is not None else float("nan"),
-    }
-
+    best_val_metrics = {}
     best_val_nll = None
     best_val_epoch = -1
     patience = 0
@@ -922,17 +1054,14 @@ def train_model(cfg: Dict[str, Any],
         if cfg.get("gamma", 0.0) != 0.0 and logit_bias is not None:
             raise RuntimeError("Analytic correction must be OFF when gamma>0 (focal).")
 
-        v = evaluate(
-            val_dl,
-            engine.module,
-            device,
-            ai_rate=cfg["ai_rate"],
-            logit_bias=logit_bias,
-            compute_nll=True,
-            compute_rev_mae=False,
-            projection_gate_mode=eval_proj_gate_mode,  # NEW
-        )
-
+        # ──────────────────────────────────────────────────────
+        # CHANGED: pass logit_bias_9 for per-head correction
+        # ──────────────────────────────────────────────────────
+        v = evaluate(val_dl, engine.module, device, ai_rate=cfg["ai_rate"],
+                     logit_bias_9=logit_bias_9, calibrator=None,
+                     compute_nll=True, compute_rev_mae=False,
+                     projection_gate_mode=eval_proj_gate_mode)
+        
         print(
             f"Epoch {ep:02d}  TrainLoss={running / max(1, len(train_dl)):.4f}  "
             f"ValNLL={v['nll']:.4f}  Hit={v['hit']:.4f}  "
@@ -957,42 +1086,26 @@ def train_model(cfg: Dict[str, Any],
         val_nll = v["nll"]
         if best_val_nll is None or val_nll < best_val_nll:
             best_val_nll, patience, best_val_epoch = val_nll, 0, ep
-
             best_val_metrics = {
-                "val_nll": best_val_nll,
-                "val_epoch": best_val_epoch,
-                "val_hit": v["hit"],
-                "val_f1_macro": v["f1_macro"],
-                "val_auprc_macro": v["auprc_macro"],
-                "weight_class9": float(cfg["weight"]),
-                "logit_bias_class9": float(logit_bias[9].item()) if logit_bias is not None else float("nan"),
-                "projection_mix_space": mix_space,
-                "eval_projection_gate_mode": eval_proj_gate_mode,
+                "val_nll": best_val_nll, "val_epoch": ep,
+                "val_hit": v["hit"], "val_f1_macro": v["f1_macro"], "val_auprc_macro": v["auprc_macro"],
+                "class_weights_9": dec_weights_9.cpu().tolist(),
+                "logit_bias_9": logit_bias_9.cpu().tolist(),
+                "tau": tau, "projection_mix_space": mix_space,
             }
-
-            ckpt = {
-                "epoch": ep,
-                "best_val_nll": best_val_nll,
-                "best_val_epoch": best_val_epoch,
-                "model_state_dict": engine.module.state_dict(),
-                "weight_class9": float(cfg["weight"]),
-                "logit_bias_class9": float(logit_bias[9].item()) if logit_bias is not None else float("nan"),
-                "projection_mix_space": mix_space,
-            }
-
+            ckpt = {"epoch": ep, "best_val_nll": best_val_nll, "model_state_dict": engine.module.state_dict(),
+                    "class_weights_9": dec_weights_9.cpu().tolist(),
+                    "logit_bias_9": logit_bias_9.cpu().tolist(), "tau": tau,
+                    "projection_mix_space": mix_space}
             torch.save(ckpt, ckpt_path)
             json_path.write_text(json.dumps(_json_safe(best_val_metrics), indent=2))
-
             if s3:
-                s3.upload_file(
-                    str(json_path), bucket, js_key,
-                    ExtraArgs={"ContentType": "application/json"},
-                )
+                s3.upload_file(str(json_path), bucket, js_key, ExtraArgs={"ContentType": "application/json"})
                 s3.upload_file(str(ckpt_path), bucket, ck_key)
         else:
             patience += 1
             if patience >= cfg["patience"]:
-                print("Early stopping (by val_nll).")
+                print("Early stopping.")
                 break
 
     # Ensure local checkpoint is present for evaluation
@@ -1004,84 +1117,82 @@ def train_model(cfg: Dict[str, Any],
         except Exception as e:
             print(f"[WARN] Could not download ckpt for test: {e}")
     
-    # ---- test ---------------------------------------------------------
-    # Default placeholders so final_meta never crashes
-    t = {"nll": float("nan"), "hit": float("nan"), "f1_macro": float("nan"),
-        "auprc_macro": float("nan"), "rev_mae": float("nan")}
+    # --- test with calibrator ---
+    t = {"nll": float("nan"), "hit": float("nan"), "f1_macro": float("nan"), "auprc_macro": float("nan"), "rev_mae": float("nan")}
 
-    if ckpt_path.exists():
-        state = torch.load(ckpt_path, map_location=device)
-        engine.module.load_state_dict(state["model_state_dict"])
+    if ckpt_path.exists() or (s3 and not ckpt_path.exists()):
+        if not ckpt_path.exists() and s3:
+            try:
+                s3.download_file(bucket, ck_key, str(ckpt_path))
+            except Exception:
+                pass
 
-        # t = evaluate(
-        #     test_dl,
-        #     engine.module,
-        #     device,
-        #     ai_rate=cfg["ai_rate"],
-        #     logit_bias=logit_bias,
-        #     compute_nll=True,
-        #     compute_rev_mae=True,
-        # )
+        if ckpt_path.exists():
+            state = torch.load(ckpt_path, map_location=device)
+            engine.module.load_state_dict(state["model_state_dict"])
 
-        t = evaluate(
-            test_dl,
-            engine.module,
-            device,
-            ai_rate=cfg["ai_rate"],
-            logit_bias=logit_bias,
-            compute_nll=True,
-            compute_rev_mae=True,
-            projection_gate_mode=cfg.get("eval_projection_gate_mode", "mean"),
-        )
+            # Fit calibrator
+            print("\n[INFO] Fitting vector scaling calibrator...")
+            logits_val, labels_val = collect_val_logits(val_dl, engine.module, device,
+                                                        cfg["ai_rate"], eval_proj_gate_mode)
+            calibrator = fit_vector_scaling(logits_val, labels_val)
 
-        print(
-            f"\n** TEST ** NLL={t['nll']:.4f}  Hit={t['hit']:.4f}  "
-            f"F1={t['f1_macro']:.4f}  AUPRC={t['auprc_macro']:.4f}  RevMAE={t['rev_mae']:.4f}"
-        )
+            cal_path = ckpt_dir / f"calibrator_{uid}.pt"
+            torch.save({"a": calibrator.a.data, "b": calibrator.b.data}, cal_path)
 
-    # ------------------ inference on full 30 campaigns ------------------
+            t = evaluate(test_dl, engine.module, device, ai_rate=cfg["ai_rate"],
+                         logit_bias_9=None, calibrator=calibrator,
+                         compute_nll=True, compute_rev_mae=True,
+                         projection_gate_mode=eval_proj_gate_mode)
+
+            print(f"\n** TEST (calibrated) ** NLL={t['nll']:.4f}  Hit={t['hit']:.4f}  "
+                  f"F1={t['f1_macro']:.4f}  AUPRC={t['auprc_macro']:.4f}  RevMAE={t['rev_mae']:.4f}")
+
+# --- inference ---
     if cfg.get("do_infer", True):
         inf_dl, _, _, _ = build_dataloaders({**cfg, "mode": "infer"})
-
-        # If using mean projection gate, cache it before inference using users seen in training
-        if cfg.get("infer_projection_gate_mode", "mean") == "mean" and hasattr(engine.module, "set_projection_mean_gate_from_train_users"):
-            # Reuse train users from train loader if easy; otherwise infer mean from all embedding rows (model fallback handles this)
-            pass
-
         tmp_pred = Path("/tmp") / f"{uid}_predictions.jsonl.gz"
-        mix_space = _projection_mix_space(engine)
+        mm = _unwrap_model(engine)
 
         with gzip.open(tmp_pred, "wt", encoding="utf-8") as fp, torch.no_grad():
-            for batch in tqdm(inf_dl, desc="Infer 30-campaign set"):
+            for batch in tqdm(inf_dl, desc="Infer"):
                 x = batch["aggregate_input"].to(device)
-                uids = batch["uid"]  # list[str]
+                uids = batch["uid"]
                 u = batch["user_id"].to(device) if "user_id" in batch else None
+                pos = torch.arange(cfg["ai_rate"] - 1, x.size(1), cfg["ai_rate"], device=device)
 
-                raw_full = engine(
-                    x, u,
-                    projection_gate_mode=cfg.get("infer_projection_gate_mode", "mean")
-                ) if u is not None else engine(
-                    x, projection_gate_mode=cfg.get("infer_projection_gate_mode", "mean")
-                )
-
-                logits_like_full = _to_logits_like(raw_full, mix_space=mix_space)
-
-                if logits_like_full.size(1) == x.size(1):
-                    logits = logits_like_full[:, cfg["ai_rate"] - 1::cfg["ai_rate"], :]
+                if u is not None:
+                    _, hidden = engine(x, u, projection_gate_mode="mean", return_hidden=True)
                 else:
-                    logits = logits_like_full
+                    _, hidden = engine(x, projection_gate_mode="mean", return_hidden=True)
 
-                if logit_bias is not None:
-                    logits = logits - logit_bias.to(device=logits.device, dtype=logits.dtype)
+                proj_result = mm.projection(hidden, user_idx=u, gate_mode="mean",
+                                            return_alpha=True, return_head_logits=True)
+                _, alpha, head_logits = proj_result
 
-                logits_dec = logits[:, :, 1:10]      # (B, n_slots, 9)
-                probs_dec = torch.softmax(logits_dec, dim=-1).cpu().numpy()
+                if head_logits.size(1) == x.size(1):
+                    head_logits = head_logits[:, pos, :, :]
+
+                head_logits_dec = head_logits[..., 1:10]
+
+                if calibrator is not None:
+                    alpha_bt = alpha[:, None, :, None]
+                    mixed = (alpha_bt * head_logits_dec).sum(dim=2)
+                    probs_dec = calibrator(mixed)
+                elif logit_bias_9 is not None:
+                    bias = logit_bias_9.to(device=dev, dtype=head_logits_dec.dtype)
+                    corrected = F.softmax(head_logits_dec - bias, dim=-1)
+                    alpha_bt = alpha[:, None, :, None]
+                    probs_dec = (alpha_bt * corrected).sum(dim=2)
+                else:
+                    hp = F.softmax(head_logits_dec, dim=-1)
+                    alpha_bt = alpha[:, None, :, None]
+                    probs_dec = (alpha_bt * hp).sum(dim=2)
 
                 for i, uid_str in enumerate(uids):
-                    fp.write(json.dumps({"uid": uid_str, "probs_dec_1to9": probs_dec[i].tolist()}) + "\n")
+                    fp.write(json.dumps({"uid": uid_str, "probs_dec_1to9": probs_dec[i].cpu().numpy().tolist()}) + "\n")
 
-        pred_s3_key = f"CV/predictions/{tmp_pred.name}"
-        _upload_and_unlink(tmp_pred, bucket, pred_s3_key, s3, gzip_json=True)
+        _upload_and_unlink(tmp_pred, bucket, f"CV/predictions/{tmp_pred.name}", s3, gzip_json=True)
 
     # ------------------ Final metadata (optional) ------------------
     final_meta = {
