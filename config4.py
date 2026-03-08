@@ -55,7 +55,9 @@ def _raw_config():
         "patience": 8,
         "gamma": 0,
         "eps": 1e-6,
-        "weight": 2,
+        "weight": 1,
+        "tau": 0.5,                    # NEW: inverse-frequency weight temperature
+
 
         # ---------- logging / paths ----------
         "exp_name": "ProductGPT",
@@ -71,8 +73,8 @@ def _raw_config():
         "s3_prefix":  "my_runs",
 
         # ---------- augmentation ----------
-        "augment_permute_obtained": True,  # enable permutation augmentation for train split
-        "permute_repeat": 5,               # 1 = no repetition; 5 = ~5x more train samples/steps
+        "augment_permute_obtained": False,  # enable permutation augmentation for train split
+        "permute_repeat": 1,               # 1 = no repetition; 5 = ~5x more train samples/steps
 
     }
 

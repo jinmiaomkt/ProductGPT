@@ -78,9 +78,44 @@ from train1_decision_only_performer_aws import _ensure_jsonl, JsonLineDataset, _
 # Optional: silence Intel/LLVM OpenMP clash on macOS
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
-# FullProductGPT_featurebased_performerfeatures16_dmodel128_ff128_N6_heads4_lr0.0001_w2_fold0.pt .
-# FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w2_fold0.pt
-# LP_ProductGPT_featurebased_performerfeatures32_dmodel128_ff128_N8_heads4_lr0.001_w2.pt 
+
+# ══════════════════════════ VectorScaling (must match training) ═══════
+class VectorScaling(torch.nn.Module):
+    """Post-hoc calibration: per-class scale and shift."""
+    def __init__(self, n_classes: int = 9):
+        super().__init__()
+        self.a = torch.nn.Parameter(torch.ones(n_classes))
+        self.b = torch.nn.Parameter(torch.zeros(n_classes))
+
+    def forward(self, logits_dec: torch.Tensor) -> torch.Tensor:
+        return F.softmax(self.a * logits_dec + self.b, dim=-1)
+
+
+def load_calibrator(ckpt_path: Path, device: torch.device) -> VectorScaling | None:
+    """
+    Look for a calibrator file alongside the checkpoint.
+    Expected name: calibrator_<same_uid>.pt in the same directory.
+    """
+    # Try to find calibrator_*.pt in same directory
+    ckpt_dir = ckpt_path.parent
+    uid_part = ckpt_path.stem.replace("FullProductGPT_", "")
+
+    cal_path = ckpt_dir / f"calibrator_{uid_part}.pt"
+    if not cal_path.exists():
+        # Try S3 download or alternative locations
+        print(f"[INFO] No calibrator found at {cal_path}")
+        return None
+
+    cal = VectorScaling(n_classes=9).to(device)
+    state = torch.load(cal_path, map_location=device)
+    cal.a.data = state["a"].to(device)
+    cal.b.data = state["b"].to(device)
+    print(f"[INFO] Loaded calibrator from {cal_path}")
+    print(f"[INFO]   a = {cal.a.data.cpu().numpy().round(4)}")
+    print(f"[INFO]   b = {cal.b.data.cpu().numpy().round(4)}")
+    return cal
+
+
 # ===================== CLI ======================
 def parse_args():
     p = argparse.ArgumentParser()
@@ -502,6 +537,36 @@ def main():
              state["module"]           if "module" in state           else state
     model.load_state_dict(clean_state_dict(raw_sd), strict=True)
 
+    # ──────────────────────────────────────────────────────────
+    # CHANGED: Load calibration info from checkpoint
+    # ──────────────────────────────────────────────────────────
+    calibrator = None
+    logit_bias_9 = None
+
+    if args.calibration == "calibrator":
+        calibrator = load_calibrator(ckpt_path, device)
+        if calibrator is None:
+            print("[WARN] No calibrator found, falling back to analytic correction")
+            args.calibration = "analytic"
+
+    if args.calibration == "analytic":
+        # Try to load per-class bias from checkpoint (new format)
+        if "logit_bias_9" in state:
+            logit_bias_9 = torch.tensor(state["logit_bias_9"], device=device, dtype=torch.float32)
+            print(f"[INFO] Loaded per-class logit_bias_9 from checkpoint: {logit_bias_9.cpu().numpy().round(4)}")
+        else:
+            # Fallback: construct from single weight (old checkpoint format)
+            weight_class9 = hp["weight"]
+            logit_bias_9 = torch.zeros(9, device=device, dtype=torch.float32)
+            if weight_class9 != 1:
+                logit_bias_9[8] = math.log(weight_class9)   # index 8 → class 9
+            print(f"[INFO] Constructed logit_bias_9 from weight={weight_class9}: {logit_bias_9.cpu().numpy().round(4)}")
+
+    if args.calibration == "none":
+        print("[INFO] No calibration applied (raw model probabilities)")
+
+    print(f"[INFO] Calibration method: {args.calibration}")
+
     # ---------- Metric accumulators ----------
     scores       = defaultdict(lambda: {"y": [], "p": []})
     length_note  = Counter()
@@ -537,27 +602,27 @@ def main():
 
             V_out = logits.size(-1)
 
-            # Analytic correction for class-9 upweighting (same idea as train_model)
-            # - If full vocab: class 9 is token id 9
-            # - If decision-only: class 9 is index 8 (0-based)
-            logits = logits.clone()
-            if weight_class9 is not None and weight_class9 != 1:
-                import math
-                if V_out == 9:
-                    logits[..., 8] -= math.log(weight_class9)
-                elif V_out >= 10:
-                    logits[..., 9] -= math.log(weight_class9)
-
-            probs = torch.softmax(logits, dim=-1)
-
-            # Extract 9-way decision probs for classes 1..9
+            # ──────────────────────────────────────────────────
+            # FIX: Extract 9-class decision logits BEFORE softmax
+            # ──────────────────────────────────────────────────
             if V_out == 9:
-                prob_dec_9 = probs                      # already (B, Nslots, 9)
+                logits_dec = logits                          # already 9-class
             else:
-                prob_dec_9 = probs[..., 1:10]           # token IDs 1..9 -> 9 columns
+                logits_dec = logits[..., 1:10]               # (B, Nslots, 9)
 
-            prob_dec_focus = prob_dec_9                 # (B, N, 9)
+            # ──────────────────────────────────────────────────
+            # FIX: Compute probs via calibrator or analytic or raw
+            # ──────────────────────────────────────────────────
+            if calibrator is not None:
+                prob_dec_9 = calibrator(logits_dec)           # (B, Nslots, 9)
+            elif logit_bias_9 is not None:
+                logits_corrected = logits_dec - logit_bias_9.to(device=logits_dec.device, dtype=logits_dec.dtype)
+                prob_dec_9 = torch.softmax(logits_corrected, dim=-1)
+            else:
+                prob_dec_9 = torch.softmax(logits_dec, dim=-1)
 
+            # prob_dec_9 is now (B, Nslots, 9) and SUMS TO 1.0
+            prob_dec_focus = prob_dec_9
 
             for i, uid in enumerate(uids):
                 probs_seq = prob_dec_focus[i].detach().cpu().numpy()  # (N, 9)
