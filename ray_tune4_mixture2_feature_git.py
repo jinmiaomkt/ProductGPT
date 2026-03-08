@@ -125,17 +125,19 @@ def main():
     ray.init(ignore_reinit_error=True)
 
     # ---- Valid (d_model, heads) combos to satisfy divisibility + head_dim>=16 ----
-    valid_dm_heads = []
-    for dm in [64, 96, 128]:
-        for h in [4, 6, 8]:
-            if dm % h == 0 and (dm // h) >= 16:
-                valid_dm_heads.append((dm, h))
+    # valid_dm_heads = []
+    # for dm in [32, 48, 64:
+    #     for h in [3, 4, 5, 6]:
+    #         if dm % h == 0 and (dm // h) >= 16:
+    #             valid_dm_heads.append((dm, h))
 
+    valid_dm_heads = [(64, 4), (72, 4), (72, 6), (96, 4), (96, 6), (96, 8)]
+    
     # ---- Search space (Ray handles sampling) ----
     param_space = {
         # stage-A knobs (optional)
         "num_epochs": 120,
-        "data_frac": 0.5,          # << cheap tuning (requires build_dataloaders patch)
+        "data_frac": 0.15,          # << cheap tuning (requires build_dataloaders patch)
         "augment_train": False,     # << disable expensive permutation augmentation during tuning
         "permute_repeat": 1,
 
@@ -151,7 +153,7 @@ def main():
         "tau": tune.uniform(0.3, 0.7),
         "gamma": 0.0,                                # CHANGED: fixed at 0 (no focal)
 
-        "warmup_steps": tune.choice([500, 1000, 2000]),
+        "warmup_steps": tune.choice([500, 1000]),
         "label_smoothing": tune.uniform(0.0, 0.1),
         "do_infer": False,
 
@@ -166,8 +168,8 @@ def main():
         time_attr="epoch",
         metric="val_nll",
         mode="min",
-        max_t=120,
-        grace_period=10,
+        max_t=60,
+        grace_period=5,
         reduction_factor=3,
     )
 
@@ -180,7 +182,7 @@ def main():
     tuner = tune.Tuner(
         tune.with_resources(trainable_ray, resources={"cpu": 4, "gpu": 1}),
         tune_config=tune.TuneConfig(
-            num_samples=300,     # like your JMR example
+            num_samples=100,     # like your JMR example
             max_concurrent_trials=1,
             search_alg=algo,
             scheduler=asha,
