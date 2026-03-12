@@ -55,8 +55,8 @@ def _raw_config():
         "patience": 8,
         "gamma": 0,
         "eps": 1e-6,
-        "weight": 1,
-        "tau": 0.5,                    # NEW: inverse-frequency weight temperature
+        "weight": 2,
+        "tau": 0,                    # NEW: inverse-frequency weight temperature
 
 
         # ---------- logging / paths ----------
