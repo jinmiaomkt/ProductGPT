@@ -148,6 +148,7 @@ def parse_args():
                    help="Match training subsample_seed (default=33)")
     p.add_argument("--dump-uids", default="",
                    help="Optional: local folder to write uids_val.txt / uids_test.txt")
+    p.add_argument("--calibration", choices=["calibrator", "analytic", "none"], default="calibrator")
 
     # Optional fold index to route outputs under .../fold{ID}/
     p.add_argument("--fold-id", type=int, default=-1, help="If >=0, upload outputs under .../fold{ID}/")
