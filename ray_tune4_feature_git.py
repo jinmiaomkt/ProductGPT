@@ -150,7 +150,7 @@ def main():
         "permute_repeat": 1,
 
         # hyperparams
-        "nb_features": tune.choice([32, 48, 64]),
+        "nb_features": tune.choice([16, 32, 48]),
         "dm_heads": tune.choice(valid_dm_heads),   # couples d_model and num_heads safely
         "N": tune.randint(2, 6),                   # 4..8
         "dropout": tune.uniform(0.0, 0.2),
@@ -192,7 +192,7 @@ def main():
             scheduler=asha,
         ),
         run_config=ray.air.RunConfig(
-            name="ProductGPT_RayTune",
+            name="ProductGPT_RayTune_v2",
             storage_path=str(Path("./ray_results").resolve()),
         ),
         param_space=param_space,
