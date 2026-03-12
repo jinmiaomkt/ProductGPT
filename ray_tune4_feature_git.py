@@ -145,7 +145,7 @@ def main():
     param_space = {
         # stage-A knobs (optional)
         "num_epochs": 120,
-        "data_frac": 0.5,          # << cheap tuning (requires build_dataloaders patch)
+        "data_frac": 0.15,          # << cheap tuning (requires build_dataloaders patch)
         "augment_train": False,     # << disable expensive permutation augmentation during tuning
         "permute_repeat": 1,
 
