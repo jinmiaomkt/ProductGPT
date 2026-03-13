@@ -41,8 +41,7 @@ import pandas as pd
 import torch
 import re
 
-import torch
-import torch
+import math
 import torch.nn.functional as F
 
 from torch.utils.data import DataLoader, random_split
@@ -81,7 +80,6 @@ from train1_decision_only_performer_aws import _ensure_jsonl, JsonLineDataset, _
 
 # Optional: silence Intel/LLVM OpenMP clash on macOS
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
-
 
 # ══════════════════════════ VectorScaling (must match training) ═══════
 class VectorScaling(torch.nn.Module):
@@ -414,6 +412,24 @@ def period_group(idx_h, feat_h):
     if idx_h == 1:                return "HoldoutB"
     return "UNASSIGNED"
 
+GROUP_ORDER = ["Calibration", "HoldoutA", "HoldoutB"]
+SPLIT_ORDER = ["val", "test"]
+
+PAPER_AUC_TASKS = {
+    "BuyOne": "Buy One",
+    "BuyTen": "Buy Ten",
+    "BuyFigure": "Character Event Wish",
+    "BuyWeapon": "Weapon Event Wish",
+    "BuyRegular": "Regular Wish",
+}
+PAPER_AUC_ORDER = [
+    "Buy One",
+    "Buy Ten",
+    "Character Event Wish",
+    "Weapon Event Wish",
+    "Regular Wish",
+]
+
 # ======================= Main ====================
 def main():
     args = parse_args()
@@ -620,10 +636,16 @@ def main():
     print(f"[INFO] Calibration method: {args.calibration}")
 
     # ---------- Metric accumulators ----------
-    scores       = defaultdict(lambda: {"y": [], "p": []})
+    # scores       = defaultdict(lambda: {"y": [], "p": []})
+    # length_note  = Counter()
+    # accept = reject = 0
+    # accept_users = {"val": set(), "test": set(), "train": set()}
+
+    scores       = defaultdict(lambda: {"y": [], "p": []})              # binary task scores
+    multi_scores = defaultdict(lambda: {"y": [], "p": []})              # multiclass 1..9
     length_note  = Counter()
     accept = reject = 0
-    accept_users = {"val": set(), "test": set(), "train": set()}
+    accept_users = {"val": set(), "test": set(), "train": set()}    
 
     # Optional predictions writer
     pred_writer = None
@@ -710,18 +732,27 @@ def main():
             prob_dec_focus = prob_dec_9
 
             for i, uid in enumerate(uids):
-                probs_seq = prob_dec_focus[i].detach().cpu().numpy()  # (N, 9)
-                probs_seq = np.round(probs_seq, 6).tolist()           # list[list[float]]
-                # write predictions line if requested
+                probs_seq_np = prob_dec_focus[i].detach().cpu().numpy()   # (N, 9), keep raw for metrics
+
                 if pred_writer:
-                    pred_writer.write(json.dumps({"uid": uid, "probs": probs_seq}) + "\n")
+                    pred_writer.write(
+                        json.dumps({"uid": uid, "probs": np.round(probs_seq_np, 6).tolist()}) + "\n"
+                    )
+
+                # probs_seq = prob_dec_focus[i].detach().cpu().numpy()  # (N, 9)
+                # probs_seq = np.round(probs_seq, 6).tolist()           # list[list[float]]
+                # # write predictions line if requested
+                # if pred_writer:
+                #     pred_writer.write(json.dumps({"uid": uid, "probs": probs_seq}) + "\n")
 
                 lbl_info = label_dict.get(uid)
                 if lbl_info is None:
                     reject += 1
                     continue
 
-                L_pred, L_lbl = len(probs_seq), len(lbl_info["label"])
+                # L_pred, L_lbl = len(probs_seq), len(lbl_info["label"])
+                L_pred, L_lbl = len(probs_seq_np), len(lbl_info["label"])
+
                 if L_pred != L_lbl:
                     length_note["pred>lbl" if L_pred > L_lbl else "pred<label"] += 1
                 L = min(L_pred, L_lbl)
@@ -732,9 +763,16 @@ def main():
                     y      = lbl_info["label"][t]
                     idx_h  = lbl_info["idx_h"][t]
                     feat_h = lbl_info["feat_h"][t]
-                    probs  = probs_seq[t]  # length 9, corresponds to classes 1..9
-
+                    # probs  = probs_seq[t]  # length 9, corresponds to classes 1..9
+                    probs = probs_seq_np[t]   # raw 9-class probabilities
+                    
                     group = period_group(idx_h, feat_h)
+
+                    if 1 <= y <= 9:
+                        mkey = (group, split_tag)
+                        multi_scores[mkey]["y"].append(int(y))
+                        multi_scores[mkey]["p"].append(np.asarray(probs, dtype=np.float64))
+
                     for task, pos_classes in BIN_TASKS.items():
                         y_bin = int(y in TASK_POSSETS[task])
                         # decisions are 1-indexed → probs[j-1]
@@ -781,80 +819,196 @@ def main():
     print("============================================================")
 
     # ---------- Compute tables ----------
+    # rows = []
+    # for task in BIN_TASKS:
+    #     for grp in ["Calibration","HoldoutA","HoldoutB"]:
+    #         for spl in ["val","test"]:
+    #             y, p = scores[(task, grp, spl)]["y"], scores[(task, grp, spl)]["p"]
+    #             if not y:
+    #                 continue
+    #             # guard: need both classes present
+    #             if len(set(y)) < 2:
+    #                 auc = acc = f1 = auprc = np.nan
+    #             else:
+    #                 auc   = roc_auc_score(y, p)
+    #                 y_hat = [int(prob >= args.thresh) for prob in p]
+    #                 acc   = accuracy_score(y, y_hat)
+    #                 f1    = f1_score(y, y_hat)
+    #                 auprc = average_precision_score(y, p)
+    #             rows.append({"Task": task, "Group": grp, "Split": spl,
+    #                          "AUC": auc, "Hit": acc, "F1": f1, "AUPRC": auprc})
+    # metrics = pd.DataFrame(rows)
+
+    # def pivot(metric: str) -> pd.DataFrame:
+    #     return (metrics
+    #             .pivot(index=["Task","Group"], columns="Split", values=metric)
+    #             .reindex(columns=["val","test"])
+    #             .round(4)
+    #             .sort_index())
+
+    # auc_tbl   = pivot("AUC")
+    # hit_tbl   = pivot("Hit")
+    # f1_tbl    = pivot("F1")
+    # auprc_tbl = pivot("AUPRC")
+
+    # macro_period_tbl = (
+    #     metrics
+    #       .groupby(["Group", "Split"])[["AUC", "Hit", "F1", "AUPRC"]]
+    #       .mean()
+    #       .unstack("Split")   # columns become metric × split
+    #       .round(4)
+    # )
+    # # reorder to outer split then metric, and val before test
+    # macro_period_tbl = macro_period_tbl.reorder_levels([1, 0], axis=1)
+    # macro_period_tbl = macro_period_tbl.sort_index(axis=1, level=0)
+    # macro_period_tbl = macro_period_tbl[['val', 'test']]
+
+    # # ---------- Print ALL tables to console ----------
+    # def _p(title: str, df: pd.DataFrame):
+    #     print(f"\n=============  {title}  =======================")
+    #     print(df.fillna(" NA"))
+    #     print("============================================================")
+
+    # _p("BINARY ROC-AUC TABLE", auc_tbl)
+    # _p("HIT-RATE (ACCURACY) TABLE", hit_tbl)
+    # _p("MACRO-F1 TABLE", f1_tbl)
+    # _p("AUPRC TABLE", auprc_tbl)
+    # _p("AGGREGATE MACRO METRICS", macro_period_tbl)
+
+    # # ---------- Save locally & upload to S3 ----------
+    # out_dir = Path("/tmp/predict_eval_outputs")
+    # out_dir.mkdir(parents=True, exist_ok=True)
+
+    # auc_csv   = out_dir / "auc_table.csv"
+    # hit_csv   = out_dir / "hit_table.csv"
+    # f1_csv    = out_dir / "f1_table.csv"
+    # auprc_csv = out_dir / "auprc_table.csv"
+    # macro_csv = out_dir / "macro_period_table.csv"
+
+    # auc_tbl.to_csv(auc_csv)
+    # hit_tbl.to_csv(hit_csv)
+    # f1_tbl.to_csv(f1_csv)
+    # auprc_tbl.to_csv(auprc_csv)
+    # macro_period_tbl.to_csv(macro_csv)
+
+    # # Choose effective S3 prefix (with fold subfolder if provided)
+    # for pth in [auc_csv, hit_csv, f1_csv, auprc_csv, macro_csv]:
+    #     dest = s3_join(s3_prefix_effective, pth.name)
+    #     s3_upload_file(pth, dest)
+    #     print(f"[S3] uploaded: {dest}")
+
+    # if pred_out:
+    #     dest = s3_join(s3_prefix_effective, Path(pred_out).name)
+    #     s3_upload_file(pred_out, dest)
+    #     print(f"[S3] uploaded: {dest}")
+
+    # ---------- Compute binary task tables ----------
     rows = []
     for task in BIN_TASKS:
-        for grp in ["Calibration","HoldoutA","HoldoutB"]:
-            for spl in ["val","test"]:
+        for grp in GROUP_ORDER:
+            for spl in SPLIT_ORDER:
                 y, p = scores[(task, grp, spl)]["y"], scores[(task, grp, spl)]["p"]
                 if not y:
                     continue
-                # guard: need both classes present
                 if len(set(y)) < 2:
-                    auc = acc = f1 = auprc = np.nan
+                    auc = np.nan
+                    auprc = np.nan
                 else:
                     auc   = roc_auc_score(y, p)
-                    y_hat = [int(prob >= args.thresh) for prob in p]
-                    acc   = accuracy_score(y, y_hat)
-                    f1    = f1_score(y, y_hat)
                     auprc = average_precision_score(y, p)
-                rows.append({"Task": task, "Group": grp, "Split": spl,
-                             "AUC": auc, "Hit": acc, "F1": f1, "AUPRC": auprc})
+                rows.append({
+                    "Task": task,
+                    "Group": grp,
+                    "Split": spl,
+                    "AUC": auc,
+                    "AUPRC": auprc
+                })
+
     metrics = pd.DataFrame(rows)
 
-    def pivot(metric: str) -> pd.DataFrame:
-        return (metrics
-                .pivot(index=["Task","Group"], columns="Split", values=metric)
-                .reindex(columns=["val","test"])
-                .round(4)
-                .sort_index())
+    # ---------- Compute multiclass top-1 Hit / macro-F1 ----------
+    multi_rows = []
+    for grp in GROUP_ORDER:
+        for spl in SPLIT_ORDER:
+            y = multi_scores[(grp, spl)]["y"]
+            p = multi_scores[(grp, spl)]["p"]
+            if not y:
+                continue
 
-    auc_tbl   = pivot("AUC")
-    hit_tbl   = pivot("Hit")
-    f1_tbl    = pivot("F1")
-    auprc_tbl = pivot("AUPRC")
+            y_arr = np.asarray(y, dtype=np.int64)
+            p_arr = np.vstack(p)   # (N, 9)
+            y_hat = p_arr.argmax(axis=1) + 1
 
-    macro_period_tbl = (
-        metrics
-          .groupby(["Group", "Split"])[["AUC", "Hit", "F1", "AUPRC"]]
-          .mean()
-          .unstack("Split")   # columns become metric × split
-          .round(4)
+            hit = accuracy_score(y_arr, y_hat)
+            macro_f1 = f1_score(
+                y_arr,
+                y_hat,
+                labels=list(range(1, 10)),
+                average="macro",
+                zero_division=0
+            )
+
+            multi_rows.append({
+                "Group": grp,
+                "Split": spl,
+                "Hit": hit,
+                "MacroF1": macro_f1
+            })
+
+    multiclass_metrics = pd.DataFrame(multi_rows)
+
+    # ---------- Pretty paper-style multiclass table ----------
+    paper_multi_tbl = (
+        multiclass_metrics
+        .pivot(index="Group", columns="Split", values=["Hit", "MacroF1"])
+        .reindex(index=GROUP_ORDER)
+        .reindex(columns=pd.MultiIndex.from_product([["Hit", "MacroF1"], SPLIT_ORDER]))
+        .round(4)
     )
-    # reorder to outer split then metric, and val before test
-    macro_period_tbl = macro_period_tbl.reorder_levels([1, 0], axis=1)
-    macro_period_tbl = macro_period_tbl.sort_index(axis=1, level=0)
-    macro_period_tbl = macro_period_tbl[['val', 'test']]
 
-    # ---------- Print ALL tables to console ----------
+    # ---------- Pretty paper-style selected AUC tables ----------
+    paper_auc = metrics[metrics["Task"].isin(PAPER_AUC_TASKS.keys())].copy()
+    paper_auc["TaskPretty"] = paper_auc["Task"].map(PAPER_AUC_TASKS)
+
+    def make_auc_panel(group_name: str) -> pd.DataFrame:
+        sub = paper_auc[paper_auc["Group"] == group_name].copy()
+        tbl = (
+            sub.pivot(index="TaskPretty", columns="Split", values="AUC")
+            .reindex(index=PAPER_AUC_ORDER, columns=SPLIT_ORDER)
+            .round(4)
+        )
+        return tbl
+
+    auc_calibration_tbl = make_auc_panel("Calibration")
+    auc_holdoutA_tbl    = make_auc_panel("HoldoutA")
+    auc_holdoutB_tbl    = make_auc_panel("HoldoutB")
+
+    # ---------- Print only the metrics you want ----------
     def _p(title: str, df: pd.DataFrame):
         print(f"\n=============  {title}  =======================")
         print(df.fillna(" NA"))
         print("============================================================")
 
-    _p("BINARY ROC-AUC TABLE", auc_tbl)
-    _p("HIT-RATE (ACCURACY) TABLE", hit_tbl)
-    _p("MACRO-F1 TABLE", f1_tbl)
-    _p("AUPRC TABLE", auprc_tbl)
-    _p("AGGREGATE MACRO METRICS", macro_period_tbl)
+    _p("MULTICLASS TOP-1 HIT / MACRO-F1 TABLE", paper_multi_tbl)
+    _p("SELECTED BINARY AUC TABLE - CALIBRATION", auc_calibration_tbl)
+    _p("SELECTED BINARY AUC TABLE - HOLDOUT A", auc_holdoutA_tbl)
+    _p("SELECTED BINARY AUC TABLE - HOLDOUT B", auc_holdoutB_tbl)
 
     # ---------- Save locally & upload to S3 ----------
     out_dir = Path("/tmp/predict_eval_outputs")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    auc_csv   = out_dir / "auc_table.csv"
-    hit_csv   = out_dir / "hit_table.csv"
-    f1_csv    = out_dir / "f1_table.csv"
-    auprc_csv = out_dir / "auprc_table.csv"
-    macro_csv = out_dir / "macro_period_table.csv"
+    paper_multi_csv        = out_dir / "paper_multiclass_table.csv"
+    auc_calibration_csv    = out_dir / "paper_auc_calibration.csv"
+    auc_holdoutA_csv       = out_dir / "paper_auc_holdoutA.csv"
+    auc_holdoutB_csv       = out_dir / "paper_auc_holdoutB.csv"
 
-    auc_tbl.to_csv(auc_csv)
-    hit_tbl.to_csv(hit_csv)
-    f1_tbl.to_csv(f1_csv)
-    auprc_tbl.to_csv(auprc_csv)
-    macro_period_tbl.to_csv(macro_csv)
+    paper_multi_tbl.to_csv(paper_multi_csv)
+    auc_calibration_tbl.to_csv(auc_calibration_csv)
+    auc_holdoutA_tbl.to_csv(auc_holdoutA_csv)
+    auc_holdoutB_tbl.to_csv(auc_holdoutB_csv)
 
-    # Choose effective S3 prefix (with fold subfolder if provided)
-    for pth in [auc_csv, hit_csv, f1_csv, auprc_csv, macro_csv]:
+    for pth in [paper_multi_csv, auc_calibration_csv, auc_holdoutA_csv, auc_holdoutB_csv]:
         dest = s3_join(s3_prefix_effective, pth.name)
         s3_upload_file(pth, dest)
         print(f"[S3] uploaded: {dest}")
@@ -863,6 +1017,6 @@ def main():
         dest = s3_join(s3_prefix_effective, Path(pred_out).name)
         s3_upload_file(pred_out, dest)
         print(f"[S3] uploaded: {dest}")
-    
+
 if __name__ == "__main__":
     main()
