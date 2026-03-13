@@ -152,7 +152,7 @@ def parse_args():
                    help="Match training subsample_seed (default=33)")
     p.add_argument("--dump-uids", default="",
                    help="Optional: local folder to write uids_val.txt / uids_test.txt")
-    p.add_argument("--calibration", choices=["calibrator", "analytic", "none"], default="calibrator")
+    p.add_argument("--calibration", choices=["calibrator", "analytic", "none"], default="none")
 
     # Optional fold index to route outputs under .../fold{ID}/
     p.add_argument("--fold-id", type=int, default=-1, help="If >=0, upload outputs under .../fold{ID}/")
@@ -609,46 +609,63 @@ def main():
             else:
                 logits = logits_full                # (B, Nslots, V)
 
+            # V_out = logits.size(-1)
+
+            # # ──────────────────────────────────────────────────
+            # # FIX: Extract 9-class decision logits BEFORE softmax
+            # # ──────────────────────────────────────────────────
+            # # if V_out == 9:
+            # #     logits_dec = logits                          # already 9-class
+            # # else:
+            # #     logits_dec = logits[..., 1:10]               # (B, Nslots, 9)
+
+            # if V_out == 9:
+            #     # decision-only model: softmax over the 9 classes
+            #     if calibrator is not None:
+            #         prob_dec_9 = calibrator(logits)
+            #     elif logit_bias_9 is not None:
+            #         prob_dec_9 = torch.softmax(
+            #             logits - logit_bias_9.to(device=logits.device, dtype=logits.dtype),
+            #             dim=-1
+            #         )
+            #     else:
+            #         prob_dec_9 = torch.softmax(logits, dim=-1)
+            # else:
+            #     # full-vocab model: MATCH OLD SCRIPT / TRAINING EVAL
+            #     probs_all = torch.softmax(logits, dim=-1)
+            #     prob_dec_9 = probs_all[..., 1:10]
+
+            # # ──────────────────────────────────────────────────
+            # # FIX: Compute probs via calibrator or analytic or raw
+            # # ──────────────────────────────────────────────────
+            # if calibrator is not None:
+            #     prob_dec_9 = calibrator(logits_dec)           # (B, Nslots, 9)
+            # elif logit_bias_9 is not None:
+            #     logits_corrected = logits_dec - logit_bias_9.to(device=logits_dec.device, dtype=logits_dec.dtype)
+            #     prob_dec_9 = torch.softmax(logits_corrected, dim=-1)
+            # else:
+            #     prob_dec_9 = torch.softmax(logits_dec, dim=-1)
+
+            # # prob_dec_9 is now (B, Nslots, 9) and SUMS TO 1.0
+            # prob_dec_focus = prob_dec_9
+
             V_out = logits.size(-1)
 
-            # ──────────────────────────────────────────────────
-            # FIX: Extract 9-class decision logits BEFORE softmax
-            # ──────────────────────────────────────────────────
-            # if V_out == 9:
-            #     logits_dec = logits                          # already 9-class
-            # else:
-            #     logits_dec = logits[..., 1:10]               # (B, Nslots, 9)
+            # ===== REVERT TO OLD PROBABILITY LOGIC =====
+            # Old script behavior:
+            # 1) softmax over the model output dimension
+            # 2) then keep decision classes 1..9
 
             if V_out == 9:
-                # decision-only model: softmax over the 9 classes
-                if calibrator is not None:
-                    prob_dec_9 = calibrator(logits)
-                elif logit_bias_9 is not None:
-                    prob_dec_9 = torch.softmax(
-                        logits - logit_bias_9.to(device=logits.device, dtype=logits.dtype),
-                        dim=-1
-                    )
-                else:
-                    prob_dec_9 = torch.softmax(logits, dim=-1)
+                # decision-only output
+                prob_dec_9 = torch.softmax(logits, dim=-1)
             else:
-                # full-vocab model: MATCH OLD SCRIPT / TRAINING EVAL
+                # full-vocab output: MATCH OLD SCRIPT
                 probs_all = torch.softmax(logits, dim=-1)
                 prob_dec_9 = probs_all[..., 1:10]
 
-            # ──────────────────────────────────────────────────
-            # FIX: Compute probs via calibrator or analytic or raw
-            # ──────────────────────────────────────────────────
-            if calibrator is not None:
-                prob_dec_9 = calibrator(logits_dec)           # (B, Nslots, 9)
-            elif logit_bias_9 is not None:
-                logits_corrected = logits_dec - logit_bias_9.to(device=logits_dec.device, dtype=logits_dec.dtype)
-                prob_dec_9 = torch.softmax(logits_corrected, dim=-1)
-            else:
-                prob_dec_9 = torch.softmax(logits_dec, dim=-1)
-
-            # prob_dec_9 is now (B, Nslots, 9) and SUMS TO 1.0
             prob_dec_focus = prob_dec_9
-
+            
             for i, uid in enumerate(uids):
                 probs_seq = prob_dec_focus[i].detach().cpu().numpy()  # (N, 9)
                 probs_seq = np.round(probs_seq, 6).tolist()           # list[list[float]]
