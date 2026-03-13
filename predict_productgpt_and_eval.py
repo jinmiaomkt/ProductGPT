@@ -466,38 +466,42 @@ def main():
             return "val" if u in uids_val_override else "test" if u in uids_test_override else "train"
 
         print(f"[INFO] Using EXACT UID lists: val={len(uids_val_override)}, test={len(uids_test_override)}")
+    else:
+        which_split = build_splits(records, seed=args.seed)
+        print(f"[INFO] Using 80/10/10 split on ALL label users with seed={args.seed}")
+        
     # else:
     #     which_split = build_splits(records, seed=args.seed)
     #     print(f"[INFO] Using fallback 80/10/10 split with seed={args.seed}")
-    else:
-        # ===== reproduce training split EXACTLY (Phase-B compatible) =====
-        fold_for_split = args.fold_id if (args.fold_id is not None and args.fold_id >= 0) else hp["fold_id"]
+    # else:
+    #     # ===== reproduce training split EXACTLY (Phase-B compatible) =====
+    #     fold_for_split = args.fold_id if (args.fold_id is not None and args.fold_id >= 0) else hp["fold_id"]
 
-        split_from_path = args.split_from.strip() or cfg["filepath"]
+    #     split_from_path = args.split_from.strip() or cfg["filepath"]
 
-        uids_val_override, uids_test_override = phase_split_uids_exact(
-            fold_id=fold_for_split,
-            fold_spec_uri=args.fold_spec,
-            split_from_path=split_from_path,
-            split_seed=args.split_seed,
-            data_frac=args.split_data_frac,
-            subsample_seed=args.split_subsample_seed,
-        )
+    #     uids_val_override, uids_test_override = phase_split_uids_exact(
+    #         fold_id=fold_for_split,
+    #         fold_spec_uri=args.fold_spec,
+    #         split_from_path=split_from_path,
+    #         split_seed=args.split_seed,
+    #         data_frac=args.split_data_frac,
+    #         subsample_seed=args.split_subsample_seed,
+    #     )
 
-        def which_split(u):
-            return "val" if u in uids_val_override else "test" if u in uids_test_override else "train"
+    #     def which_split(u):
+    #         return "val" if u in uids_val_override else "test" if u in uids_test_override else "train"
 
-        print(f"[INFO] Using EXACT training split via fold-spec:"
-              f" fold={fold_for_split}, val={len(uids_val_override)}, test={len(uids_test_override)}, "
-              f"seed={args.split_seed}, data_frac={args.split_data_frac}")
+    #     print(f"[INFO] Using EXACT training split via fold-spec:"
+    #           f" fold={fold_for_split}, val={len(uids_val_override)}, test={len(uids_test_override)}, "
+    #           f"seed={args.split_seed}, data_frac={args.split_data_frac}")
 
-        # optional: dump the uid lists locally for reuse
-        if args.dump_uids:
-            out = Path(args.dump_uids)
-            out.mkdir(parents=True, exist_ok=True)
-            (out / "uids_val.txt").write_text("\n".join(sorted(uids_val_override)) + "\n")
-            (out / "uids_test.txt").write_text("\n".join(sorted(uids_test_override)) + "\n")
-            print(f"[INFO] Wrote UID lists to: {out}/uids_val.txt and {out}/uids_test.txt")
+    #     # optional: dump the uid lists locally for reuse
+    #     if args.dump_uids:
+    #         out = Path(args.dump_uids)
+    #         out.mkdir(parents=True, exist_ok=True)
+    #         (out / "uids_val.txt").write_text("\n".join(sorted(uids_val_override)) + "\n")
+    #         (out / "uids_test.txt").write_text("\n".join(sorted(uids_test_override)) + "\n")
+    #         print(f"[INFO] Wrote UID lists to: {out}/uids_val.txt and {out}/uids_test.txt")
 
 
     # ---------- DataLoader ----------
