@@ -469,7 +469,7 @@ def main():
     else:
         which_split = build_splits(records, seed=args.seed)
         print(f"[INFO] Using 80/10/10 split on ALL label users with seed={args.seed}")
-        
+
     # else:
     #     which_split = build_splits(records, seed=args.seed)
     #     print(f"[INFO] Using fallback 80/10/10 split with seed={args.seed}")
@@ -614,10 +614,26 @@ def main():
             # ──────────────────────────────────────────────────
             # FIX: Extract 9-class decision logits BEFORE softmax
             # ──────────────────────────────────────────────────
+            # if V_out == 9:
+            #     logits_dec = logits                          # already 9-class
+            # else:
+            #     logits_dec = logits[..., 1:10]               # (B, Nslots, 9)
+
             if V_out == 9:
-                logits_dec = logits                          # already 9-class
+                # decision-only model: softmax over the 9 classes
+                if calibrator is not None:
+                    prob_dec_9 = calibrator(logits)
+                elif logit_bias_9 is not None:
+                    prob_dec_9 = torch.softmax(
+                        logits - logit_bias_9.to(device=logits.device, dtype=logits.dtype),
+                        dim=-1
+                    )
+                else:
+                    prob_dec_9 = torch.softmax(logits, dim=-1)
             else:
-                logits_dec = logits[..., 1:10]               # (B, Nslots, 9)
+                # full-vocab model: MATCH OLD SCRIPT / TRAINING EVAL
+                probs_all = torch.softmax(logits, dim=-1)
+                prob_dec_9 = probs_all[..., 1:10]
 
             # ──────────────────────────────────────────────────
             # FIX: Compute probs via calibrator or analytic or raw
