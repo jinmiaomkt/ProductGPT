@@ -116,6 +116,8 @@ def parse_args():
     p.add_argument("--train-file", default="",
                 help="Training json used to reproduce Phase-B split (default: cfg['filepath'])")
     
+    p.add_argument("--calibration", choices=["calibrator", "analytic", "none"], default="none")
+    
     # EXACT-MATCH UID overrides (local path or s3://bucket/key, one UID per line)
     p.add_argument("--uids-val",  default="", help="Text file (or s3://...) with validation UIDs, one per line")
     p.add_argument("--uids-test", default="", help="Text file (or s3://...) with test UIDs, one per line")
@@ -449,27 +451,31 @@ def main():
 
         print(f"[INFO] Using EXACT UID lists: val={len(uids_val_override)}, test={len(uids_test_override)}")
     else:
-        # ===== EXACT Phase-B split (matches training) =====
-        # fold id used by training is encoded in checkpoint name
-        fold_for_split = hp["fold_id"]
+        which_split = build_splits(records, seed=args.seed)
+        print(f"[INFO] Using 80/10/10 split on ALL label users with seed={args.seed}")
 
-        # ensure cfg["filepath"] matches Phase-B training file
-        if args.train_file:
-            cfg["filepath"] = args.train_file  # override if provided
+    # else:
+    #     # ===== EXACT Phase-B split (matches training) =====
+    #     # fold id used by training is encoded in checkpoint name
+    #     fold_for_split = hp["fold_id"]
 
-        uids_val, uids_test = phaseb_val_test_uids(cfg, fold_for_split, args.fold_spec)
+    #     # ensure cfg["filepath"] matches Phase-B training file
+    #     if args.train_file:
+    #         cfg["filepath"] = args.train_file  # override if provided
 
-        tmp_val = Path("/tmp") / f"phaseb_fold{fold_for_split}_val_uids.txt"
-        tmp_te  = Path("/tmp") / f"phaseb_fold{fold_for_split}_test_uids.txt"
-        tmp_val.write_text("\n".join(sorted(uids_val)))
-        tmp_te.write_text("\n".join(sorted(uids_test)))
-        print(f"[INFO] Wrote UID lists: {tmp_val} and {tmp_te}")
+    #     uids_val, uids_test = phaseb_val_test_uids(cfg, fold_for_split, args.fold_spec)
 
-        def which_split(u):
-            return "val" if u in uids_val else "test" if u in uids_test else "train"
+    #     tmp_val = Path("/tmp") / f"phaseb_fold{fold_for_split}_val_uids.txt"
+    #     tmp_te  = Path("/tmp") / f"phaseb_fold{fold_for_split}_test_uids.txt"
+    #     tmp_val.write_text("\n".join(sorted(uids_val)))
+    #     tmp_te.write_text("\n".join(sorted(uids_test)))
+    #     print(f"[INFO] Wrote UID lists: {tmp_val} and {tmp_te}")
 
-        print(f"[INFO] Using Phase-B EXACT split: fold={fold_for_split}, "
-            f"val={len(uids_val)}, test={len(uids_test)} (seed=33)")
+    #     def which_split(u):
+    #         return "val" if u in uids_val else "test" if u in uids_test else "train"
+
+    #     print(f"[INFO] Using Phase-B EXACT split: fold={fold_for_split}, "
+    #         f"val={len(uids_val)}, test={len(uids_test)} (seed=33)")
     
     # ──────────────────────────────────────────────────────
     # FIX: Build user-id mapping (same as training used)
