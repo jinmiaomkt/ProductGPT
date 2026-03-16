@@ -274,70 +274,183 @@ def main():
              state["module"]           if "module" in state           else state
     model.load_state_dict(clean_state_dict(raw_sd), strict=True)
 
+    # # ---------- Metric accumulators ----------
+    # scores       = defaultdict(lambda: {"y": [], "p": []})
+    # length_note  = Counter()
+    # accept = reject = 0
+
+    # # Optional predictions writer
+    # pred_writer = None
+    # if pred_out:
+    #     pred_writer = smart_open_w(pred_out)
+
+    # # ---------- Inference + streaming eval ----------
+    # focus_ids = torch.arange(1, 10, device=device)  # decision classes 1..9
+    # with torch.no_grad():
+    #     for batch in loader:
+    #         x    = batch["x"].to(device)
+    #         uids = batch["uid"]
+    #         # logits -> probs
+    #         probs_all = torch.softmax(model(x), dim=-1)         # (B, L, V)
+            
+    #         if x.size(1) < cfg["ai_rate"]:
+    #             continue
+    #         pos       = torch.arange(cfg["ai_rate"]-1, x.size(1), cfg["ai_rate"], device=device)
+    #         # pull decision probs at decision positions
+    #         prob_dec_focus = probs_all[:, pos, :][..., focus_ids]  # (B, N, 9)
+
+    #         for i, uid in enumerate(uids):
+    #             probs_seq = prob_dec_focus[i].detach().cpu().numpy()  # (N, 9)
+    #             probs_seq = np.round(probs_seq, 6).tolist()           # list[list[float]]
+    #             # write predictions line if requested
+    #             if pred_writer:
+    #                 pred_writer.write(json.dumps({"uid": uid, "probs": probs_seq}) + "\n")
+
+    #             lbl_info = label_dict.get(uid)
+    #             if lbl_info is None:
+    #                 reject += 1
+    #                 continue
+
+    #             L_pred, L_lbl = len(probs_seq), len(lbl_info["label"])
+    #             if L_pred != L_lbl:
+    #                 length_note["pred>lbl" if L_pred > L_lbl else "pred<label"] += 1
+    #             L = min(L_pred, L_lbl)
+
+    #             split_tag = which_split(uid)
+    #             for t in range(L):
+    #                 y      = lbl_info["label"][t]
+    #                 idx_h  = lbl_info["idx_h"][t]
+    #                 feat_h = lbl_info["feat_h"][t]
+    #                 probs  = probs_seq[t]  # length 9, corresponds to classes 1..9
+
+    #                 group = period_group(idx_h, feat_h)
+    #                 for task, pos_classes in BIN_TASKS.items():
+    #                     y_bin = int(y in TASK_POSSETS[task])
+    #                     # decisions are 1-indexed → probs[i-1]
+    #                     p_bin = sum(probs[j-1] for j in pos_classes)
+    #                     key   = (task, group, split_tag)
+    #                     scores[key]["y"].append(y_bin)
+    #                     scores[key]["p"].append(p_bin)
+
+    #             accept += 1
+
+    # if pred_writer:
+    #     pred_writer.__exit__(None, None, None)  # close the context
+
+    # print(f"[INFO] parsed: {accept} users accepted, {reject} users missing labels.")
+    # if length_note:
+    #     print("[INFO] length mismatches:", dict(length_note))
+
     # ---------- Metric accumulators ----------
     scores       = defaultdict(lambda: {"y": [], "p": []})
     length_note  = Counter()
     accept = reject = 0
+    fallback_users = 0
 
-    # Optional predictions writer
-    pred_writer = None
-    if pred_out:
-        pred_writer = smart_open_w(pred_out)
+    # We first collect predictions for users with usable input.
+    # For users with no usable input, we will fill in a fallback later.
+    uid_to_probs = {}      # uid -> np.ndarray of shape (N, 9) OR None
+    uid_order = []         # preserve output order for pred_out
 
-    # ---------- Inference + streaming eval ----------
+    # Global empirical prior over decision classes, estimated from valid users only
+    prob_sum = np.zeros(9, dtype=np.float64)
+    prob_count = 0
+
     focus_ids = torch.arange(1, 10, device=device)  # decision classes 1..9
+
+    # ---------- Pass 1: model inference on users with usable input ----------
     with torch.no_grad():
         for batch in loader:
             x    = batch["x"].to(device)
             uids = batch["uid"]
-            # logits -> probs
-            probs_all = torch.softmax(model(x), dim=-1)         # (B, L, V)
-            
+            uid_order.extend(uids)
+
+            # If the whole batch is shorter than one decision block,
+            # we cannot form any model-based prediction for these users.
             if x.size(1) < cfg["ai_rate"]:
+                for uid in uids:
+                    uid_to_probs[uid] = None
                 continue
-            pos       = torch.arange(cfg["ai_rate"]-1, x.size(1), cfg["ai_rate"], device=device)
-            # pull decision probs at decision positions
-            prob_dec_focus = probs_all[:, pos, :][..., focus_ids]  # (B, N, 9)
+
+            probs_all = torch.softmax(model(x), dim=-1)   # (B, L, V)
+            pos = torch.arange(cfg["ai_rate"] - 1, x.size(1), cfg["ai_rate"], device=device)
+            prob_dec_focus = probs_all[:, pos, :][..., focus_ids]   # (B, N, 9)
 
             for i, uid in enumerate(uids):
-                probs_seq = prob_dec_focus[i].detach().cpu().numpy()  # (N, 9)
-                probs_seq = np.round(probs_seq, 6).tolist()           # list[list[float]]
-                # write predictions line if requested
-                if pred_writer:
-                    pred_writer.write(json.dumps({"uid": uid, "probs": probs_seq}) + "\n")
+                probs_seq_np = prob_dec_focus[i].detach().cpu().numpy()   # (N, 9)
 
-                lbl_info = label_dict.get(uid)
-                if lbl_info is None:
-                    reject += 1
+                # Defensive fallback if somehow no decision slots were produced
+                if probs_seq_np.shape[0] == 0:
+                    uid_to_probs[uid] = None
                     continue
 
-                L_pred, L_lbl = len(probs_seq), len(lbl_info["label"])
-                if L_pred != L_lbl:
-                    length_note["pred>lbl" if L_pred > L_lbl else "pred<label"] += 1
-                L = min(L_pred, L_lbl)
+                uid_to_probs[uid] = probs_seq_np
 
-                split_tag = which_split(uid)
-                for t in range(L):
-                    y      = lbl_info["label"][t]
-                    idx_h  = lbl_info["idx_h"][t]
-                    feat_h = lbl_info["feat_h"][t]
-                    probs  = probs_seq[t]  # length 9, corresponds to classes 1..9
+                prob_sum += probs_seq_np.sum(axis=0)
+                prob_count += probs_seq_np.shape[0]
 
-                    group = period_group(idx_h, feat_h)
-                    for task, pos_classes in BIN_TASKS.items():
-                        y_bin = int(y in TASK_POSSETS[task])
-                        # decisions are 1-indexed → probs[i-1]
-                        p_bin = sum(probs[j-1] for j in pos_classes)
-                        key   = (task, group, split_tag)
-                        scores[key]["y"].append(y_bin)
-                        scores[key]["p"].append(p_bin)
+    # ---------- Build global fallback prior ----------
+    if prob_count == 0:
+        raise RuntimeError("No valid decision-position predictions found; cannot build fallback prior.")
 
-                accept += 1
+    fallback_prob = prob_sum / prob_count
+    fallback_prob = fallback_prob / fallback_prob.sum()   # re-normalize for safety
+
+    print("[INFO] Fallback probability vector for zero-input users:")
+    print(np.round(fallback_prob, 6))
+
+    # ---------- Optional predictions writer ----------
+    pred_writer = None
+    if pred_out:
+        pred_writer = smart_open_w(pred_out)
+
+    # ---------- Pass 2: evaluate, using fallback for zero-input users ----------
+    for uid in uid_order:
+        lbl_info = label_dict.get(uid)
+        if lbl_info is None:
+            reject += 1
+            continue
+
+        probs_seq_np = uid_to_probs.get(uid, None)
+
+        if probs_seq_np is None:
+            # No usable feature-based input: use the global average decision probs
+            L_lbl = len(lbl_info["label"])
+            probs_seq_np = np.tile(fallback_prob[None, :], (L_lbl, 1))
+            fallback_users += 1
+
+        if pred_writer:
+            pred_writer.write(
+                json.dumps({"uid": uid, "probs": np.round(probs_seq_np, 6).tolist()}) + "\n"
+            )
+
+        L_pred, L_lbl = len(probs_seq_np), len(lbl_info["label"])
+        if L_pred != L_lbl:
+            length_note["pred>lbl" if L_pred > L_lbl else "pred<label"] += 1
+        L = min(L_pred, L_lbl)
+
+        split_tag = which_split(uid)
+        for t in range(L):
+            y      = lbl_info["label"][t]
+            idx_h  = lbl_info["idx_h"][t]
+            feat_h = lbl_info["feat_h"][t]
+            probs  = probs_seq_np[t]   # length 9
+
+            group = period_group(idx_h, feat_h)
+            for task, pos_classes in BIN_TASKS.items():
+                y_bin = int(y in TASK_POSSETS[task])
+                p_bin = float(sum(probs[j-1] for j in pos_classes))
+                key   = (task, group, split_tag)
+                scores[key]["y"].append(y_bin)
+                scores[key]["p"].append(p_bin)
+
+        accept += 1
 
     if pred_writer:
         pred_writer.__exit__(None, None, None)  # close the context
 
     print(f"[INFO] parsed: {accept} users accepted, {reject} users missing labels.")
+    print(f"[INFO] users evaluated with fallback prior: {fallback_users}")
     if length_note:
         print("[INFO] length mismatches:", dict(length_note))
 
