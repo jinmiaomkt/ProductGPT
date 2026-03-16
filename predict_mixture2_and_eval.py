@@ -593,7 +593,10 @@ def main():
                     all_user_probs[uid] = None
                 continue
 
-            pos = torch.arange(cfg["ai_rate"] - 1, x.size(1), cfg["ai_rate"], device=device)
+            if x.size(1) < cfg["ai_rate"]:
+                continue
+            pos       = torch.arange(cfg["ai_rate"]-1, x.size(1), cfg["ai_rate"], device=device)
+
             logits_full = model(x)
 
             if logits_full.size(1) == x.size(1):
