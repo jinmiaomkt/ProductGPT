@@ -536,7 +536,11 @@ def main():
     state = torch.load(ckpt_path, map_location=device)
     raw_sd = state["model_state_dict"] if "model_state_dict" in state else \
              state["module"]           if "module" in state           else state
-    model.load_state_dict(clean_state_dict(raw_sd), strict=False)
+    
+    sd = clean_state_dict(raw_sd)
+    sd.pop("projection.output_head.mean_alpha_buffer", None)
+
+    model.load_state_dict(sd, strict=False)
 
     # # Optional predictions writer
     # pred_writer = None
