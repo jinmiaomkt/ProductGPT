@@ -592,10 +592,12 @@ def main():
                 for uid in uids:
                     all_user_probs[uid] = None
                 continue
-            
+
             pos       = torch.arange(cfg["ai_rate"]-1, x.size(1), cfg["ai_rate"], device=device)
 
-            logits_full = model(x)
+            # logits_full = model(x)
+            user_ids = batch["user_id"].to(device)
+            logits_full = model(x, user_ids, projection_gate_mode="mean")
 
             if logits_full.size(1) == x.size(1):
                 logits = logits_full[:, pos, :]
@@ -696,82 +698,6 @@ def main():
 
     if pred_writer:
         pred_writer.__exit__(None, None, None)
-
-    # # ---------- Metric accumulators ----------
-    # scores       = defaultdict(lambda: {"y": [], "p": []})
-    # length_note  = Counter()
-    # accept = reject = 0
-    # accept_users = {"val": set(), "test": set(), "train": set()}
-    # pred_writer = smart_open_w(args.pred_out) if args.pred_out else None
-    
-    # with torch.no_grad():
-    #     for batch in loader:
-    #         x = batch["x"].to(device)
-    #         user_ids = batch["user_id"].to(device)
-    #         uids = batch["uid"]
-    #         pos = torch.arange(cfg["ai_rate"] - 1, x.size(1), cfg["ai_rate"], device=device)
-    #         if pos.numel() == 0:
-    #             continue
-
-    #         # ──────────────────────────────────────────────────
-    #         # FIX: Get hidden states + per-head logits + alpha
-    #         # ──────────────────────────────────────────────────
-    #         _, hidden = model(x, user_ids, projection_gate_mode="mean", return_hidden=True)
-
-    #         proj_result = model.projection(
-    #             hidden, user_idx=user_ids, gate_mode="mean",
-    #             return_alpha=True, return_head_logits=True,
-    #         )
-    #         _, alpha, head_logits = proj_result  # alpha:(B,H), head_logits:(B,T,H,V)
-
-    #         if head_logits.size(1) == x.size(1):
-    #             head_logits = head_logits[:, pos, :, :]
-
-    #         # ──────────────────────────────────────────────────
-    #         # FIX: Per-head correction in 9-class subspace
-    #         # ──────────────────────────────────────────────────
-    #         head_logits_dec = head_logits[..., 1:10]  # (B, Nslots, H, 9)
-    #         alpha_bt = alpha[:, None, :, None]         # (B, 1, H, 1)
-
-    #         if calibrator is not None:
-    #             mixed = (alpha_bt * head_logits_dec).sum(dim=2)
-    #             prob_dec_9 = calibrator(mixed)
-    #         elif logit_bias_9 is not None:
-    #             bias = logit_bias_9.to(device=device, dtype=head_logits_dec.dtype)
-    #             corrected = F.softmax(head_logits_dec - bias, dim=-1)
-    #             prob_dec_9 = (alpha_bt * corrected).sum(dim=2)
-    #         else:
-    #             hp_probs = F.softmax(head_logits_dec, dim=-1)
-    #             prob_dec_9 = (alpha_bt * hp_probs).sum(dim=2)
-
-    #         # prob_dec_9: (B, Nslots, 9), sums to 1
-
-    #         for i, uid in enumerate(uids):
-    #             probs_seq = prob_dec_9[i].cpu().numpy()
-    #             probs_seq = np.round(probs_seq, 6).tolist()
-    #             if pred_writer:
-    #                 pred_writer.write(json.dumps({"uid": uid, "probs": probs_seq}) + "\n")
-
-    #             lbl_info = label_dict.get(uid)
-    #             if lbl_info is None:
-    #                 reject += 1
-    #                 continue
-
-    #             L = min(len(probs_seq), len(lbl_info["label"]))
-    #             split_tag = which_split(uid)
-    #             for t in range(L):
-    #                 y = lbl_info["label"][t]
-    #                 group = period_group(lbl_info["idx_h"][t], lbl_info["feat_h"][t])
-    #                 probs = probs_seq[t]
-    #                 for task, pos_classes in BIN_TASKS.items():
-    #                     y_bin = int(y in TASK_POSSETS[task])
-    #                     p_bin = sum(probs[j-1] for j in pos_classes)
-    #                     scores[(task, group, split_tag)]["y"].append(y_bin)
-    #                     scores[(task, group, split_tag)]["p"].append(p_bin)
-    #             accept += 1
-
-    # if pred_writer:
-    #     pred_writer.__exit__(None, None, None)  # close the context
 
     print(f"[INFO] parsed: {accept} users accepted, {reject} users missing labels.")
 
