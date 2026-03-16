@@ -30,6 +30,7 @@ import pandas as pd
 import torch
 import re
 import math
+import torch.nn.functional as F
 
 from torch.utils.data import DataLoader, random_split
 from tokenizers import Tokenizer

@@ -28,6 +28,7 @@ from contextlib import nullcontext
 from pathlib import Path
 from collections import defaultdict, Counter
 from typing import List, Dict
+import torch.nn.functional as F
 
 import numpy as np
 import pandas as pd
