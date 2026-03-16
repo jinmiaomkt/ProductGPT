@@ -673,6 +673,152 @@ def infer_batch_prob_dec_9(
     return out
 
 
+def infer_prob_9_all_positions(
+    model,
+    x_1d: torch.Tensor,
+    user_id: int,
+    seen_in_train: bool,
+    device: torch.device,
+    calibration_mode: str,
+    calibrator,
+    logit_bias_9,
+):
+    """
+    Return 9-way probabilities for ALL sequence positions, shape (T, 9).
+    """
+    x = x_1d.unsqueeze(0).to(device)  # (1, T)
+    user_ids = torch.tensor([user_id], dtype=torch.long, device=device)
+
+    gate_mode = "user" if seen_in_train else "mean"
+    logits_full = forward_with_gate_mode(model, x, user_ids, gate_mode=gate_mode)
+
+    prob_all = logits_to_prob_dec_9(
+        logits_full,
+        calibration_mode=calibration_mode,
+        calibrator=calibrator,
+        logit_bias_9=logit_bias_9,
+    )[0].detach().cpu().numpy()  # (T, 9)
+
+    return prob_all
+
+
+def debug_prefix_compare(
+    ds,
+    label_dict,
+    model,
+    device,
+    cfg,
+    calibrator,
+    logit_bias_9,
+    calibration_mode: str,
+    sample_users: int = 5,
+    max_decisions_per_user: int = 3,
+):
+    print("\n=============  PREFIX DIAGNOSTIC  =======================")
+
+    shown = 0
+    for i in range(len(ds)):
+        item = ds[i]
+        uid = item["uid"]
+        x = item["x"]
+        user_id = int(item["user_id"].item())
+        seen = bool(item["seen_in_train"].item())
+
+        if len(x) < cfg["ai_rate"]:
+            continue
+
+        decision_positions = list(range(cfg["ai_rate"] - 1, len(x), cfg["ai_rate"]))
+        if len(decision_positions) == 0:
+            continue
+
+        full_prob_all = infer_prob_9_all_positions(
+            model=model,
+            x_1d=x,
+            user_id=user_id,
+            seen_in_train=seen,
+            device=device,
+            calibration_mode=calibration_mode,
+            calibrator=calibrator,
+            logit_bias_9=logit_bias_9,
+        )
+
+        print(f"\n[UID={uid}] seen_in_train={seen} seq_len={len(x)} decision_blocks={len(decision_positions)}")
+
+        n_checked = 0
+        for t, pos_t in enumerate(decision_positions):
+            if n_checked >= max_decisions_per_user:
+                break
+
+            # inclusive prefix: x[:pos_t+1]
+            x_incl = x[: pos_t + 1]
+            incl_prob_all = infer_prob_9_all_positions(
+                model=model,
+                x_1d=x_incl,
+                user_id=user_id,
+                seen_in_train=seen,
+                device=device,
+                calibration_mode=calibration_mode,
+                calibrator=calibrator,
+                logit_bias_9=logit_bias_9,
+            )
+
+            # full vs inclusive prefix at the SAME position
+            p_full_same = full_prob_all[pos_t]
+            p_incl_same = incl_prob_all[pos_t]
+
+            delta_future_l1 = float(np.abs(p_full_same - p_incl_same).sum())
+            delta_future_max = float(np.abs(p_full_same - p_incl_same).max())
+
+            # optional heuristic: x[:pos_t] vs x[:pos_t+1]
+            heuristic_msg = "heuristic_excl_vs_incl: NA"
+            if pos_t >= 1:
+                x_excl = x[:pos_t]
+                excl_prob_all = infer_prob_9_all_positions(
+                    model=model,
+                    x_1d=x_excl,
+                    user_id=user_id,
+                    seen_in_train=seen,
+                    device=device,
+                    calibration_mode=calibration_mode,
+                    calibrator=calibrator,
+                    logit_bias_9=logit_bias_9,
+                )
+                p_excl_last = excl_prob_all[-1]
+                delta_addedtoken_l1 = float(np.abs(p_excl_last - p_incl_same).sum())
+                delta_addedtoken_max = float(np.abs(p_excl_last - p_incl_same).max())
+                heuristic_msg = (
+                    f"heuristic_excl_vs_incl: "
+                    f"L1={delta_addedtoken_l1:.6g}, "
+                    f"max={delta_addedtoken_max:.6g}"
+                )
+
+            true_y = None
+            if uid in label_dict and t < len(label_dict[uid]["label"]):
+                true_y = int(label_dict[uid]["label"][t])
+
+            pred_full = int(np.argmax(p_full_same) + 1)
+            pred_incl = int(np.argmax(p_incl_same) + 1)
+
+            tok_here = int(x[pos_t].item())
+            tok_prev = int(x[pos_t - 1].item()) if pos_t >= 1 else None
+
+            print(
+                f"  t={t:02d} pos={pos_t:04d} "
+                f"true={true_y} tok_prev={tok_prev} tok_here={tok_here} "
+                f"pred_full={pred_full} pred_incl={pred_incl} "
+                f"future_delta: L1={delta_future_l1:.6g}, max={delta_future_max:.6g}; "
+                f"{heuristic_msg}"
+            )
+
+            n_checked += 1
+
+        shown += 1
+        if shown >= sample_users:
+            break
+
+    print("============================================================\n")
+
+
 # ═══════════════════════════════════════════════════════════════
 # Main
 # ═══════════════════════════════════════════════════════════════
@@ -835,6 +981,19 @@ def main():
         print(f"[INFO] logit_bias_9 = {logit_bias_9.cpu().numpy().round(4)}")
 
     print(f"[INFO] Calibration: {args.calibration}")
+
+    debug_prefix_compare(
+    ds=ds,
+    label_dict=label_dict,
+    model=model,
+    device=device,
+    cfg=cfg,
+    calibrator=calibrator,
+    logit_bias_9=logit_bias_9,
+    calibration_mode=args.calibration,
+    sample_users=5,
+    max_decisions_per_user=3,
+)
 
     # ---------- Pass 1: user-level predictions ----------
     all_user_probs = {}  # uid -> (T, 9) numpy array or None for too-short users
