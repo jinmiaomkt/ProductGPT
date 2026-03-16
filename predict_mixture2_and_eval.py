@@ -579,81 +579,198 @@ def main():
 
     # ---------- Inference + streaming eval ----------
 
-    # ---------- Metric accumulators ----------
-    scores       = defaultdict(lambda: {"y": [], "p": []})
-    length_note  = Counter()
-    accept = reject = 0
-    accept_users = {"val": set(), "test": set(), "train": set()}
-    pred_writer = smart_open_w(args.pred_out) if args.pred_out else None
+# ---------- Pass 1: Collect predictions for all valid users ----------
+    all_user_probs = {}  # uid -> (N, 9) numpy array
     
     with torch.no_grad():
         for batch in loader:
-            x = batch["x"].to(device)
-            user_ids = batch["user_id"].to(device)
+            x    = batch["x"].to(device)
             uids = batch["uid"]
-            pos = torch.arange(cfg["ai_rate"] - 1, x.size(1), cfg["ai_rate"], device=device)
-            if pos.numel() == 0:
+
+            if x.size(1) < cfg["ai_rate"]:
+                # Mark these users as needing population average
+                for uid in uids:
+                    all_user_probs[uid] = None
                 continue
 
-            # ──────────────────────────────────────────────────
-            # FIX: Get hidden states + per-head logits + alpha
-            # ──────────────────────────────────────────────────
-            _, hidden = model(x, user_ids, projection_gate_mode="mean", return_hidden=True)
+            pos = torch.arange(cfg["ai_rate"] - 1, x.size(1), cfg["ai_rate"], device=device)
+            logits_full = model(x)
 
-            proj_result = model.projection(
-                hidden, user_idx=user_ids, gate_mode="mean",
-                return_alpha=True, return_head_logits=True,
-            )
-            _, alpha, head_logits = proj_result  # alpha:(B,H), head_logits:(B,T,H,V)
-
-            if head_logits.size(1) == x.size(1):
-                head_logits = head_logits[:, pos, :, :]
-
-            # ──────────────────────────────────────────────────
-            # FIX: Per-head correction in 9-class subspace
-            # ──────────────────────────────────────────────────
-            head_logits_dec = head_logits[..., 1:10]  # (B, Nslots, H, 9)
-            alpha_bt = alpha[:, None, :, None]         # (B, 1, H, 1)
-
-            if calibrator is not None:
-                mixed = (alpha_bt * head_logits_dec).sum(dim=2)
-                prob_dec_9 = calibrator(mixed)
-            elif logit_bias_9 is not None:
-                bias = logit_bias_9.to(device=device, dtype=head_logits_dec.dtype)
-                corrected = F.softmax(head_logits_dec - bias, dim=-1)
-                prob_dec_9 = (alpha_bt * corrected).sum(dim=2)
+            if logits_full.size(1) == x.size(1):
+                logits = logits_full[:, pos, :]
             else:
-                hp_probs = F.softmax(head_logits_dec, dim=-1)
-                prob_dec_9 = (alpha_bt * hp_probs).sum(dim=2)
+                logits = logits_full
 
-            # prob_dec_9: (B, Nslots, 9), sums to 1
+            V_out = logits.size(-1)
+            if V_out == 9:
+                prob_dec_9 = torch.softmax(logits, dim=-1)
+            else:
+                probs_all = torch.softmax(logits, dim=-1)
+                prob_dec_9 = probs_all[..., 1:10]
 
             for i, uid in enumerate(uids):
-                probs_seq = prob_dec_9[i].cpu().numpy()
-                probs_seq = np.round(probs_seq, 6).tolist()
-                if pred_writer:
-                    pred_writer.write(json.dumps({"uid": uid, "probs": probs_seq}) + "\n")
+                all_user_probs[uid] = prob_dec_9[i].detach().cpu().numpy()
 
-                lbl_info = label_dict.get(uid)
-                if lbl_info is None:
-                    reject += 1
-                    continue
+    # ---------- Compute population average per time slot ----------
+    valid_probs = [v for v in all_user_probs.values() if v is not None]
+    # Users have different sequence lengths, so average per-slot across users
+    max_slots = max(v.shape[0] for v in valid_probs)
+    slot_sums = np.zeros((max_slots, 9), dtype=np.float64)
+    slot_counts = np.zeros(max_slots, dtype=np.float64)
+    for v in valid_probs:
+        n = v.shape[0]
+        slot_sums[:n] += v
+        slot_counts[:n] += 1
+    # Global average (single vector) as fallback
+    global_avg = (slot_sums.sum(axis=0) / slot_counts.sum()).astype(np.float32)
+    # Per-slot average where available
+    per_slot_avg = np.zeros((max_slots, 9), dtype=np.float32)
+    for t in range(max_slots):
+        if slot_counts[t] > 0:
+            per_slot_avg[t] = slot_sums[t] / slot_counts[t]
+        else:
+            per_slot_avg[t] = global_avg
 
-                L = min(len(probs_seq), len(lbl_info["label"]))
-                split_tag = which_split(uid)
-                for t in range(L):
-                    y = lbl_info["label"][t]
-                    group = period_group(lbl_info["idx_h"][t], lbl_info["feat_h"][t])
-                    probs = probs_seq[t]
-                    for task, pos_classes in BIN_TASKS.items():
-                        y_bin = int(y in TASK_POSSETS[task])
-                        p_bin = sum(probs[j-1] for j in pos_classes)
-                        scores[(task, group, split_tag)]["y"].append(y_bin)
-                        scores[(task, group, split_tag)]["p"].append(p_bin)
-                accept += 1
+    print(f"[INFO] Population average prob (global): {np.round(global_avg, 4)}")
+    print(f"[INFO] Users with valid input: {len(valid_probs)}, users needing average: {sum(1 for v in all_user_probs.values() if v is None)}")
+
+    # ---------- Assign population average to empty users ----------
+    for uid, v in all_user_probs.items():
+        if v is None:
+            lbl_info = label_dict.get(uid)
+            if lbl_info is not None:
+                n_labels = len(lbl_info["label"])
+                all_user_probs[uid] = np.tile(global_avg, (n_labels, 1))
+
+    # ---------- Evaluate all users ----------
+
+    scores       = defaultdict(lambda: {"y": [], "p": []})
+    multi_scores = defaultdict(lambda: {"y": [], "p": []})
+    length_note  = Counter()
+    accept = reject = 0
+    accept_users = {"val": set(), "test": set(), "train": set()}
+
+    pred_writer = smart_open_w(pred_out) if pred_out else None
+
+    for uid, probs_seq_np in all_user_probs.items():
+        if pred_writer:
+            pred_writer.write(
+                json.dumps({"uid": uid, "probs": np.round(probs_seq_np, 6).tolist()}) + "\n"
+            )
+
+        lbl_info = label_dict.get(uid)
+        if lbl_info is None:
+            reject += 1
+            continue
+
+        L_pred, L_lbl = len(probs_seq_np), len(lbl_info["label"])
+        if L_pred != L_lbl:
+            length_note["pred>lbl" if L_pred > L_lbl else "pred<label"] += 1
+        L = min(L_pred, L_lbl)
+
+        split_tag = which_split(uid)
+        accept_users.setdefault(split_tag, set()).add(uid)
+
+        for t in range(L):
+            y      = lbl_info["label"][t]
+            idx_h  = lbl_info["idx_h"][t]
+            feat_h = lbl_info["feat_h"][t]
+            probs  = probs_seq_np[t]
+
+            group = period_group(idx_h, feat_h)
+
+            if 1 <= y <= 9:
+                mkey = (group, split_tag)
+                multi_scores[mkey]["y"].append(int(y))
+                multi_scores[mkey]["p"].append(np.asarray(probs, dtype=np.float64))
+
+            for task, pos_classes in BIN_TASKS.items():
+                y_bin = int(y in TASK_POSSETS[task])
+                p_bin = sum(probs[j-1] for j in pos_classes)
+                key   = (task, group, split_tag)
+                scores[key]["y"].append(y_bin)
+                scores[key]["p"].append(p_bin)
+
+        accept += 1
 
     if pred_writer:
-        pred_writer.__exit__(None, None, None)  # close the context
+        pred_writer.__exit__(None, None, None)
+
+    # # ---------- Metric accumulators ----------
+    # scores       = defaultdict(lambda: {"y": [], "p": []})
+    # length_note  = Counter()
+    # accept = reject = 0
+    # accept_users = {"val": set(), "test": set(), "train": set()}
+    # pred_writer = smart_open_w(args.pred_out) if args.pred_out else None
+    
+    # with torch.no_grad():
+    #     for batch in loader:
+    #         x = batch["x"].to(device)
+    #         user_ids = batch["user_id"].to(device)
+    #         uids = batch["uid"]
+    #         pos = torch.arange(cfg["ai_rate"] - 1, x.size(1), cfg["ai_rate"], device=device)
+    #         if pos.numel() == 0:
+    #             continue
+
+    #         # ──────────────────────────────────────────────────
+    #         # FIX: Get hidden states + per-head logits + alpha
+    #         # ──────────────────────────────────────────────────
+    #         _, hidden = model(x, user_ids, projection_gate_mode="mean", return_hidden=True)
+
+    #         proj_result = model.projection(
+    #             hidden, user_idx=user_ids, gate_mode="mean",
+    #             return_alpha=True, return_head_logits=True,
+    #         )
+    #         _, alpha, head_logits = proj_result  # alpha:(B,H), head_logits:(B,T,H,V)
+
+    #         if head_logits.size(1) == x.size(1):
+    #             head_logits = head_logits[:, pos, :, :]
+
+    #         # ──────────────────────────────────────────────────
+    #         # FIX: Per-head correction in 9-class subspace
+    #         # ──────────────────────────────────────────────────
+    #         head_logits_dec = head_logits[..., 1:10]  # (B, Nslots, H, 9)
+    #         alpha_bt = alpha[:, None, :, None]         # (B, 1, H, 1)
+
+    #         if calibrator is not None:
+    #             mixed = (alpha_bt * head_logits_dec).sum(dim=2)
+    #             prob_dec_9 = calibrator(mixed)
+    #         elif logit_bias_9 is not None:
+    #             bias = logit_bias_9.to(device=device, dtype=head_logits_dec.dtype)
+    #             corrected = F.softmax(head_logits_dec - bias, dim=-1)
+    #             prob_dec_9 = (alpha_bt * corrected).sum(dim=2)
+    #         else:
+    #             hp_probs = F.softmax(head_logits_dec, dim=-1)
+    #             prob_dec_9 = (alpha_bt * hp_probs).sum(dim=2)
+
+    #         # prob_dec_9: (B, Nslots, 9), sums to 1
+
+    #         for i, uid in enumerate(uids):
+    #             probs_seq = prob_dec_9[i].cpu().numpy()
+    #             probs_seq = np.round(probs_seq, 6).tolist()
+    #             if pred_writer:
+    #                 pred_writer.write(json.dumps({"uid": uid, "probs": probs_seq}) + "\n")
+
+    #             lbl_info = label_dict.get(uid)
+    #             if lbl_info is None:
+    #                 reject += 1
+    #                 continue
+
+    #             L = min(len(probs_seq), len(lbl_info["label"]))
+    #             split_tag = which_split(uid)
+    #             for t in range(L):
+    #                 y = lbl_info["label"][t]
+    #                 group = period_group(lbl_info["idx_h"][t], lbl_info["feat_h"][t])
+    #                 probs = probs_seq[t]
+    #                 for task, pos_classes in BIN_TASKS.items():
+    #                     y_bin = int(y in TASK_POSSETS[task])
+    #                     p_bin = sum(probs[j-1] for j in pos_classes)
+    #                     scores[(task, group, split_tag)]["y"].append(y_bin)
+    #                     scores[(task, group, split_tag)]["p"].append(p_bin)
+    #             accept += 1
+
+    # if pred_writer:
+    #     pred_writer.__exit__(None, None, None)  # close the context
 
     print(f"[INFO] parsed: {accept} users accepted, {reject} users missing labels.")
 
