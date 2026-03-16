@@ -164,7 +164,7 @@ def main():
 
     df = pd.DataFrame(rows).sort_values("val_nll", ascending=True).reset_index(drop=True)
     # keep only recent trials
-    recent_pattern = r"_2026-03-(08|09|10|11)_"
+    recent_pattern = r"_2026-03-(12|13|14|15)_"
     df = df[df["trial_name"].str.contains(recent_pattern, regex=True, na=False)].copy()
 
     print("\n===== TOP 10 PHASE-A TRIALS BY val_nll =====")
