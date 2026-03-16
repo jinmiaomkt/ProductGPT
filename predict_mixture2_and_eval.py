@@ -117,7 +117,7 @@ def parse_args():
                 help="Training json used to reproduce Phase-B split (default: cfg['filepath'])")
     
     p.add_argument("--calibration", choices=["calibrator", "analytic", "none"], default="none")
-    
+
     # EXACT-MATCH UID overrides (local path or s3://bucket/key, one UID per line)
     p.add_argument("--uids-val",  default="", help="Text file (or s3://...) with validation UIDs, one per line")
     p.add_argument("--uids-test", default="", help="Text file (or s3://...) with test UIDs, one per line")
@@ -481,6 +481,23 @@ def main():
     # FIX: Build user-id mapping (same as training used)
     # ──────────────────────────────────────────────────────
     uid_to_index, num_users = build_uid_to_index(cfg, args.fold_spec, hp["fold_id"])
+
+    # uid_to_index, num_users = build_uid_to_index(cfg, args.fold_spec, hp["fold_id"])
+
+    # Override num_users from checkpoint to match trained embedding size
+    _tmp_state = torch.load(ckpt_path, map_location="cpu")
+    _tmp_sd = _tmp_state.get("model_state_dict", _tmp_state.get("module", _tmp_state))
+    for k, v in _tmp_sd.items():
+        if "gate.logits.weight" in k:
+            ckpt_num_users = v.shape[0]
+            if ckpt_num_users != num_users:
+                print(f"[WARN] num_users mismatch: build_uid_to_index={num_users}, checkpoint={ckpt_num_users}")
+                print(f"[INFO] Truncating uid_to_index to match checkpoint ({ckpt_num_users} users)")
+                # Keep only users with index < ckpt_num_users
+                uid_to_index = {u: idx for u, idx in uid_to_index.items() if idx < ckpt_num_users}
+                num_users = ckpt_num_users
+            break
+    del _tmp_state
 
     # ──────────────────────────────────────────────────────
     # FIX: Dataset now returns user_id
