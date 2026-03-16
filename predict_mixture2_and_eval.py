@@ -592,9 +592,7 @@ def main():
                 for uid in uids:
                     all_user_probs[uid] = None
                 continue
-
-            if x.size(1) < cfg["ai_rate"]:
-                continue
+            
             pos       = torch.arange(cfg["ai_rate"]-1, x.size(1), cfg["ai_rate"], device=device)
 
             logits_full = model(x)

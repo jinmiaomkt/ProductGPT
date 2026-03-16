@@ -292,6 +292,9 @@ def main():
             uids = batch["uid"]
             # logits -> probs
             probs_all = torch.softmax(model(x), dim=-1)         # (B, L, V)
+            
+            if x.size(1) < cfg["ai_rate"]:
+                continue
             pos       = torch.arange(cfg["ai_rate"]-1, x.size(1), cfg["ai_rate"], device=device)
             # pull decision probs at decision positions
             prob_dec_focus = probs_all[:, pos, :][..., focus_ids]  # (B, N, 9)
