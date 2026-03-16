@@ -45,11 +45,10 @@ from torch.utils.data import DataLoader, random_split
 from config4 import get_config
 from dataset4_productgpt import load_json_dataset
 from model4_mixture2_decoderonly_feature_performer import build_transformer
-from train1_decision_only_performer_aws import JsonLineDataset, _build_tok, _ensure_jsonl
+from train4_decoderonly_performer_feature_aws import JsonLineDataset, _build_tok, _ensure_jsonl
 
 # Optional: silence Intel/LLVM OpenMP clash on macOS
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
-
 
 # ═══════════════════════════════════════════════════════════════
 # Calibration helper
@@ -162,7 +161,6 @@ def smart_open_w(path: str | Path):
         return gzip.open(path, "wt")
     return open(path, "w")
 
-
 def normalize_uid(uid) -> str:
     if uid is None:
         return ""
@@ -171,10 +169,8 @@ def normalize_uid(uid) -> str:
         return "|".join(sorted(vals)) if vals else ""
     return str(uid)
 
-
 def flat_uid(u):
     return str(u[0] if isinstance(u, list) else u)
-
 
 def to_int_vec(x):
     if isinstance(x, str):
@@ -185,6 +181,29 @@ def to_int_vec(x):
             out.extend(int(v) if isinstance(item, str) else item for v in str(item).split())
         return out
     raise TypeError(type(x))
+
+def save_checkpoint_with_uid_map(
+    ckpt_path: str,
+    model,
+    optimizer,
+    epoch: int,
+    global_step: int,
+    uid_to_index: dict,
+    fold_id: int,
+    extra_state: dict | None = None,
+):
+    payload = {
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict() if optimizer is not None else None,
+        "epoch": int(epoch),
+        "global_step": int(global_step),
+        "uid_to_index": {str(k): int(v) for k, v in uid_to_index.items()},
+        "num_users": int(len(uid_to_index) + 1),   # +1 for UNK=0
+        "fold_id": int(fold_id),
+    }
+    if extra_state:
+        payload.update(extra_state)
+    torch.save(payload, ckpt_path)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -721,122 +740,6 @@ def infer_prob_9_all_positions(
     )[0].detach().cpu().numpy()  # (T, 9)
 
     return prob_all
-
-# def debug_prefix_compare(
-#     ds,
-#     label_dict,
-#     model,
-#     device,
-#     cfg,
-#     calibrator,
-#     logit_bias_9,
-#     calibration_mode: str,
-#     sample_users: int = 5,
-#     max_decisions_per_user: int = 3,
-# ):
-#     print("\n=============  PREFIX DIAGNOSTIC  =======================")
-
-#     shown = 0
-#     for i in range(len(ds)):
-#         item = ds[i]
-#         uid = item["uid"]
-#         x = item["x"]
-#         user_id = int(item["user_id"].item())
-#         seen = bool(item["seen_in_train"].item())
-
-#         if len(x) < cfg["ai_rate"]:
-#             continue
-
-#         decision_positions = list(range(cfg["ai_rate"] - 1, len(x), cfg["ai_rate"]))
-#         if len(decision_positions) == 0:
-#             continue
-
-#         full_prob_all = infer_prob_9_all_positions(
-#             model=model,
-#             x_1d=x,
-#             user_id=user_id,
-#             seen_in_train=seen,
-#             device=device,
-#             calibration_mode=calibration_mode,
-#             calibrator=calibrator,
-#             logit_bias_9=logit_bias_9,
-#         )
-
-#         print(f"\n[UID={uid}] seen_in_train={seen} seq_len={len(x)} decision_blocks={len(decision_positions)}")
-
-#         n_checked = 0
-#         for t, pos_t in enumerate(decision_positions):
-#             if n_checked >= max_decisions_per_user:
-#                 break
-
-#             # inclusive prefix: x[:pos_t+1]
-#             x_incl = x[: pos_t + 1]
-#             incl_prob_all = infer_prob_9_all_positions(
-#                 model=model,
-#                 x_1d=x_incl,
-#                 user_id=user_id,
-#                 seen_in_train=seen,
-#                 device=device,
-#                 calibration_mode=calibration_mode,
-#                 calibrator=calibrator,
-#                 logit_bias_9=logit_bias_9,
-#             )
-
-#             # full vs inclusive prefix at the SAME position
-#             p_full_same = full_prob_all[pos_t]
-#             p_incl_same = incl_prob_all[pos_t]
-
-#             delta_future_l1 = float(np.abs(p_full_same - p_incl_same).sum())
-#             delta_future_max = float(np.abs(p_full_same - p_incl_same).max())
-
-#             # optional heuristic: x[:pos_t] vs x[:pos_t+1]
-#             heuristic_msg = "heuristic_excl_vs_incl: NA"
-#             if pos_t >= 1:
-#                 x_excl = x[:pos_t]
-#                 excl_prob_all = infer_prob_9_all_positions(
-#                     model=model,
-#                     x_1d=x_excl,
-#                     user_id=user_id,
-#                     seen_in_train=seen,
-#                     device=device,
-#                     calibration_mode=calibration_mode,
-#                     calibrator=calibrator,
-#                     logit_bias_9=logit_bias_9,
-#                 )
-#                 p_excl_last = excl_prob_all[-1]
-#                 delta_addedtoken_l1 = float(np.abs(p_excl_last - p_incl_same).sum())
-#                 delta_addedtoken_max = float(np.abs(p_excl_last - p_incl_same).max())
-#                 heuristic_msg = (
-#                     f"heuristic_excl_vs_incl: "
-#                     f"L1={delta_addedtoken_l1:.6g}, "
-#                     f"max={delta_addedtoken_max:.6g}"
-#                 )
-
-#             true_y = None
-#             if uid in label_dict and t < len(label_dict[uid]["label"]):
-#                 true_y = int(label_dict[uid]["label"][t])
-
-#             pred_full = int(np.argmax(p_full_same) + 1)
-#             pred_incl = int(np.argmax(p_incl_same) + 1)
-
-#             tok_here = int(x[pos_t].item())
-#             tok_prev = int(x[pos_t - 1].item()) if pos_t >= 1 else None
-
-#             print(
-#                 f"  t={t:02d} pos={pos_t:04d} "
-#                 f"true={true_y} tok_prev={tok_prev} tok_here={tok_here} "
-#                 f"pred_full={pred_full} pred_incl={pred_incl} "
-#                 f"future_delta: L1={delta_future_l1:.6g}, max={delta_future_max:.6g}; "
-#                 f"{heuristic_msg}"
-#             )
-
-#             n_checked += 1
-
-#         shown += 1
-#         if shown >= sample_users:
-#             break
-
-#     print("============================================================\n")
 
 # ═══════════════════════════════════════════════════════════════
 # Main
