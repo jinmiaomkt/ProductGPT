@@ -691,7 +691,6 @@ def main():
                 L = min(L_pred, L_lbl)
 
                 # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
-                ── Systematic check: are mismatch users concentrated in a split? ──
                 print("\n[DEBUG] pred>lbl breakdown by split:")
                 for spl in ["val", "test", "train"]:
                     n_mismatch = sum(
