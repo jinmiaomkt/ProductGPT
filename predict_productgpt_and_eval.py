@@ -660,46 +660,60 @@ def main():
                 debug_count = 0
 
                 # inside the per-user loop, replace the existing length check:
+                # if L_pred != L_lbl:
+                #     direction = "pred>lbl" if L_pred > L_lbl else "pred<label"
+                #     length_note[direction] += 1
+
+                #     if direction == "pred>lbl" and debug_count < DEBUG_LIMIT:
+                #         # recover raw token count for this user
+                #         seq_raw = [r for r in ds.rows if flat_uid(r["uid"]) == uid]
+                #         if seq_raw:
+                #             feat_str = seq_raw[0]["AggregateInput"]
+                #             if isinstance(feat_str, list):
+                #                 feat_str = feat_str[0] if len(feat_str) == 1 else " ".join(map(str, feat_str))
+                #             n_toks = len(str(feat_str).strip().split())
+                #         else:
+                #             n_toks = -1
+
+                #         print(
+                #             f"[DEBUG pred>lbl] uid={uid} | "
+                #             f"n_tokens={n_toks} | "
+                #             f"seq_len_ai={cfg['seq_len_ai']} | "
+                #             f"L_pred={L_pred} | L_lbl={L_lbl} | "
+                #             f"excess_slots={L_pred - L_lbl} | "
+                #             f"excess_tokens={(L_pred - L_lbl) * cfg['ai_rate']}"
+                #         )
+                #         debug_count += 1
+
                 if L_pred != L_lbl:
                     direction = "pred>lbl" if L_pred > L_lbl else "pred<label"
                     length_note[direction] += 1
 
                     if direction == "pred>lbl" and debug_count < DEBUG_LIMIT:
-                        # recover raw token count for this user
-                        seq_raw = [r for r in ds.rows if flat_uid(r["uid"]) == uid]
-                        if seq_raw:
-                            feat_str = seq_raw[0]["AggregateInput"]
-                            if isinstance(feat_str, list):
-                                feat_str = feat_str[0] if len(feat_str) == 1 else " ".join(map(str, feat_str))
-                            n_toks = len(str(feat_str).strip().split())
-                        else:
-                            n_toks = -1
-
+                        # x is still in scope — use the batch tensor directly
+                        # find this user's index in the current batch
+                        batch_idx = uids.index(uid)
+                        n_toks = int((batch["x"][batch_idx] != pad_id).sum().item())
                         print(
                             f"[DEBUG pred>lbl] uid={uid} | "
-                            f"n_tokens={n_toks} | "
-                            f"seq_len_ai={cfg['seq_len_ai']} | "
+                            f"n_nonpad_tokens={n_toks} | "
+                            f"x.size(1)={x.size(1)} | "
+                            f"seq_len_tgt={cfg['seq_len_tgt']} | "
+                            f"ai_rate={cfg['ai_rate']} | "
+                            f"seq_len_ai={cfg.get('seq_len_ai', cfg['seq_len_tgt']*cfg['ai_rate'])} | "
                             f"L_pred={L_pred} | L_lbl={L_lbl} | "
                             f"excess_slots={L_pred - L_lbl} | "
                             f"excess_tokens={(L_pred - L_lbl) * cfg['ai_rate']}"
                         )
                         debug_count += 1
+
+                uid_to_pred_len[uid] = L_pred
+                uid_to_lbl_len[uid]  = L_lbl
          #       ── DEBUG: inspect pred>lbl mismatches ─────────────────────
 
                 if L_pred != L_lbl:
                     length_note["pred>lbl" if L_pred > L_lbl else "pred<label"] += 1
                 L = min(L_pred, L_lbl)
-
-                # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
-                print("\n[DEBUG] pred>lbl breakdown by split:")
-                for spl in ["val", "test", "train"]:
-                    n_mismatch = sum(
-                        1 for uid in accept_users.get(spl, set())
-                        if uid in uid_to_lbl_len  # see below
-                        and uid_to_pred_len.get(uid, 0) > uid_to_lbl_len[uid]
-                    )
-                    print(f"  {spl}: {n_mismatch} / {len(accept_users.get(spl, set()))}")
-                # # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
 
                 split_tag = which_split(uid)
                 accept_users.setdefault(split_tag, set()).add(uid)
@@ -726,6 +740,32 @@ def main():
                         scores[key]["p"].append(p_bin)
 
                 accept += 1
+
+    # ← this is AFTER the `with torch.no_grad():` block ends
+    print(f"[INFO] parsed: {accept} users accepted, {reject} users missing labels.")
+    if length_note:
+        print("[INFO] length mismatches:", dict(length_note))
+
+    # NOW the split breakdown is valid
+    print("\n[DEBUG] pred>lbl breakdown by split:")
+    for spl in ["val", "test", "train"]:
+        users_in_split = accept_users.get(spl, set())
+        n_mismatch = sum(
+            1 for uid in users_in_split
+            if uid_to_pred_len.get(uid, 0) > uid_to_lbl_len.get(uid, 0)
+        )
+        print(f"  {spl}: {n_mismatch} mismatch / {len(users_in_split)} total users")
+
+    # Also print the distribution of excess slots for mismatched users
+    excess = [
+        uid_to_pred_len[uid] - uid_to_lbl_len[uid]
+        for uid in uid_to_pred_len
+        if uid_to_pred_len[uid] > uid_to_lbl_len.get(uid, 0)
+    ]
+    if excess:
+        import statistics
+        print(f"[DEBUG] excess slots — min={min(excess)} max={max(excess)} "
+            f"mean={statistics.mean(excess):.1f} median={statistics.median(excess):.1f}")
 
     if pred_writer:
         pred_writer.__exit__(None, None, None)  # close the context
