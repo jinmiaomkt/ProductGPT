@@ -92,7 +92,6 @@ class VectorScaling(torch.nn.Module):
     def forward(self, logits_dec: torch.Tensor) -> torch.Tensor:
         return F.softmax(self.a * logits_dec + self.b, dim=-1)
 
-
 def load_calibrator(ckpt_path: Path, device: torch.device) -> VectorScaling | None:
     """
     Look for a calibrator file alongside the checkpoint.
@@ -117,6 +116,16 @@ def load_calibrator(ckpt_path: Path, device: torch.device) -> VectorScaling | No
     print(f"[INFO]   b = {cal.b.data.cpu().numpy().round(4)}")
     return cal
 
+def collate_fn(pad_id: int):
+    def _inner(batch):
+        uids = [b["uid"] for b in batch]
+        lens = [len(b["x"]) for b in batch]
+        Lmax = max(lens)
+        X    = torch.full((len(batch), Lmax), pad_id, dtype=torch.long)
+        for i,(item,L) in enumerate(zip(batch,lens)):
+            X[i,:L] = item["x"]
+        return {"uid": uids, "x": X, "lens": lens}  # ← return lens
+    return _inner
 
 # ===================== CLI ======================
 def parse_args():
@@ -655,109 +664,150 @@ def main():
                     reject += 1
                     continue
 
-                # L_pred, L_lbl = len(probs_seq), len(lbl_info["label"])
-                # L_pred, L_lbl = len(probs_seq_np), len(lbl_info["label"])
 
-                # # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
-                # uid_to_pred_len[uid] = L_pred
-                # uid_to_lbl_len[uid]  = L_lbl
-                # DEBUG_LIMIT = 10
-                # debug_count = 0
+            # ── inside the per-batch loop, after computing prob_dec_focus ──────────────
+            lens = batch["lens"]  # actual (unpadded) token lengths per user
 
-                # if L_pred != L_lbl:
-                #     direction = "pred>lbl" if L_pred > L_lbl else "pred<label"
-                #     length_note[direction] += 1
+            for i, uid in enumerate(uids):
 
-                #     if direction == "pred>lbl" and debug_count < DEBUG_LIMIT:
-                #         # x is still in scope — use the batch tensor directly
-                #         # find this user's index in the current batch
-                #         batch_idx = uids.index(uid)
-                #         n_toks = int((batch["x"][batch_idx] != pad_id).sum().item())
-                #         print(
-                #             f"[DEBUG pred>lbl] uid={uid} | "
-                #             f"n_nonpad_tokens={n_toks} | "
-                #             f"x.size(1)={x.size(1)} | "
-                #             f"seq_len_tgt={cfg['seq_len_tgt']} | "
-                #             f"ai_rate={cfg['ai_rate']} | "
-                #             f"seq_len_ai={cfg.get('seq_len_ai', cfg['seq_len_tgt']*cfg['ai_rate'])} | "
-                #             f"L_pred={L_pred} | L_lbl={L_lbl} | "
-                #             f"excess_slots={L_pred - L_lbl} | "
-                #             f"excess_tokens={(L_pred - L_lbl) * cfg['ai_rate']}"
-                #         )
-                #         debug_count += 1
+                # ── 1. Slice to valid slots only (no ghost PAD predictions) ────────────
+                actual_len_i    = lens[i]
+                n_valid_slots_i = actual_len_i // cfg["ai_rate"]
+                probs_seq_np    = prob_dec_focus[i, :n_valid_slots_i].detach().cpu().numpy()  # (N, 9)
 
-            L_pred, L_lbl = len(probs_seq_np), len(lbl_info["label"])
+                if pred_writer:
+                    pred_writer.write(
+                        json.dumps({"uid": uid, "probs": np.round(probs_seq_np, 6).tolist()}) + "\n"
+                    )
 
-            if L_pred != L_lbl:
-                direction = "pred>lbl" if L_pred > L_lbl else "pred<label"
-                length_note[direction] += 1
+                lbl_info = label_dict.get(uid)
+                if lbl_info is None:
+                    reject += 1
+                    continue
 
-            L = min(L_pred, L_lbl)
-
-            # CRITICAL: align to the END, not the beginning.
-            # Model input is the most recent window → predictions correspond
-            # to the last L time steps of the label sequence.
-            lbl_offset = L_lbl - L   # 0 if L_pred >= L_lbl (no offset needed)
-                                    # >0 if pred<label (skip the early labels)
-
-            split_tag = which_split(uid)
-            accept_users.setdefault(split_tag, set()).add(uid)
-
-            for t in range(L):
-                lbl_t  = lbl_offset + t                        # aligned label index
-                y      = lbl_info["label"][lbl_t]
-                idx_h  = lbl_info["idx_h"][lbl_t]
-                feat_h = lbl_info["feat_h"][lbl_t]
-                probs  = probs_seq_np[t]
-
-                group = period_group(idx_h, feat_h)
-
-                if 1 <= y <= 9:
-                    mkey = (group, split_tag)
-                    multi_scores[mkey]["y"].append(int(y))
-                    multi_scores[mkey]["p"].append(np.asarray(probs, dtype=np.float64))
-
-                for task, pos_classes in BIN_TASKS.items():
-                    y_bin = int(y in TASK_POSSETS[task])
-                    p_bin = sum(probs[j-1] for j in pos_classes)
-                    key   = (task, group, split_tag)
-                    scores[key]["y"].append(y_bin)
-                    scores[key]["p"].append(p_bin)
-
+                L_pred = len(probs_seq_np)
+                L_lbl  = len(lbl_info["label"])
                 uid_to_pred_len[uid] = L_pred
                 uid_to_lbl_len[uid]  = L_lbl
 
-         #       ── DEBUG: inspect pred>lbl mismatches ─────────────────────
-
                 if L_pred != L_lbl:
                     length_note["pred>lbl" if L_pred > L_lbl else "pred<label"] += 1
-                L = min(L_pred, L_lbl)
+
+                L          = min(L_pred, L_lbl)
+                lbl_offset = L_lbl - L   # align to END: predictions cover the most recent L steps
+
+                # ── 2. Build aligned numpy arrays for this user ─────────────────────────
+                y_arr      = np.asarray(lbl_info["label"][lbl_offset : lbl_offset + L], dtype=np.int64)
+                idx_h_arr  = np.asarray(lbl_info["idx_h"] [lbl_offset : lbl_offset + L], dtype=np.int64)
+                feat_h_arr = np.asarray(lbl_info["feat_h"][lbl_offset : lbl_offset + L], dtype=np.int64)
+                p_arr      = probs_seq_np[:L]   # (L, 9)
+
+                # ── 3. Vectorised group assignment ──────────────────────────────────────
+                # Calibration=0, HoldoutA=1, HoldoutB=2  (mirrors period_group())
+                group_idx = np.where(
+                    feat_h_arr == 0, 0,
+                    np.where((feat_h_arr == 1) & (idx_h_arr == 0), 1, 2)
+                )
 
                 split_tag = which_split(uid)
                 accept_users.setdefault(split_tag, set()).add(uid)
-                for t in range(L):
-                    y      = lbl_info["label"][t]
-                    idx_h  = lbl_info["idx_h"][t]
-                    feat_h = lbl_info["feat_h"][t]
-                    # probs  = probs_seq[t]  # length 9, corresponds to classes 1..9
-                    probs = probs_seq_np[t]   # raw 9-class probabilities
-                    
-                    group = period_group(idx_h, feat_h)
 
-                    if 1 <= y <= 9:
-                        mkey = (group, split_tag)
-                        multi_scores[mkey]["y"].append(int(y))
-                        multi_scores[mkey]["p"].append(np.asarray(probs, dtype=np.float64))
+                # ── 4. Multiclass scores (vectorised per group) ─────────────────────────
+                valid_mask = (y_arr >= 1) & (y_arr <= 9)
+                for g_idx, g_name in enumerate(GROUP_ORDER):
+                    mask = valid_mask & (group_idx == g_idx)
+                    if not mask.any():
+                        continue
+                    mkey = (g_name, split_tag)
+                    multi_scores[mkey]["y"].extend(y_arr[mask].tolist())
+                    multi_scores[mkey]["p"].extend(p_arr[mask])          # list of (9,) arrays → vstack later
 
-                    for task, pos_classes in BIN_TASKS.items():
-                        y_bin = int(y in TASK_POSSETS[task])
-                        # decisions are 1-indexed → probs[j-1]
-                        p_bin = sum(probs[j-1] for j in pos_classes)
-                        key   = (task, group, split_tag)
-                        scores[key]["y"].append(y_bin)
-                        scores[key]["p"].append(p_bin)
+                # ── 5. Binary task scores (vectorised per task × group) ─────────────────
+                for task, pos_classes in BIN_TASKS.items():
+                    y_bin  = np.isin(y_arr, list(TASK_POSSETS[task])).astype(np.int8)   # (L,)
+                    col_idx = [j - 1 for j in pos_classes]
+                    p_bin   = p_arr[:, col_idx].sum(axis=1)                              # (L,)
+
+                    for g_idx, g_name in enumerate(GROUP_ORDER):
+                        mask = (group_idx == g_idx)
+                        if not mask.any():
+                            continue
+                        key = (task, g_name, split_tag)
+                        scores[key]["y"].extend(y_bin[mask].tolist())
+                        scores[key]["p"].extend(p_bin[mask].tolist())
 
                 accept += 1
+                
+            # L_pred, L_lbl = len(probs_seq_np), len(lbl_info["label"])
+
+            # if L_pred != L_lbl:
+            #     direction = "pred>lbl" if L_pred > L_lbl else "pred<label"
+            #     length_note[direction] += 1
+
+            # L = min(L_pred, L_lbl)
+
+            # # CRITICAL: align to the END, not the beginning.
+            # # Model input is the most recent window → predictions correspond
+            # # to the last L time steps of the label sequence.
+            # lbl_offset = L_lbl - L   # 0 if L_pred >= L_lbl (no offset needed)
+            #                         # >0 if pred<label (skip the early labels)
+
+            # split_tag = which_split(uid)
+            # accept_users.setdefault(split_tag, set()).add(uid)
+
+            # for t in range(L):
+            #     lbl_t  = lbl_offset + t                        # aligned label index
+            #     y      = lbl_info["label"][lbl_t]
+            #     idx_h  = lbl_info["idx_h"][lbl_t]
+            #     feat_h = lbl_info["feat_h"][lbl_t]
+            #     probs  = probs_seq_np[t]
+
+            #     group = period_group(idx_h, feat_h)
+
+            #     if 1 <= y <= 9:
+            #         mkey = (group, split_tag)
+            #         multi_scores[mkey]["y"].append(int(y))
+            #         multi_scores[mkey]["p"].append(np.asarray(probs, dtype=np.float64))
+
+            #     for task, pos_classes in BIN_TASKS.items():
+            #         y_bin = int(y in TASK_POSSETS[task])
+            #         p_bin = sum(probs[j-1] for j in pos_classes)
+            #         key   = (task, group, split_tag)
+            #         scores[key]["y"].append(y_bin)
+            #         scores[key]["p"].append(p_bin)
+
+            #     uid_to_pred_len[uid] = L_pred
+            #     uid_to_lbl_len[uid]  = L_lbl
+
+            #     if L_pred != L_lbl:
+            #         length_note["pred>lbl" if L_pred > L_lbl else "pred<label"] += 1
+            #     L = min(L_pred, L_lbl)
+
+            #     split_tag = which_split(uid)
+            #     accept_users.setdefault(split_tag, set()).add(uid)
+            #     for t in range(L):
+            #         y      = lbl_info["label"][t]
+            #         idx_h  = lbl_info["idx_h"][t]
+            #         feat_h = lbl_info["feat_h"][t]
+            #         # probs  = probs_seq[t]  # length 9, corresponds to classes 1..9
+            #         probs = probs_seq_np[t]   # raw 9-class probabilities
+                    
+            #         group = period_group(idx_h, feat_h)
+
+            #         if 1 <= y <= 9:
+            #             mkey = (group, split_tag)
+            #             multi_scores[mkey]["y"].append(int(y))
+            #             multi_scores[mkey]["p"].append(np.asarray(probs, dtype=np.float64))
+
+            #         for task, pos_classes in BIN_TASKS.items():
+            #             y_bin = int(y in TASK_POSSETS[task])
+            #             # decisions are 1-indexed → probs[j-1]
+            #             p_bin = sum(probs[j-1] for j in pos_classes)
+            #             key   = (task, group, split_tag)
+            #             scores[key]["y"].append(y_bin)
+            #             scores[key]["p"].append(p_bin)
+
+            #     accept += 1
 
     # After inference, print group distribution before and after fix
     print("\n[DEBUG] group distribution in scored samples:")
