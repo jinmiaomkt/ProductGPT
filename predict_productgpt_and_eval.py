@@ -656,64 +656,77 @@ def main():
                     continue
 
                 # L_pred, L_lbl = len(probs_seq), len(lbl_info["label"])
-                L_pred, L_lbl = len(probs_seq_np), len(lbl_info["label"])
+                # L_pred, L_lbl = len(probs_seq_np), len(lbl_info["label"])
 
-                # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
-                uid_to_pred_len[uid] = L_pred
-                uid_to_lbl_len[uid]  = L_lbl
-                DEBUG_LIMIT = 10
-                debug_count = 0
+                # # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
+                # uid_to_pred_len[uid] = L_pred
+                # uid_to_lbl_len[uid]  = L_lbl
+                # DEBUG_LIMIT = 10
+                # debug_count = 0
 
-                # inside the per-user loop, replace the existing length check:
                 # if L_pred != L_lbl:
                 #     direction = "pred>lbl" if L_pred > L_lbl else "pred<label"
                 #     length_note[direction] += 1
 
                 #     if direction == "pred>lbl" and debug_count < DEBUG_LIMIT:
-                #         # recover raw token count for this user
-                #         seq_raw = [r for r in ds.rows if flat_uid(r["uid"]) == uid]
-                #         if seq_raw:
-                #             feat_str = seq_raw[0]["AggregateInput"]
-                #             if isinstance(feat_str, list):
-                #                 feat_str = feat_str[0] if len(feat_str) == 1 else " ".join(map(str, feat_str))
-                #             n_toks = len(str(feat_str).strip().split())
-                #         else:
-                #             n_toks = -1
-
+                #         # x is still in scope — use the batch tensor directly
+                #         # find this user's index in the current batch
+                #         batch_idx = uids.index(uid)
+                #         n_toks = int((batch["x"][batch_idx] != pad_id).sum().item())
                 #         print(
                 #             f"[DEBUG pred>lbl] uid={uid} | "
-                #             f"n_tokens={n_toks} | "
-                #             f"seq_len_ai={cfg['seq_len_ai']} | "
+                #             f"n_nonpad_tokens={n_toks} | "
+                #             f"x.size(1)={x.size(1)} | "
+                #             f"seq_len_tgt={cfg['seq_len_tgt']} | "
+                #             f"ai_rate={cfg['ai_rate']} | "
+                #             f"seq_len_ai={cfg.get('seq_len_ai', cfg['seq_len_tgt']*cfg['ai_rate'])} | "
                 #             f"L_pred={L_pred} | L_lbl={L_lbl} | "
                 #             f"excess_slots={L_pred - L_lbl} | "
                 #             f"excess_tokens={(L_pred - L_lbl) * cfg['ai_rate']}"
                 #         )
                 #         debug_count += 1
 
-                if L_pred != L_lbl:
-                    direction = "pred>lbl" if L_pred > L_lbl else "pred<label"
-                    length_note[direction] += 1
+            L_pred, L_lbl = len(probs_seq_np), len(lbl_info["label"])
 
-                    if direction == "pred>lbl" and debug_count < DEBUG_LIMIT:
-                        # x is still in scope — use the batch tensor directly
-                        # find this user's index in the current batch
-                        batch_idx = uids.index(uid)
-                        n_toks = int((batch["x"][batch_idx] != pad_id).sum().item())
-                        print(
-                            f"[DEBUG pred>lbl] uid={uid} | "
-                            f"n_nonpad_tokens={n_toks} | "
-                            f"x.size(1)={x.size(1)} | "
-                            f"seq_len_tgt={cfg['seq_len_tgt']} | "
-                            f"ai_rate={cfg['ai_rate']} | "
-                            f"seq_len_ai={cfg.get('seq_len_ai', cfg['seq_len_tgt']*cfg['ai_rate'])} | "
-                            f"L_pred={L_pred} | L_lbl={L_lbl} | "
-                            f"excess_slots={L_pred - L_lbl} | "
-                            f"excess_tokens={(L_pred - L_lbl) * cfg['ai_rate']}"
-                        )
-                        debug_count += 1
+            if L_pred != L_lbl:
+                direction = "pred>lbl" if L_pred > L_lbl else "pred<label"
+                length_note[direction] += 1
+
+            L = min(L_pred, L_lbl)
+
+            # CRITICAL: align to the END, not the beginning.
+            # Model input is the most recent window → predictions correspond
+            # to the last L time steps of the label sequence.
+            lbl_offset = L_lbl - L   # 0 if L_pred >= L_lbl (no offset needed)
+                                    # >0 if pred<label (skip the early labels)
+
+            split_tag = which_split(uid)
+            accept_users.setdefault(split_tag, set()).add(uid)
+
+            for t in range(L):
+                lbl_t  = lbl_offset + t                        # aligned label index
+                y      = lbl_info["label"][lbl_t]
+                idx_h  = lbl_info["idx_h"][lbl_t]
+                feat_h = lbl_info["feat_h"][lbl_t]
+                probs  = probs_seq_np[t]
+
+                group = period_group(idx_h, feat_h)
+
+                if 1 <= y <= 9:
+                    mkey = (group, split_tag)
+                    multi_scores[mkey]["y"].append(int(y))
+                    multi_scores[mkey]["p"].append(np.asarray(probs, dtype=np.float64))
+
+                for task, pos_classes in BIN_TASKS.items():
+                    y_bin = int(y in TASK_POSSETS[task])
+                    p_bin = sum(probs[j-1] for j in pos_classes)
+                    key   = (task, group, split_tag)
+                    scores[key]["y"].append(y_bin)
+                    scores[key]["p"].append(p_bin)
 
                 uid_to_pred_len[uid] = L_pred
                 uid_to_lbl_len[uid]  = L_lbl
+
          #       ── DEBUG: inspect pred>lbl mismatches ─────────────────────
 
                 if L_pred != L_lbl:
@@ -745,6 +758,13 @@ def main():
                         scores[key]["p"].append(p_bin)
 
                 accept += 1
+
+    # After inference, print group distribution before and after fix
+    print("\n[DEBUG] group distribution in scored samples:")
+    for grp in GROUP_ORDER:
+        for spl in ["val", "test"]:
+            n = len(scores[("BuyOne", grp, spl)]["y"])
+            print(f"  BuyOne | {grp} | {spl}: {n} samples")
 
     # ← this is AFTER the `with torch.no_grad():` block ends
     print(f"[INFO] parsed: {accept} users accepted, {reject} users missing labels.")
