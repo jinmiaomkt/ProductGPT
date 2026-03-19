@@ -637,8 +637,13 @@ def main():
             prob_dec_focus = prob_dec_9
 
             for i, uid in enumerate(uids):
-                probs_seq_np = prob_dec_focus[i].detach().cpu().numpy()   
+                # probs_seq_np = prob_dec_focus[i].detach().cpu().numpy()   
                 # (N, 9), keep raw for metrics
+
+                # Clamp to actual non-pad tokens only
+                actual_len_i   = int((x[i] != pad_id).sum().item())
+                n_valid_slots_i = actual_len_i // cfg["ai_rate"]
+                probs_seq_np   = prob_dec_focus[i, :n_valid_slots_i].detach().cpu().numpy()
 
                 if pred_writer:
                     pred_writer.write(
