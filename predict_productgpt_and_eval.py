@@ -640,11 +640,6 @@ def main():
                 probs_seq_np = prob_dec_focus[i].detach().cpu().numpy()   
                 # (N, 9), keep raw for metrics
 
-                # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
-                uid_to_pred_len[uid] = L_pred
-                uid_to_lbl_len[uid]  = L_lbl
-                # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
-
                 if pred_writer:
                     pred_writer.write(
                         json.dumps({"uid": uid, "probs": np.round(probs_seq_np, 6).tolist()}) + "\n"
@@ -657,6 +652,11 @@ def main():
 
                 # L_pred, L_lbl = len(probs_seq), len(lbl_info["label"])
                 L_pred, L_lbl = len(probs_seq_np), len(lbl_info["label"])
+
+                # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
+                uid_to_pred_len[uid] = L_pred
+                uid_to_lbl_len[uid]  = L_lbl
+                # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
 
                 # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
                 DEBUG_LIMIT = 10
