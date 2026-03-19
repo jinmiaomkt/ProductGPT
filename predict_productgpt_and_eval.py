@@ -10,7 +10,7 @@ End-to-end:
 
 Usage (example):
 python3 predict_productgpt_and_eval.py \
-  --data /home/ec2-user/data/clean_list_int_wide4_simple6_FeatureBasedTrain.json \
+  --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
   --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
   --ckpt /path/to/FullProductGPT_featurebased_performerfeatures32_dmodel96_ff192_N3_heads4_lr..._w4_fold0.pt \
   --feat-xlsx /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx \

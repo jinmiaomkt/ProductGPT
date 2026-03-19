@@ -124,13 +124,6 @@ def trainable_ray(config: dict):
 def main():
     ray.init(ignore_reinit_error=True)
 
-    # ---- Valid (d_model, heads) combos to satisfy divisibility + head_dim>=16 ----
-    # valid_dm_heads = []
-    # for dm in [32, 48, 64:
-    #     for h in [3, 4, 5, 6]:
-    #         if dm % h == 0 and (dm // h) >= 16:
-    #             valid_dm_heads.append((dm, h))
-
     valid_dm_heads = [(64, 4), (72, 4), (72, 6), (96, 4), (96, 6), (96, 8)]
     
     # ---- Search space (Ray handles sampling) ----
