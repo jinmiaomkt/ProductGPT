@@ -76,7 +76,7 @@ def parse_hp_from_ckpt_name(ckpt_path: Path) -> dict:
 # --- Project imports (must exist in your repo) ---
 from config4 import get_config
 from model4_decoderonly_feature_performer import build_transformer
-from train1_decision_only_performer_aws import _ensure_jsonl, JsonLineDataset, _build_tok
+from train4_decoderonly_performer_feature_aws import _ensure_jsonl, JsonLineDataset, _build_tok
 
 # Optional: silence Intel/LLVM OpenMP clash on macOS
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
@@ -598,8 +598,8 @@ def main():
         pred_writer = smart_open_w(pred_out)
 
     # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
-    uid_to_pred_len = {}
-    uid_to_lbl_len  = {}
+    # uid_to_pred_len = {}
+    # uid_to_lbl_len  = {}
     # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
 
     # ---------- Inference + streaming eval ----------
@@ -654,39 +654,36 @@ def main():
                 L_pred, L_lbl = len(probs_seq_np), len(lbl_info["label"])
 
                 # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
-                uid_to_pred_len[uid] = L_pred
-                uid_to_lbl_len[uid]  = L_lbl
-                # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
+                # uid_to_pred_len[uid] = L_pred
+                # uid_to_lbl_len[uid]  = L_lbl
+                # DEBUG_LIMIT = 10
+                # debug_count = 0
 
-                # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
-                DEBUG_LIMIT = 10
-                debug_count = 0
+                # # inside the per-user loop, replace the existing length check:
+                # if L_pred != L_lbl:
+                #     direction = "pred>lbl" if L_pred > L_lbl else "pred<label"
+                #     length_note[direction] += 1
 
-                # inside the per-user loop, replace the existing length check:
-                if L_pred != L_lbl:
-                    direction = "pred>lbl" if L_pred > L_lbl else "pred<label"
-                    length_note[direction] += 1
+                #     if direction == "pred>lbl" and debug_count < DEBUG_LIMIT:
+                #         # recover raw token count for this user
+                #         seq_raw = [r for r in ds.rows if flat_uid(r["uid"]) == uid]
+                #         if seq_raw:
+                #             feat_str = seq_raw[0]["AggregateInput"]
+                #             if isinstance(feat_str, list):
+                #                 feat_str = feat_str[0] if len(feat_str) == 1 else " ".join(map(str, feat_str))
+                #             n_toks = len(str(feat_str).strip().split())
+                #         else:
+                #             n_toks = -1
 
-                    if direction == "pred>lbl" and debug_count < DEBUG_LIMIT:
-                        # recover raw token count for this user
-                        seq_raw = [r for r in ds.rows if flat_uid(r["uid"]) == uid]
-                        if seq_raw:
-                            feat_str = seq_raw[0]["AggregateInput"]
-                            if isinstance(feat_str, list):
-                                feat_str = feat_str[0] if len(feat_str) == 1 else " ".join(map(str, feat_str))
-                            n_toks = len(str(feat_str).strip().split())
-                        else:
-                            n_toks = -1
-
-                        print(
-                            f"[DEBUG pred>lbl] uid={uid} | "
-                            f"n_tokens={n_toks} | "
-                            f"seq_len_ai={cfg['seq_len_ai']} | "
-                            f"L_pred={L_pred} | L_lbl={L_lbl} | "
-                            f"excess_slots={L_pred - L_lbl} | "
-                            f"excess_tokens={(L_pred - L_lbl) * cfg['ai_rate']}"
-                        )
-                        debug_count += 1
+                #         print(
+                #             f"[DEBUG pred>lbl] uid={uid} | "
+                #             f"n_tokens={n_toks} | "
+                #             f"seq_len_ai={cfg['seq_len_ai']} | "
+                #             f"L_pred={L_pred} | L_lbl={L_lbl} | "
+                #             f"excess_slots={L_pred - L_lbl} | "
+                #             f"excess_tokens={(L_pred - L_lbl) * cfg['ai_rate']}"
+                #         )
+                #         debug_count += 1
                 # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
 
                 if L_pred != L_lbl:
@@ -695,15 +692,15 @@ def main():
 
                 # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
                 # ── Systematic check: are mismatch users concentrated in a split? ──
-                print("\n[DEBUG] pred>lbl breakdown by split:")
-                for spl in ["val", "test", "train"]:
-                    n_mismatch = sum(
-                        1 for uid in accept_users.get(spl, set())
-                        if uid in uid_to_lbl_len  # see below
-                        and uid_to_pred_len.get(uid, 0) > uid_to_lbl_len[uid]
-                    )
-                    print(f"  {spl}: {n_mismatch} / {len(accept_users.get(spl, set()))}")
-                # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
+                # print("\n[DEBUG] pred>lbl breakdown by split:")
+                # for spl in ["val", "test", "train"]:
+                #     n_mismatch = sum(
+                #         1 for uid in accept_users.get(spl, set())
+                #         if uid in uid_to_lbl_len  # see below
+                #         and uid_to_pred_len.get(uid, 0) > uid_to_lbl_len[uid]
+                #     )
+                #     print(f"  {spl}: {n_mismatch} / {len(accept_users.get(spl, set()))}")
+                # # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
 
                 split_tag = which_split(uid)
                 accept_users.setdefault(split_tag, set()).add(uid)
