@@ -11,15 +11,15 @@ End-to-end for GRU:
 
 Usage (example):
   python predict_gru_and_eval.py \
-    --data /home/ec2-user/data/clean_list_int_wide4_simple6_FeatureBasedTrain.json \
+    --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
     --ckpt /home/ec2-user/tmp_gru/gru_h128_lr0.001_bs4.pt \
     --hidden-size 128 \
     --input-dim 15 \
     --labels '/home/ec2-user/data/clean_list_int_wide4_simple6.json' \
     --s3 's3://productgptbucket/experiments/gru/run_001/' \
     --pred-out /tmp/gru_preds.jsonl.gz \
-    --uids-val s3://productgptbucket/FullProductGPT/performer/FeatureBased/folds/featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w2_fold0_val_uids.txt \
-    --uids-test s3://productgptbucket/FullProductGPT/performer/FeatureBased/folds/featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001_w2_fold0_test_uids.txt \
+    --uids-val s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_val.txt \
+    --uids-test s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_test.txt \
     --fold-id 0
 """
 

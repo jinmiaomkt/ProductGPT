@@ -16,8 +16,8 @@ python3 predict_productgpt_and_eval.py \
   --feat-xlsx /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx \
   --s3 s3://productgptbucket/YourEvalRuns/PhaseB/ \
   --pred-out /tmp/preds_phaseB.jsonl.gz \
-  --uids-val /tmp/uids_val.txt \
-  --uids-test /tmp/uids_test.txt \
+  --uids-val s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_val.txt \
+  --uids-test s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_test.txt \
   --fold-id 0
 
 Notes:
@@ -513,56 +513,6 @@ def main():
             (out / "uids_test.txt").write_text("\n".join(sorted(uids_test_override)) + "\n")
             print(f"[INFO] Wrote UID lists to: {out}/uids_val.txt and {out}/uids_test.txt")
 
-    # if uids_val_override or uids_test_override:
-    #     # Must provide BOTH
-    #     if not (uids_val_override and uids_test_override):
-    #         raise ValueError("Provide BOTH --uids-val and --uids-test (or neither).")
-    #     overlap = uids_val_override & uids_test_override
-    #     if overlap:
-    #         raise ValueError(f"UIDs present in BOTH val and test: {sorted(list(overlap))[:5]} ...")
-
-    #     def which_split(u):
-    #         return "val" if u in uids_val_override else "test" if u in uids_test_override else "train"
-
-    #     print(f"[INFO] Using EXACT UID lists: val={len(uids_val_override)}, test={len(uids_test_override)}")
-    # else:
-    #     which_split = build_splits(records, seed=args.seed)
-    #     print(f"[INFO] Using 80/10/10 split on ALL label users with seed={args.seed}")
-
-    # else:
-    #     which_split = build_splits(records, seed=args.seed)
-    #     print(f"[INFO] Using fallback 80/10/10 split with seed={args.seed}")
-    # else:
-    #     # ===== reproduce training split EXACTLY (Phase-B compatible) =====
-    #     fold_for_split = args.fold_id if (args.fold_id is not None and args.fold_id >= 0) else hp["fold_id"]
-
-    #     split_from_path = args.split_from.strip() or cfg["filepath"]
-
-    #     uids_val_override, uids_test_override = phase_split_uids_exact(
-    #         fold_id=fold_for_split,
-    #         fold_spec_uri=args.fold_spec,
-    #         split_from_path=split_from_path,
-    #         split_seed=args.split_seed,
-    #         data_frac=args.split_data_frac,
-    #         subsample_seed=args.split_subsample_seed,
-    #     )
-
-    #     def which_split(u):
-    #         return "val" if u in uids_val_override else "test" if u in uids_test_override else "train"
-
-    #     print(f"[INFO] Using EXACT training split via fold-spec:"
-    #           f" fold={fold_for_split}, val={len(uids_val_override)}, test={len(uids_test_override)}, "
-    #           f"seed={args.split_seed}, data_frac={args.split_data_frac}")
-
-    #     # optional: dump the uid lists locally for reuse
-    #     if args.dump_uids:
-    #         out = Path(args.dump_uids)
-    #         out.mkdir(parents=True, exist_ok=True)
-    #         (out / "uids_val.txt").write_text("\n".join(sorted(uids_val_override)) + "\n")
-    #         (out / "uids_test.txt").write_text("\n".join(sorted(uids_test_override)) + "\n")
-    #         print(f"[INFO] Wrote UID lists to: {out}/uids_val.txt and {out}/uids_test.txt")
-
-
     # ---------- DataLoader ----------
     ds = PredictDataset(data_path, pad_id=pad_id)
     loader = DataLoader(
@@ -636,11 +586,6 @@ def main():
     print(f"[INFO] Calibration method: {args.calibration}")
 
     # ---------- Metric accumulators ----------
-    # scores       = defaultdict(lambda: {"y": [], "p": []})
-    # length_note  = Counter()
-    # accept = reject = 0
-    # accept_users = {"val": set(), "test": set(), "train": set()}
-
     scores       = defaultdict(lambda: {"y": [], "p": []})              # binary task scores
     multi_scores = defaultdict(lambda: {"y": [], "p": []})              # multiclass 1..9
     length_note  = Counter()
@@ -651,6 +596,11 @@ def main():
     pred_writer = None
     if pred_out:
         pred_writer = smart_open_w(pred_out)
+
+    # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
+    uid_to_pred_len = {}
+    uid_to_lbl_len  = {}
+    # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
 
     # ---------- Inference + streaming eval ----------
     focus_ids = torch.arange(1, 10, device=device)  # decision classes 1..9
@@ -674,52 +624,7 @@ def main():
             else:
                 logits = logits_full                # (B, Nslots, V)
 
-            # V_out = logits.size(-1)
-
-            # # ──────────────────────────────────────────────────
-            # # FIX: Extract 9-class decision logits BEFORE softmax
-            # # ──────────────────────────────────────────────────
-            # # if V_out == 9:
-            # #     logits_dec = logits                          # already 9-class
-            # # else:
-            # #     logits_dec = logits[..., 1:10]               # (B, Nslots, 9)
-
-            # if V_out == 9:
-            #     # decision-only model: softmax over the 9 classes
-            #     if calibrator is not None:
-            #         prob_dec_9 = calibrator(logits)
-            #     elif logit_bias_9 is not None:
-            #         prob_dec_9 = torch.softmax(
-            #             logits - logit_bias_9.to(device=logits.device, dtype=logits.dtype),
-            #             dim=-1
-            #         )
-            #     else:
-            #         prob_dec_9 = torch.softmax(logits, dim=-1)
-            # else:
-            #     # full-vocab model: MATCH OLD SCRIPT / TRAINING EVAL
-            #     probs_all = torch.softmax(logits, dim=-1)
-            #     prob_dec_9 = probs_all[..., 1:10]
-
-            # # ──────────────────────────────────────────────────
-            # # FIX: Compute probs via calibrator or analytic or raw
-            # # ──────────────────────────────────────────────────
-            # if calibrator is not None:
-            #     prob_dec_9 = calibrator(logits_dec)           # (B, Nslots, 9)
-            # elif logit_bias_9 is not None:
-            #     logits_corrected = logits_dec - logit_bias_9.to(device=logits_dec.device, dtype=logits_dec.dtype)
-            #     prob_dec_9 = torch.softmax(logits_corrected, dim=-1)
-            # else:
-            #     prob_dec_9 = torch.softmax(logits_dec, dim=-1)
-
-            # # prob_dec_9 is now (B, Nslots, 9) and SUMS TO 1.0
-            # prob_dec_focus = prob_dec_9
-
             V_out = logits.size(-1)
-
-            # ===== REVERT TO OLD PROBABILITY LOGIC =====
-            # Old script behavior:
-            # 1) softmax over the model output dimension
-            # 2) then keep decision classes 1..9
 
             if V_out == 9:
                 # decision-only output
@@ -732,18 +637,18 @@ def main():
             prob_dec_focus = prob_dec_9
 
             for i, uid in enumerate(uids):
-                probs_seq_np = prob_dec_focus[i].detach().cpu().numpy()   # (N, 9), keep raw for metrics
+                probs_seq_np = prob_dec_focus[i].detach().cpu().numpy()   
+                # (N, 9), keep raw for metrics
+
+                # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
+                uid_to_pred_len[uid] = L_pred
+                uid_to_lbl_len[uid]  = L_lbl
+                # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
 
                 if pred_writer:
                     pred_writer.write(
                         json.dumps({"uid": uid, "probs": np.round(probs_seq_np, 6).tolist()}) + "\n"
                     )
-
-                # probs_seq = prob_dec_focus[i].detach().cpu().numpy()  # (N, 9)
-                # probs_seq = np.round(probs_seq, 6).tolist()           # list[list[float]]
-                # # write predictions line if requested
-                # if pred_writer:
-                #     pred_writer.write(json.dumps({"uid": uid, "probs": probs_seq}) + "\n")
 
                 lbl_info = label_dict.get(uid)
                 if lbl_info is None:
@@ -753,9 +658,52 @@ def main():
                 # L_pred, L_lbl = len(probs_seq), len(lbl_info["label"])
                 L_pred, L_lbl = len(probs_seq_np), len(lbl_info["label"])
 
+                # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
+                DEBUG_LIMIT = 10
+                debug_count = 0
+
+                # inside the per-user loop, replace the existing length check:
+                if L_pred != L_lbl:
+                    direction = "pred>lbl" if L_pred > L_lbl else "pred<label"
+                    length_note[direction] += 1
+
+                    if direction == "pred>lbl" and debug_count < DEBUG_LIMIT:
+                        # recover raw token count for this user
+                        seq_raw = [r for r in ds.rows if flat_uid(r["uid"]) == uid]
+                        if seq_raw:
+                            feat_str = seq_raw[0]["AggregateInput"]
+                            if isinstance(feat_str, list):
+                                feat_str = feat_str[0] if len(feat_str) == 1 else " ".join(map(str, feat_str))
+                            n_toks = len(str(feat_str).strip().split())
+                        else:
+                            n_toks = -1
+
+                        print(
+                            f"[DEBUG pred>lbl] uid={uid} | "
+                            f"n_tokens={n_toks} | "
+                            f"seq_len_ai={cfg['seq_len_ai']} | "
+                            f"L_pred={L_pred} | L_lbl={L_lbl} | "
+                            f"excess_slots={L_pred - L_lbl} | "
+                            f"excess_tokens={(L_pred - L_lbl) * cfg['ai_rate']}"
+                        )
+                        debug_count += 1
+                # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
+
                 if L_pred != L_lbl:
                     length_note["pred>lbl" if L_pred > L_lbl else "pred<label"] += 1
                 L = min(L_pred, L_lbl)
+
+                # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
+                # ── Systematic check: are mismatch users concentrated in a split? ──
+                print("\n[DEBUG] pred>lbl breakdown by split:")
+                for spl in ["val", "test", "train"]:
+                    n_mismatch = sum(
+                        1 for uid in accept_users.get(spl, set())
+                        if uid in uid_to_lbl_len  # see below
+                        and uid_to_pred_len.get(uid, 0) > uid_to_lbl_len[uid]
+                    )
+                    print(f"  {spl}: {n_mismatch} / {len(accept_users.get(spl, set()))}")
+                # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
 
                 split_tag = which_split(uid)
                 accept_users.setdefault(split_tag, set()).add(uid)
@@ -817,90 +765,6 @@ def main():
     print("\n=============  BUCKET SIZES & PREVALENCE  =======================")
     print(stats_df.to_string(index=False))
     print("============================================================")
-
-    # ---------- Compute tables ----------
-    # rows = []
-    # for task in BIN_TASKS:
-    #     for grp in ["Calibration","HoldoutA","HoldoutB"]:
-    #         for spl in ["val","test"]:
-    #             y, p = scores[(task, grp, spl)]["y"], scores[(task, grp, spl)]["p"]
-    #             if not y:
-    #                 continue
-    #             # guard: need both classes present
-    #             if len(set(y)) < 2:
-    #                 auc = acc = f1 = auprc = np.nan
-    #             else:
-    #                 auc   = roc_auc_score(y, p)
-    #                 y_hat = [int(prob >= args.thresh) for prob in p]
-    #                 acc   = accuracy_score(y, y_hat)
-    #                 f1    = f1_score(y, y_hat)
-    #                 auprc = average_precision_score(y, p)
-    #             rows.append({"Task": task, "Group": grp, "Split": spl,
-    #                          "AUC": auc, "Hit": acc, "F1": f1, "AUPRC": auprc})
-    # metrics = pd.DataFrame(rows)
-
-    # def pivot(metric: str) -> pd.DataFrame:
-    #     return (metrics
-    #             .pivot(index=["Task","Group"], columns="Split", values=metric)
-    #             .reindex(columns=["val","test"])
-    #             .round(4)
-    #             .sort_index())
-
-    # auc_tbl   = pivot("AUC")
-    # hit_tbl   = pivot("Hit")
-    # f1_tbl    = pivot("F1")
-    # auprc_tbl = pivot("AUPRC")
-
-    # macro_period_tbl = (
-    #     metrics
-    #       .groupby(["Group", "Split"])[["AUC", "Hit", "F1", "AUPRC"]]
-    #       .mean()
-    #       .unstack("Split")   # columns become metric × split
-    #       .round(4)
-    # )
-    # # reorder to outer split then metric, and val before test
-    # macro_period_tbl = macro_period_tbl.reorder_levels([1, 0], axis=1)
-    # macro_period_tbl = macro_period_tbl.sort_index(axis=1, level=0)
-    # macro_period_tbl = macro_period_tbl[['val', 'test']]
-
-    # # ---------- Print ALL tables to console ----------
-    # def _p(title: str, df: pd.DataFrame):
-    #     print(f"\n=============  {title}  =======================")
-    #     print(df.fillna(" NA"))
-    #     print("============================================================")
-
-    # _p("BINARY ROC-AUC TABLE", auc_tbl)
-    # _p("HIT-RATE (ACCURACY) TABLE", hit_tbl)
-    # _p("MACRO-F1 TABLE", f1_tbl)
-    # _p("AUPRC TABLE", auprc_tbl)
-    # _p("AGGREGATE MACRO METRICS", macro_period_tbl)
-
-    # # ---------- Save locally & upload to S3 ----------
-    # out_dir = Path("/tmp/predict_eval_outputs")
-    # out_dir.mkdir(parents=True, exist_ok=True)
-
-    # auc_csv   = out_dir / "auc_table.csv"
-    # hit_csv   = out_dir / "hit_table.csv"
-    # f1_csv    = out_dir / "f1_table.csv"
-    # auprc_csv = out_dir / "auprc_table.csv"
-    # macro_csv = out_dir / "macro_period_table.csv"
-
-    # auc_tbl.to_csv(auc_csv)
-    # hit_tbl.to_csv(hit_csv)
-    # f1_tbl.to_csv(f1_csv)
-    # auprc_tbl.to_csv(auprc_csv)
-    # macro_period_tbl.to_csv(macro_csv)
-
-    # # Choose effective S3 prefix (with fold subfolder if provided)
-    # for pth in [auc_csv, hit_csv, f1_csv, auprc_csv, macro_csv]:
-    #     dest = s3_join(s3_prefix_effective, pth.name)
-    #     s3_upload_file(pth, dest)
-    #     print(f"[S3] uploaded: {dest}")
-
-    # if pred_out:
-    #     dest = s3_join(s3_prefix_effective, Path(pred_out).name)
-    #     s3_upload_file(pred_out, dest)
-    #     print(f"[S3] uploaded: {dest}")
 
     # ---------- Compute binary task tables ----------
     rows = []
@@ -966,6 +830,19 @@ def main():
         .round(4)
     )
 
+    def make_multi_panel(group_name: str) -> pd.DataFrame:
+        sub = multiclass_metrics[multiclass_metrics["Group"] == group_name]
+        tbl = (
+            sub.pivot(index="Group", columns="Split", values=["Hit", "MacroF1"])
+            .reindex(columns=pd.MultiIndex.from_product([["Hit", "MacroF1"], SPLIT_ORDER]))
+            .round(4)
+        )
+        return tbl
+
+    multi_calibration_tbl = make_multi_panel("Calibration")
+    multi_holdoutA_tbl    = make_multi_panel("HoldoutA")
+    multi_holdoutB_tbl    = make_multi_panel("HoldoutB")
+
     # ---------- Pretty paper-style selected AUC tables ----------
     paper_auc = metrics[metrics["Task"].isin(PAPER_AUC_TASKS.keys())].copy()
     paper_auc["TaskPretty"] = paper_auc["Task"].map(PAPER_AUC_TASKS)
@@ -990,6 +867,9 @@ def main():
         print("============================================================")
 
     _p("MULTICLASS TOP-1 HIT / MACRO-F1 TABLE", paper_multi_tbl)
+    _p("MULTICLASS TOP-1 HIT / MACRO-F1 - CALIBRATION",  multi_calibration_tbl)
+    _p("MULTICLASS TOP-1 HIT / MACRO-F1 - HOLDOUT A",    multi_holdoutA_tbl)
+    _p("MULTICLASS TOP-1 HIT / MACRO-F1 - HOLDOUT B",    multi_holdoutB_tbl)
     _p("SELECTED BINARY AUC TABLE - CALIBRATION", auc_calibration_tbl)
     _p("SELECTED BINARY AUC TABLE - HOLDOUT A", auc_holdoutA_tbl)
     _p("SELECTED BINARY AUC TABLE - HOLDOUT B", auc_holdoutB_tbl)
@@ -999,16 +879,23 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     paper_multi_csv        = out_dir / "paper_multiclass_table.csv"
+    multi_calibration_csv = out_dir / "paper_multi_calibration.csv"
+    multi_holdoutA_csv    = out_dir / "paper_multi_holdoutA.csv"
+    multi_holdoutB_csv    = out_dir / "paper_multi_holdoutB.csv"
     auc_calibration_csv    = out_dir / "paper_auc_calibration.csv"
     auc_holdoutA_csv       = out_dir / "paper_auc_holdoutA.csv"
     auc_holdoutB_csv       = out_dir / "paper_auc_holdoutB.csv"
 
     paper_multi_tbl.to_csv(paper_multi_csv)
+    multi_calibration_tbl.to_csv(multi_calibration_csv)
+    multi_holdoutA_tbl.to_csv(multi_holdoutA_csv)
+    multi_holdoutB_tbl.to_csv(multi_holdoutB_csv)
     auc_calibration_tbl.to_csv(auc_calibration_csv)
     auc_holdoutA_tbl.to_csv(auc_holdoutA_csv)
     auc_holdoutB_tbl.to_csv(auc_holdoutB_csv)
 
-    for pth in [paper_multi_csv, auc_calibration_csv, auc_holdoutA_csv, auc_holdoutB_csv]:
+    for pth in [multi_calibration_csv, multi_holdoutA_csv, multi_holdoutB_csv,
+            paper_multi_csv, auc_calibration_csv, auc_holdoutA_csv, auc_holdoutB_csv]:
         dest = s3_join(s3_prefix_effective, pth.name)
         s3_upload_file(pth, dest)
         print(f"[S3] uploaded: {dest}")
