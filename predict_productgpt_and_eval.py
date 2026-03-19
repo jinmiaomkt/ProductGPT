@@ -76,7 +76,7 @@ def parse_hp_from_ckpt_name(ckpt_path: Path) -> dict:
 # --- Project imports (must exist in your repo) ---
 from config4 import get_config
 from model4_decoderonly_feature_performer import build_transformer
-from train4_decoderonly_performer_feature_aws import _ensure_jsonl, JsonLineDataset, _build_tok
+from train1_decision_only_performer_aws import _ensure_jsonl, JsonLineDataset, _build_tok
 
 # Optional: silence Intel/LLVM OpenMP clash on macOS
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
