@@ -393,17 +393,6 @@ class PredictDataset(JsonLineDataset):
         uid   = row["uid"][0] if isinstance(row["uid"], list) else row["uid"]
         return {"uid": flat_uid(uid), "x": torch.tensor(toks, dtype=torch.long)}
 
-def collate_fn(pad_id: int):
-    def _inner(batch):
-        uids = [b["uid"] for b in batch]
-        lens = [len(b["x"]) for b in batch]
-        Lmax = max(lens)
-        X    = torch.full((len(batch), Lmax), pad_id, dtype=torch.long)
-        for i,(item,L) in enumerate(zip(batch,lens)):
-            X[i,:L] = item["x"]
-        return {"uid": uids, "x": X}
-    return _inner
-
 # =================== Metrics Setup ===============
 BIN_TASKS = {
     "BuyNone":   [9],
