@@ -12,7 +12,7 @@ End-to-end for GRU — evaluation methodology matches predict_productgpt_and_eva
   - Save CSV tables (and optional predictions) locally and upload to S3
 
 Usage (example):
-  python predict_gru_and_eval.py \
+  python predict_gru_and_eval_new.py \
     --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
     --ckpt /home/ec2-user/tmp_gru/gru_h128_lr0.001_bs4.pt \
     --hidden-size 128 \
