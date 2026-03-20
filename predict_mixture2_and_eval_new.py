@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-predict_mixture2_and_eval.py
+predict_mixture2_and_eval_new.py
 
 End-to-end:
   - Run inference for 9-way decision probabilities (every ai_rate steps)
@@ -10,6 +10,17 @@ End-to-end:
   - Tune threshold on validation (by Task x Group), then apply to both val/test
   - Print tables to console
   - Save CSV tables (and optional predictions) locally and upload to S3
+
+python3 /home/ec2-user/ProductGPT/predict_mixture2_and_eval_new.py \
+  --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --ckpt /tmp/FullProductGPT_featurebased_performerfeatures64_dmodel64_ff192_N3_heads2_lr0.000510707329019641_w1_fold0.pt \
+  --feat-xlsx /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx \
+  --s3 s3://productgptbucket/evals/mixture2_fold0_$(date +%F_%H%M%S)/ \
+  --calibration calibrator \
+  --uids-val s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_val.txt \
+  --uids-test s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_test.txt \
+  --fold-id 0
 """
 
 from __future__ import annotations
@@ -45,7 +56,7 @@ from torch.utils.data import DataLoader, random_split
 from config4 import get_config
 from dataset4_productgpt import load_json_dataset
 from model4_mixture2_decoderonly_feature_performer import build_transformer
-from train4_decoderonly_performer_feature_aws import JsonLineDataset, _build_tok, _ensure_jsonl
+from train1_decision_only_performer_aws import JsonLineDataset, _build_tok, _ensure_jsonl
 
 # Optional: silence Intel/LLVM OpenMP clash on macOS
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
