@@ -617,6 +617,7 @@ def main():
         for batch in loader:
             x    = batch["x"].to(device)
             uids = batch["uid"]
+            lens = batch["lens"]  # actual (unpadded) token lengths per user
             logits_full = model(x)  # (B, T, V) or (B, Nslots, V)
 
             # pos = torch.arange(cfg["ai_rate"] - 1, x.size(1), cfg["ai_rate"], device=device)
@@ -663,10 +664,6 @@ def main():
                 if lbl_info is None:
                     reject += 1
                     continue
-
-
-            # ── inside the per-batch loop, after computing prob_dec_focus ──────────────
-            lens = batch["lens"]  # actual (unpadded) token lengths per user
 
             for i, uid in enumerate(uids):
 
