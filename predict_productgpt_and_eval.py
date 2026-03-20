@@ -12,9 +12,9 @@ Usage (example):
 python3 predict_productgpt_and_eval.py \
   --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
   --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
-  --ckpt /path/to/FullProductGPT_featurebased_performerfeatures32_dmodel96_ff192_N3_heads4_lr..._w4_fold0.pt \
+  --ckpt /tmp/FullProductGPT_featurebased_performerfeatures64_dmodel64_ff192_N3_heads2_lr0.000510707329019641_w1_fold0.pt \
   --feat-xlsx /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx \
-  --s3 s3://productgptbucket/YourEvalRuns/PhaseB/ \
+  --s3 s3://productgptbucket/evals/best_calibrated_$(date +%F_%H%M%S)/ \
   --pred-out /tmp/preds_phaseB.jsonl.gz \
   --uids-val s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_val.txt \
   --uids-test s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_test.txt \
@@ -124,7 +124,7 @@ def collate_fn(pad_id: int):
         X    = torch.full((len(batch), Lmax), pad_id, dtype=torch.long)
         for i,(item,L) in enumerate(zip(batch,lens)):
             X[i,:L] = item["x"]
-        return {"uid": uids, "x": X, "lens": lens}  # ← return lens
+        return {"uid": uids, "x": X, "lens": lens}  # ← add lens here
     return _inner
 
 # ===================== CLI ======================
@@ -737,7 +737,7 @@ def main():
                         scores[key]["p"].extend(p_bin[mask].tolist())
 
                 accept += 1
-                
+
             # L_pred, L_lbl = len(probs_seq_np), len(lbl_info["label"])
 
             # if L_pred != L_lbl:

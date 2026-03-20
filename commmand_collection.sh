@@ -108,3 +108,20 @@ python3 predict_productgpt_and_eval.py   --data /home/ec2-user/data/clean_list_i
 
 
 python3 predict_duplet_and_eval.py   --data /home/ec2-user/data/clean_list_int_wide4_simple6_FeatureBasedTrain.json   --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json   --ckpt /tmp/FullProductGPT_featurebased_performerfeatures32_dmodel96_ff192_N3_heads4_lr0.0001992193018167218_w1_fold0.pt   --feat-xlsx /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx   --s3 s3://productgptbucket/evals/PhaseB_paperstyle_$(date +%F_%H%M%S)/   --pred-out /tmp/phaseB_paperstyle_preds.jsonl.gz   --fold-id 0   --calibration none   --split-data-frac 1.0   --split-seed 33   --split-subsample-seed 33
+
+
+mkdir -p /tmp/recovered_ckpts
+mkdir -p /home/ec2-user/output/evals/phaseB_latest_fold0
+
+aws s3 cp \
+"s3://productgptbucket/FullProductGPT/performer/FeatureBased/checkpoints/FullProductGPT_featurebased_performerfeatures32_dmodel96_ff192_N3_heads4_lr0.0001992193018167218_w1_fold0.pt" \
+"/tmp/recovered_ckpts/FullProductGPT_featurebased_performerfeatures32_dmodel96_ff192_N3_heads4_lr0.0001992193018167218_w1_fold0.pt"
+
+python3 /home/ec2-user/ProductGPT/predict_productgpt_and_eval.py \
+  --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --ckpt /tmp/recovered_ckpts/FullProductGPT_featurebased_performerfeatures32_dmodel96_ff192_N3_heads4_lr0.0001992193018167218_w1_fold0.pt \
+  --feat-xlsx /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx \
+  --s3 s3://productgptbucket/evals/phaseB_latest_fold0_$(date +%F_%H%M%S)/ \
+  --pred-out /home/ec2-user/output/evals/phaseB_latest_fold0/preds.jsonl.gz \
+  --calibration none
