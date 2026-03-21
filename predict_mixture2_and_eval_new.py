@@ -73,6 +73,8 @@ class VectorScaling(torch.nn.Module):
     def forward(self, logits_dec: torch.Tensor) -> torch.Tensor:
         return F.softmax(self.a * logits_dec + self.b, dim=-1)
 
+def _unwrap_model(m):
+    return m.module if hasattr(m, "module") else m
 
 def load_calibrator(ckpt_path: Path, device: torch.device):
     uid_part = ckpt_path.stem.replace("FullProductGPT_", "")
@@ -586,52 +588,74 @@ def fit_thresholds(scores, default_thresh=0.5):
 # ═══════════════════════════════════════════════════════════════
 # Model forward helpers
 # ═══════════════════════════════════════════════════════════════
-def forward_with_gate_mode(model, x, user_ids, gate_mode: str):
-    """
-    gate_mode='user' for exact seen-user gating
-    gate_mode='mean' for average training-user gating
+# def forward_with_gate_mode(model, x, user_ids, gate_mode: str):
+#     """
+#     gate_mode='user' for exact seen-user gating
+#     gate_mode='mean' for average training-user gating
 
-    This tries the explicit mode first, then falls back to toggling model.gate.use_mean_gate.
-    """
+#     This tries the explicit mode first, then falls back to toggling model.gate.use_mean_gate.
+#     """
+#     if gate_mode not in {"user", "mean"}:
+#         raise ValueError(f"Unsupported gate_mode={gate_mode}")
+
+#     if gate_mode == "mean":
+#         try:
+#             return model(x, user_ids, projection_gate_mode="mean")
+#         except (TypeError, ValueError):
+#             pass
+
+#         old = None
+#         has_flag = hasattr(model, "gate") and hasattr(model.gate, "use_mean_gate")
+#         if has_flag:
+#             old = model.gate.use_mean_gate
+#         try:
+#             if has_flag:
+#                 model.gate.use_mean_gate = True
+#             return model(x, user_ids)
+#         finally:
+#             if has_flag and old is not None:
+#                 model.gate.use_mean_gate = old
+
+#     # gate_mode == "user"
+#     try:
+#         return model(x, user_ids, projection_gate_mode="user")
+#     except (TypeError, ValueError):
+#         pass
+
+#     old = None
+#     has_flag = hasattr(model, "gate") and hasattr(model.gate, "use_mean_gate")
+#     if has_flag:
+#         old = model.gate.use_mean_gate
+#     try:
+#         if has_flag:
+#             model.gate.use_mean_gate = False
+#         return model(x, user_ids)
+#     finally:
+#         if has_flag and old is not None:
+#             model.gate.use_mean_gate = old
+
+def forward_with_gate_mode(model, x, user_ids, gate_mode: str, return_hidden=False):
     if gate_mode not in {"user", "mean"}:
         raise ValueError(f"Unsupported gate_mode={gate_mode}")
 
-    if gate_mode == "mean":
-        try:
-            return model(x, user_ids, projection_gate_mode="mean")
-        except (TypeError, ValueError):
-            pass
-
-        old = None
-        has_flag = hasattr(model, "gate") and hasattr(model.gate, "use_mean_gate")
-        if has_flag:
-            old = model.gate.use_mean_gate
-        try:
-            if has_flag:
-                model.gate.use_mean_gate = True
-            return model(x, user_ids)
-        finally:
-            if has_flag and old is not None:
-                model.gate.use_mean_gate = old
-
-    # gate_mode == "user"
+    # Try explicit keyword
     try:
-        return model(x, user_ids, projection_gate_mode="user")
-    except (TypeError, ValueError):
+        return model(x, user_ids, projection_gate_mode=gate_mode, return_hidden=return_hidden)
+    except TypeError:
         pass
 
+    # Fallback: toggle flag
     old = None
     has_flag = hasattr(model, "gate") and hasattr(model.gate, "use_mean_gate")
     if has_flag:
         old = model.gate.use_mean_gate
     try:
         if has_flag:
-            model.gate.use_mean_gate = False
-        return model(x, user_ids)
+            model.gate.use_mean_gate = (gate_mode == "mean")
+        return model(x, user_ids, return_hidden=return_hidden)
     finally:
         if has_flag and old is not None:
             model.gate.use_mean_gate = old
-
 
 def select_decision_logits(logits_full: torch.Tensor, x: torch.Tensor, ai_rate: int):
     pos = torch.arange(ai_rate - 1, x.size(1), ai_rate, device=x.device)
@@ -673,56 +697,112 @@ def logits_to_prob_dec_9(
     return torch.softmax(logits_dec, dim=-1)
 
 
-def infer_batch_prob_dec_9(
-    model,
-    x: torch.Tensor,
-    user_ids: torch.Tensor,
-    seen_mask: torch.Tensor,
-    ai_rate: int,
-    calibration_mode: str,
-    calibrator,
-    logit_bias_9,
-):
-    """
-    Seen users: exact user-specific gate
-    Unseen users: mean gate
+# def infer_batch_prob_dec_9(
+#     model,
+#     x: torch.Tensor,
+#     user_ids: torch.Tensor,
+#     seen_mask: torch.Tensor,
+#     ai_rate: int,
+#     calibration_mode: str,
+#     calibrator,
+#     logit_bias_9,
+# ):
+#     """
+#     Seen users: exact user-specific gate
+#     Unseen users: mean gate
 
-    Returns (B, T_decision, 9)
-    """
+#     Returns (B, T_decision, 9)
+#     """
+#     B = x.size(0)
+#     out = None
+
+#     seen_idx = torch.nonzero(seen_mask, as_tuple=False).squeeze(-1)
+#     unseen_idx = torch.nonzero(~seen_mask, as_tuple=False).squeeze(-1)
+
+#     if len(seen_idx) > 0:
+#         logits_seen_full = forward_with_gate_mode(model, x[seen_idx], user_ids[seen_idx], gate_mode="user")
+#         logits_seen = select_decision_logits(logits_seen_full, x[seen_idx], ai_rate)
+#         prob_seen = logits_to_prob_dec_9(logits_seen, calibration_mode, calibrator, logit_bias_9)
+
+#         if out is None:
+#             out = torch.empty(
+#                 (B, prob_seen.size(1), prob_seen.size(2)),
+#                 dtype=prob_seen.dtype,
+#                 device=prob_seen.device,
+#             )
+#         out[seen_idx] = prob_seen
+
+#     if len(unseen_idx) > 0:
+#         logits_mean_full = forward_with_gate_mode(model, x[unseen_idx], user_ids[unseen_idx], gate_mode="mean")
+#         logits_mean = select_decision_logits(logits_mean_full, x[unseen_idx], ai_rate)
+#         prob_mean = logits_to_prob_dec_9(logits_mean, calibration_mode, calibrator, logit_bias_9)
+
+#         if out is None:
+#             out = torch.empty(
+#                 (B, prob_mean.size(1), prob_mean.size(2)),
+#                 dtype=prob_mean.dtype,
+#                 device=prob_mean.device,
+#             )
+#         out[unseen_idx] = prob_mean
+
+#     return out
+
+def infer_batch_prob_dec_9(
+    model, x, user_ids, seen_mask, ai_rate,
+    calibration_mode, calibrator, logit_bias_9,
+):
     B = x.size(0)
+    device = x.device
+    mm = _unwrap_model(model)
     out = None
+
+    def _infer_subset(idx, gate_mode):
+        nonlocal out
+        if len(idx) == 0:
+            return
+
+        x_sub, u_sub = x[idx], user_ids[idx]
+
+        # Get hidden states (not final output)
+        _, hidden = forward_with_gate_mode(model, x_sub, u_sub, gate_mode, return_hidden=True)
+
+        # Per-head logits from projection layer
+        proj_result = mm.projection(
+            hidden, user_idx=u_sub, gate_mode=gate_mode,
+            return_alpha=True, return_head_logits=True,
+        )
+        _, alpha, head_logits = proj_result  # alpha: (B,H), head_logits: (B,T,H,V)
+
+        # Select decision positions
+        pos = torch.arange(ai_rate - 1, x_sub.size(1), ai_rate, device=device)
+        if head_logits.size(1) == x_sub.size(1):
+            head_logits = head_logits[:, pos, :, :]
+
+        # Slice to 9 decision classes
+        head_logits_dec = head_logits[..., 1:10]  # (B, n_slots, H, 9)
+        alpha_bt = alpha[:, None, :, None]         # (B, 1, H, 1)
+
+        # Apply calibration PER-HEAD, then mix
+        if calibrator is not None and calibration_mode == "calibrator":
+            mixed_logits = (alpha_bt * head_logits_dec).sum(dim=2)
+            prob_dec = calibrator(mixed_logits)
+        elif logit_bias_9 is not None and calibration_mode == "analytic":
+            bias = logit_bias_9.to(device=device, dtype=head_logits_dec.dtype)
+            corrected = F.softmax(head_logits_dec - bias, dim=-1)
+            prob_dec = (alpha_bt * corrected).sum(dim=2)
+        else:
+            head_probs = F.softmax(head_logits_dec, dim=-1)
+            prob_dec = (alpha_bt * head_probs).sum(dim=2)
+
+        if out is None:
+            out = torch.empty((B, prob_dec.size(1), 9), dtype=prob_dec.dtype, device=device)
+        out[idx] = prob_dec
 
     seen_idx = torch.nonzero(seen_mask, as_tuple=False).squeeze(-1)
     unseen_idx = torch.nonzero(~seen_mask, as_tuple=False).squeeze(-1)
-
-    if len(seen_idx) > 0:
-        logits_seen_full = forward_with_gate_mode(model, x[seen_idx], user_ids[seen_idx], gate_mode="user")
-        logits_seen = select_decision_logits(logits_seen_full, x[seen_idx], ai_rate)
-        prob_seen = logits_to_prob_dec_9(logits_seen, calibration_mode, calibrator, logit_bias_9)
-
-        if out is None:
-            out = torch.empty(
-                (B, prob_seen.size(1), prob_seen.size(2)),
-                dtype=prob_seen.dtype,
-                device=prob_seen.device,
-            )
-        out[seen_idx] = prob_seen
-
-    if len(unseen_idx) > 0:
-        logits_mean_full = forward_with_gate_mode(model, x[unseen_idx], user_ids[unseen_idx], gate_mode="mean")
-        logits_mean = select_decision_logits(logits_mean_full, x[unseen_idx], ai_rate)
-        prob_mean = logits_to_prob_dec_9(logits_mean, calibration_mode, calibrator, logit_bias_9)
-
-        if out is None:
-            out = torch.empty(
-                (B, prob_mean.size(1), prob_mean.size(2)),
-                dtype=prob_mean.dtype,
-                device=prob_mean.device,
-            )
-        out[unseen_idx] = prob_mean
-
+    _infer_subset(seen_idx, "user")
+    _infer_subset(unseen_idx, "mean")
     return out
-
 
 def infer_prob_9_all_positions(
     model,
