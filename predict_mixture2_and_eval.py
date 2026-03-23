@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-predict_mixture2_and_eval.py
+predict_mixture2_and_eval_new.py
 
 End-to-end:
   - Run inference for 9-way decision probabilities (every ai_rate steps)
@@ -10,6 +10,17 @@ End-to-end:
   - Tune threshold on validation (by Task x Group), then apply to both val/test
   - Print tables to console
   - Save CSV tables (and optional predictions) locally and upload to S3
+
+python3 /home/ec2-user/ProductGPT/predict_mixture2_and_eval_new.py \
+  --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --ckpt /tmp/FullProductGPT_featurebased_performerfeatures64_dmodel64_ff192_N3_heads2_lr0.000510707329019641_w1_fold0.pt \
+  --feat-xlsx /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx \
+  --s3 s3://productgptbucket/evals/mixture2_fold0_$(date +%F_%H%M%S)/ \
+  --calibration calibrator \
+  --uids-val s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_val.txt \
+  --uids-test s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_test.txt \
+  --fold-id 0
 """
 
 from __future__ import annotations
@@ -45,7 +56,7 @@ from torch.utils.data import DataLoader, random_split
 from config4 import get_config
 from dataset4_productgpt import load_json_dataset
 from model4_mixture2_decoderonly_feature_performer import build_transformer
-from train4_decoderonly_performer_feature_aws import JsonLineDataset, _build_tok, _ensure_jsonl
+from train1_decision_only_performer_aws import JsonLineDataset, _build_tok, _ensure_jsonl
 
 # Optional: silence Intel/LLVM OpenMP clash on macOS
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
@@ -62,6 +73,8 @@ class VectorScaling(torch.nn.Module):
     def forward(self, logits_dec: torch.Tensor) -> torch.Tensor:
         return F.softmax(self.a * logits_dec + self.b, dim=-1)
 
+def _unwrap_model(m):
+    return m.module if hasattr(m, "module") else m
 
 def load_calibrator(ckpt_path: Path, device: torch.device):
     uid_part = ckpt_path.stem.replace("FullProductGPT_", "")
@@ -575,52 +588,74 @@ def fit_thresholds(scores, default_thresh=0.5):
 # ═══════════════════════════════════════════════════════════════
 # Model forward helpers
 # ═══════════════════════════════════════════════════════════════
-def forward_with_gate_mode(model, x, user_ids, gate_mode: str):
-    """
-    gate_mode='user' for exact seen-user gating
-    gate_mode='mean' for average training-user gating
+# def forward_with_gate_mode(model, x, user_ids, gate_mode: str):
+#     """
+#     gate_mode='user' for exact seen-user gating
+#     gate_mode='mean' for average training-user gating
 
-    This tries the explicit mode first, then falls back to toggling model.gate.use_mean_gate.
-    """
+#     This tries the explicit mode first, then falls back to toggling model.gate.use_mean_gate.
+#     """
+#     if gate_mode not in {"user", "mean"}:
+#         raise ValueError(f"Unsupported gate_mode={gate_mode}")
+
+#     if gate_mode == "mean":
+#         try:
+#             return model(x, user_ids, projection_gate_mode="mean")
+#         except (TypeError, ValueError):
+#             pass
+
+#         old = None
+#         has_flag = hasattr(model, "gate") and hasattr(model.gate, "use_mean_gate")
+#         if has_flag:
+#             old = model.gate.use_mean_gate
+#         try:
+#             if has_flag:
+#                 model.gate.use_mean_gate = True
+#             return model(x, user_ids)
+#         finally:
+#             if has_flag and old is not None:
+#                 model.gate.use_mean_gate = old
+
+#     # gate_mode == "user"
+#     try:
+#         return model(x, user_ids, projection_gate_mode="user")
+#     except (TypeError, ValueError):
+#         pass
+
+#     old = None
+#     has_flag = hasattr(model, "gate") and hasattr(model.gate, "use_mean_gate")
+#     if has_flag:
+#         old = model.gate.use_mean_gate
+#     try:
+#         if has_flag:
+#             model.gate.use_mean_gate = False
+#         return model(x, user_ids)
+#     finally:
+#         if has_flag and old is not None:
+#             model.gate.use_mean_gate = old
+
+def forward_with_gate_mode(model, x, user_ids, gate_mode: str, return_hidden=False):
     if gate_mode not in {"user", "mean"}:
         raise ValueError(f"Unsupported gate_mode={gate_mode}")
 
-    if gate_mode == "mean":
-        try:
-            return model(x, user_ids, projection_gate_mode="mean")
-        except (TypeError, ValueError):
-            pass
-
-        old = None
-        has_flag = hasattr(model, "gate") and hasattr(model.gate, "use_mean_gate")
-        if has_flag:
-            old = model.gate.use_mean_gate
-        try:
-            if has_flag:
-                model.gate.use_mean_gate = True
-            return model(x, user_ids)
-        finally:
-            if has_flag and old is not None:
-                model.gate.use_mean_gate = old
-
-    # gate_mode == "user"
+    # Try explicit keyword
     try:
-        return model(x, user_ids, projection_gate_mode="user")
-    except (TypeError, ValueError):
+        return model(x, user_ids, projection_gate_mode=gate_mode, return_hidden=return_hidden)
+    except TypeError:
         pass
 
+    # Fallback: toggle flag
     old = None
     has_flag = hasattr(model, "gate") and hasattr(model.gate, "use_mean_gate")
     if has_flag:
         old = model.gate.use_mean_gate
     try:
         if has_flag:
-            model.gate.use_mean_gate = False
-        return model(x, user_ids)
+            model.gate.use_mean_gate = (gate_mode == "mean")
+        return model(x, user_ids, return_hidden=return_hidden)
     finally:
         if has_flag and old is not None:
             model.gate.use_mean_gate = old
-
 
 def select_decision_logits(logits_full: torch.Tensor, x: torch.Tensor, ai_rate: int):
     pos = torch.arange(ai_rate - 1, x.size(1), ai_rate, device=x.device)
@@ -662,56 +697,140 @@ def logits_to_prob_dec_9(
     return torch.softmax(logits_dec, dim=-1)
 
 
-def infer_batch_prob_dec_9(
-    model,
-    x: torch.Tensor,
-    user_ids: torch.Tensor,
-    seen_mask: torch.Tensor,
-    ai_rate: int,
-    calibration_mode: str,
-    calibrator,
-    logit_bias_9,
-):
-    """
-    Seen users: exact user-specific gate
-    Unseen users: mean gate
+# def infer_batch_prob_dec_9(
+#     model,
+#     x: torch.Tensor,
+#     user_ids: torch.Tensor,
+#     seen_mask: torch.Tensor,
+#     ai_rate: int,
+#     calibration_mode: str,
+#     calibrator,
+#     logit_bias_9,
+# ):
+#     """
+#     Seen users: exact user-specific gate
+#     Unseen users: mean gate
 
-    Returns (B, T_decision, 9)
-    """
+#     Returns (B, T_decision, 9)
+#     """
+#     B = x.size(0)
+#     out = None
+
+#     seen_idx = torch.nonzero(seen_mask, as_tuple=False).squeeze(-1)
+#     unseen_idx = torch.nonzero(~seen_mask, as_tuple=False).squeeze(-1)
+
+#     if len(seen_idx) > 0:
+#         logits_seen_full = forward_with_gate_mode(model, x[seen_idx], user_ids[seen_idx], gate_mode="user")
+#         logits_seen = select_decision_logits(logits_seen_full, x[seen_idx], ai_rate)
+#         prob_seen = logits_to_prob_dec_9(logits_seen, calibration_mode, calibrator, logit_bias_9)
+
+#         if out is None:
+#             out = torch.empty(
+#                 (B, prob_seen.size(1), prob_seen.size(2)),
+#                 dtype=prob_seen.dtype,
+#                 device=prob_seen.device,
+#             )
+#         out[seen_idx] = prob_seen
+
+#     if len(unseen_idx) > 0:
+#         logits_mean_full = forward_with_gate_mode(model, x[unseen_idx], user_ids[unseen_idx], gate_mode="mean")
+#         logits_mean = select_decision_logits(logits_mean_full, x[unseen_idx], ai_rate)
+#         prob_mean = logits_to_prob_dec_9(logits_mean, calibration_mode, calibrator, logit_bias_9)
+
+#         if out is None:
+#             out = torch.empty(
+#                 (B, prob_mean.size(1), prob_mean.size(2)),
+#                 dtype=prob_mean.dtype,
+#                 device=prob_mean.device,
+#             )
+#         out[unseen_idx] = prob_mean
+
+#     return out
+
+def infer_batch_prob_dec_9(
+    model, x, user_ids, seen_mask, ai_rate,
+    calibration_mode, calibrator, logit_bias_9,
+):
     B = x.size(0)
+    device = x.device
+    mm = _unwrap_model(model)
     out = None
+
+    def _infer_subset(idx, gate_mode):
+        nonlocal out
+        if len(idx) == 0:
+            return
+
+        x_sub, u_sub = x[idx], user_ids[idx]
+
+        # Get hidden states (not final output)
+        _, hidden = forward_with_gate_mode(model, x_sub, u_sub, gate_mode, return_hidden=True)
+
+        # Per-head logits from projection layer
+        proj_result = mm.projection(
+            hidden, user_idx=u_sub, gate_mode=gate_mode,
+            return_alpha=True, return_head_logits=True,
+        )
+        _, alpha, head_logits = proj_result  # alpha: (B,H), head_logits: (B,T,H,V)
+
+        # Select decision positions
+        pos = torch.arange(ai_rate - 1, x_sub.size(1), ai_rate, device=device)
+        if head_logits.size(1) == x_sub.size(1):
+            head_logits = head_logits[:, pos, :, :]
+
+        # Slice to 9 decision classes
+        head_logits_dec = head_logits[..., 1:10]  # (B, n_slots, H, 9)
+        alpha_bt = alpha[:, None, :, None]         # (B, 1, H, 1)
+
+        # Apply calibration PER-HEAD, then mix
+        if calibrator is not None and calibration_mode == "calibrator":
+            mixed_logits = (alpha_bt * head_logits_dec).sum(dim=2)
+            prob_dec = calibrator(mixed_logits)
+        elif logit_bias_9 is not None and calibration_mode == "analytic":
+            bias = logit_bias_9.to(device=device, dtype=head_logits_dec.dtype)
+            corrected = F.softmax(head_logits_dec - bias, dim=-1)
+            prob_dec = (alpha_bt * corrected).sum(dim=2)
+        else:
+            head_probs = F.softmax(head_logits_dec, dim=-1)
+            prob_dec = (alpha_bt * head_probs).sum(dim=2)
+
+        if out is None:
+            out = torch.empty((B, prob_dec.size(1), 9), dtype=prob_dec.dtype, device=device)
+        out[idx] = prob_dec
 
     seen_idx = torch.nonzero(seen_mask, as_tuple=False).squeeze(-1)
     unseen_idx = torch.nonzero(~seen_mask, as_tuple=False).squeeze(-1)
-
-    if len(seen_idx) > 0:
-        logits_seen_full = forward_with_gate_mode(model, x[seen_idx], user_ids[seen_idx], gate_mode="user")
-        logits_seen = select_decision_logits(logits_seen_full, x[seen_idx], ai_rate)
-        prob_seen = logits_to_prob_dec_9(logits_seen, calibration_mode, calibrator, logit_bias_9)
-
-        if out is None:
-            out = torch.empty(
-                (B, prob_seen.size(1), prob_seen.size(2)),
-                dtype=prob_seen.dtype,
-                device=prob_seen.device,
-            )
-        out[seen_idx] = prob_seen
-
-    if len(unseen_idx) > 0:
-        logits_mean_full = forward_with_gate_mode(model, x[unseen_idx], user_ids[unseen_idx], gate_mode="mean")
-        logits_mean = select_decision_logits(logits_mean_full, x[unseen_idx], ai_rate)
-        prob_mean = logits_to_prob_dec_9(logits_mean, calibration_mode, calibrator, logit_bias_9)
-
-        if out is None:
-            out = torch.empty(
-                (B, prob_mean.size(1), prob_mean.size(2)),
-                dtype=prob_mean.dtype,
-                device=prob_mean.device,
-            )
-        out[unseen_idx] = prob_mean
-
+    _infer_subset(seen_idx, "user")
+    _infer_subset(unseen_idx, "mean")
     return out
 
+# def infer_prob_9_all_positions(
+#     model,
+#     x_1d: torch.Tensor,
+#     user_id: int,
+#     seen_in_train: bool,
+#     device: torch.device,
+#     calibration_mode: str,
+#     calibrator,
+#     logit_bias_9,
+# ):
+#     """
+#     Return 9-way probabilities for ALL sequence positions, shape (T, 9).
+#     """
+#     x = x_1d.unsqueeze(0).to(device)  # (1, T)
+#     user_ids = torch.tensor([user_id], dtype=torch.long, device=device)
+
+#     gate_mode = "user" if seen_in_train else "mean"
+#     logits_full = forward_with_gate_mode(model, x, user_ids, gate_mode=gate_mode)
+
+#     prob_all = logits_to_prob_dec_9(
+#         logits_full,
+#         calibration_mode=calibration_mode,
+#         calibrator=calibrator,
+#         logit_bias_9=logit_bias_9,
+#     )[0].detach().cpu().numpy()  # (T, 9)
+
+#     return prob_all
 
 def infer_prob_9_all_positions(
     model,
@@ -726,20 +845,35 @@ def infer_prob_9_all_positions(
     """
     Return 9-way probabilities for ALL sequence positions, shape (T, 9).
     """
-    x = x_1d.unsqueeze(0).to(device)  # (1, T)
+    mm = _unwrap_model(model)
+    x = x_1d.unsqueeze(0).to(device)
     user_ids = torch.tensor([user_id], dtype=torch.long, device=device)
 
     gate_mode = "user" if seen_in_train else "mean"
-    logits_full = forward_with_gate_mode(model, x, user_ids, gate_mode=gate_mode)
 
-    prob_all = logits_to_prob_dec_9(
-        logits_full,
-        calibration_mode=calibration_mode,
-        calibrator=calibrator,
-        logit_bias_9=logit_bias_9,
-    )[0].detach().cpu().numpy()  # (T, 9)
+    _, hidden = forward_with_gate_mode(model, x, user_ids, gate_mode, return_hidden=True)
 
-    return prob_all
+    proj_result = mm.projection(
+        hidden, user_idx=user_ids, gate_mode=gate_mode,
+        return_alpha=True, return_head_logits=True,
+    )
+    _, alpha, head_logits = proj_result
+
+    head_logits_dec = head_logits[..., 1:10]
+    alpha_bt = alpha[:, None, :, None]
+
+    if calibrator is not None and calibration_mode == "calibrator":
+        mixed_logits = (alpha_bt * head_logits_dec).sum(dim=2)
+        prob_dec = calibrator(mixed_logits)
+    elif logit_bias_9 is not None and calibration_mode == "analytic":
+        bias = logit_bias_9.to(device=device, dtype=head_logits_dec.dtype)
+        corrected = F.softmax(head_logits_dec - bias, dim=-1)
+        prob_dec = (alpha_bt * corrected).sum(dim=2)
+    else:
+        head_probs = F.softmax(head_logits_dec, dim=-1)
+        prob_dec = (alpha_bt * head_probs).sum(dim=2)
+
+    return prob_dec[0].detach().cpu().numpy()
 
 # ═══════════════════════════════════════════════════════════════
 # Main
@@ -1029,11 +1163,28 @@ def main():
                     extra = np.tile(global_avg, (n_labels - max_slots, 1))
                     all_user_probs[uid] = np.vstack([per_slot_avg.copy(), extra])
 
-    # ---------- Evaluate ----------
-    scores = defaultdict(lambda: {"y": [], "p": []})
-    length_note = Counter()
+# ---------- Evaluate ----------
+    scores       = defaultdict(lambda: {"y": [], "p": []})
+    multi_scores = defaultdict(lambda: {"y": [], "p": []})
+    length_note  = Counter()
     accept = reject = 0
     accept_users = {"val": set(), "test": set(), "train": set()}
+    uid_to_pred_len = {}
+    uid_to_lbl_len  = {}
+
+    GROUP_ORDER = ["Calibration", "HoldoutA", "HoldoutB"]
+    SPLIT_ORDER = ["val", "test"]
+    PAPER_AUC_TASKS = {
+        "BuyOne":    "Buy One",
+        "BuyTen":    "Buy Ten",
+        "BuyFigure": "Character Event Wish",
+        "BuyWeapon": "Weapon Event Wish",
+        "BuyRegular":"Regular Wish",
+    }
+    PAPER_AUC_ORDER = [
+        "Buy One", "Buy Ten", "Character Event Wish",
+        "Weapon Event Wish", "Regular Wish",
+    ]
 
     pred_cm = smart_open_w(pred_out) if pred_out else None
     pred_writer = pred_cm.__enter__() if pred_cm else None
@@ -1041,37 +1192,67 @@ def main():
     try:
         for uid, probs_seq_np in all_user_probs.items():
             if pred_writer:
-                pred_writer.write(json.dumps({"uid": uid, "probs": np.round(probs_seq_np, 6).tolist()}) + "\n")
+                pred_writer.write(
+                    json.dumps({"uid": uid, "probs": np.round(probs_seq_np, 6).tolist()}) + "\n"
+                )
 
             lbl_info = label_dict.get(uid)
             if lbl_info is None:
                 reject += 1
                 continue
 
-            L_pred, L_lbl = len(probs_seq_np), len(lbl_info["label"])
+            L_pred = len(probs_seq_np)
+            L_lbl  = len(lbl_info["label"])
+            uid_to_pred_len[uid] = L_pred
+            uid_to_lbl_len[uid]  = L_lbl
+
             if L_pred != L_lbl:
                 length_note["pred>lbl" if L_pred > L_lbl else "pred<label"] += 1
-            L = min(L_pred, L_lbl)
+
+            L          = min(L_pred, L_lbl)
+            lbl_offset = L_lbl - L  # align to END: predictions cover most recent L steps
+
+            # ── 1. Build aligned numpy arrays ──────────────────────────────────
+            y_arr      = np.asarray(lbl_info["label"][lbl_offset : lbl_offset + L], dtype=np.int64)
+            idx_h_arr  = np.asarray(lbl_info["idx_h"] [lbl_offset : lbl_offset + L], dtype=np.int64)
+            feat_h_arr = np.asarray(lbl_info["feat_h"][lbl_offset : lbl_offset + L], dtype=np.int64)
+            p_arr      = probs_seq_np[:L]   # (L, 9)
+
+            # ── 2. Vectorised group assignment ──────────────────────────────────
+            group_idx = np.where(
+                feat_h_arr == 0, 0,
+                np.where((feat_h_arr == 1) & (idx_h_arr == 0), 1, 2)
+            )
 
             split_tag = which_split(uid)
             accept_users.setdefault(split_tag, set()).add(uid)
 
-            for t in range(L):
-                y = lbl_info["label"][t]
-                idx_h = lbl_info["idx_h"][t]
-                feat_h = lbl_info["feat_h"][t]
-                probs = probs_seq_np[t]
+            # ── 3. Multiclass scores ────────────────────────────────────────────
+            valid_mask = (y_arr >= 1) & (y_arr <= 9)
+            for g_idx, g_name in enumerate(GROUP_ORDER):
+                mask = valid_mask & (group_idx == g_idx)
+                if not mask.any():
+                    continue
+                mkey = (g_name, split_tag)
+                multi_scores[mkey]["y"].extend(y_arr[mask].tolist())
+                multi_scores[mkey]["p"].extend(p_arr[mask])
 
-                group = period_group(idx_h, feat_h)
+            # ── 4. Binary task scores ───────────────────────────────────────────
+            for task, pos_classes in BIN_TASKS.items():
+                y_bin   = np.isin(y_arr, list(TASK_POSSETS[task])).astype(np.int8)
+                col_idx = [j - 1 for j in pos_classes]
+                p_bin   = p_arr[:, col_idx].sum(axis=1)
 
-                for task, pos_classes in BIN_TASKS.items():
-                    y_bin = int(y in TASK_POSSETS[task])
-                    p_bin = float(sum(probs[j - 1] for j in pos_classes))
-                    key = (task, group, split_tag)
-                    scores[key]["y"].append(y_bin)
-                    scores[key]["p"].append(p_bin)
+                for g_idx, g_name in enumerate(GROUP_ORDER):
+                    mask = (group_idx == g_idx)
+                    if not mask.any():
+                        continue
+                    key = (task, g_name, split_tag)
+                    scores[key]["y"].extend(y_bin[mask].tolist())
+                    scores[key]["p"].extend(p_bin[mask].tolist())
 
             accept += 1
+
     finally:
         if pred_cm:
             pred_cm.__exit__(None, None, None)
@@ -1085,162 +1266,188 @@ def main():
             f"test={len(accept_users.get('test', set()))} / {len(load_uid_set(args.uids_test))}"
         )
 
-    # ---------- Diagnostics ----------
-    print("\n=============  PROBABILITY DIAGNOSTICS @ 0.5  =======================")
-    for task in BIN_TASKS:
-        for grp in GROUPS:
-            for spl in SPLITS:
-                p = np.array(scores[(task, grp, spl)]["p"], dtype=float)
-                y = np.array(scores[(task, grp, spl)]["y"], dtype=int)
-                if len(p) == 0:
-                    continue
-                print(
-                    task,
-                    grp,
-                    spl,
-                    "min=", round(float(p.min()), 4),
-                    "q50=", round(float(np.quantile(p, 0.50)), 4),
-                    "q90=", round(float(np.quantile(p, 0.90)), 4),
-                    "q99=", round(float(np.quantile(p, 0.99)), 4),
-                    "max=", round(float(p.max()), 4),
-                    "pred_pos@0.5=", round(float((p >= 0.5).mean()), 6),
-                    "prev=", round(float(y.mean()), 4),
-                )
-    print("============================================================")
+    # ── pred>lbl breakdown ────────────────────────────────────────────────────
+    print("\n[DEBUG] pred>lbl breakdown by split:")
+    for spl in ["val", "test", "train"]:
+        users_in_split = accept_users.get(spl, set())
+        n_mismatch = sum(
+            1 for uid in users_in_split
+            if uid_to_pred_len.get(uid, 0) > uid_to_lbl_len.get(uid, 0)
+        )
+        print(f"  {spl}: {n_mismatch} mismatch / {len(users_in_split)} total users")
 
-    # ---------- Bucket stats ----------
+    # ── Group distribution debug ──────────────────────────────────────────────
+    print("\n[DEBUG] group distribution in scored samples:")
+    for grp in GROUP_ORDER:
+        for spl in SPLIT_ORDER:
+            n = len(scores[("BuyOne", grp, spl)]["y"])
+            print(f"  BuyOne | {grp} | {spl}: {n} samples")
+
+    # ── Bucket stats ──────────────────────────────────────────────────────────
     bucket_stats = []
     for task in BIN_TASKS:
-        for grp in GROUPS:
-            for spl in SPLITS:
+        for grp in GROUP_ORDER:
+            for spl in SPLIT_ORDER:
                 y = scores[(task, grp, spl)]["y"]
                 if not y:
                     continue
-                n = len(y)
+                n   = len(y)
                 pos = sum(y)
-                neg = n - pos
-                prev = pos / n if n else float("nan")
-                bucket_stats.append(
-                    {
-                        "Task": task,
-                        "Group": grp,
-                        "Split": spl,
-                        "N": n,
-                        "Pos": pos,
-                        "Neg": neg,
-                        "Prev": round(prev, 4),
-                    }
-                )
-
+                bucket_stats.append({
+                    "Task": task, "Group": grp, "Split": spl,
+                    "N": n, "Pos": pos, "Neg": n - pos,
+                    "Prev": round(pos / n, 4),
+                })
     stats_df = pd.DataFrame(bucket_stats).sort_values(["Split", "Group", "Task"])
     print("\n=============  BUCKET SIZES & PREVALENCE  =======================")
     print(stats_df.to_string(index=False))
     print("============================================================")
 
-    # ---------- Thresholds ----------
+    # ── Threshold tuning ─────────────────────────────────────────────────────
     thresholds, threshold_df = fit_thresholds(scores, default_thresh=args.thresh)
     print("\n=============  VALIDATION-TUNED THRESHOLDS  =======================")
     print(threshold_df.to_string(index=False))
     print("============================================================")
 
-    # ---------- Metrics ----------
+    # ── Binary task metrics ───────────────────────────────────────────────────
     rows = []
     for task in BIN_TASKS:
-        for grp in GROUPS:
+        for grp in GROUP_ORDER:
             thr = thresholds[(task, grp)]
-            for spl in SPLITS:
+            for spl in SPLIT_ORDER:
                 y = scores[(task, grp, spl)]["y"]
                 p = scores[(task, grp, spl)]["p"]
                 if not y:
                     continue
-
                 y_arr = np.asarray(y, dtype=int)
                 p_arr = np.asarray(p, dtype=float)
                 y_hat = (p_arr >= thr).astype(int)
-
                 if len(set(y_arr)) < 2:
-                    auc = np.nan
-                    auprc = np.nan
+                    auc = auprc = np.nan
                 else:
-                    auc = roc_auc_score(y_arr, p_arr)
+                    auc   = roc_auc_score(y_arr, p_arr)
                     auprc = average_precision_score(y_arr, p_arr)
-
                 acc = accuracy_score(y_arr, y_hat)
-                f1 = f1_score(y_arr, y_hat, zero_division=0)
-
-                rows.append(
-                    {
-                        "Task": task,
-                        "Group": grp,
-                        "Split": spl,
-                        "Threshold": thr,
-                        "AUC": auc,
-                        "Hit": acc,
-                        "F1": f1,
-                        "AUPRC": auprc,
-                    }
-                )
-
+                f1  = f1_score(y_arr, y_hat, zero_division=0)
+                rows.append({
+                    "Task": task, "Group": grp, "Split": spl,
+                    "Threshold": thr, "AUC": auc,
+                    "Hit": acc, "F1": f1, "AUPRC": auprc,
+                })
     metrics = pd.DataFrame(rows)
 
-    def pivot(metric: str) -> pd.DataFrame:
-        return (
-            metrics.pivot(index=["Task", "Group"], columns="Split", values=metric)
-            .reindex(columns=["val", "test"])
-            .round(4)
-            .sort_index()
-        )
+    # ── Multiclass Hit / MacroF1 ──────────────────────────────────────────────
+    multi_rows = []
+    for grp in GROUP_ORDER:
+        for spl in SPLIT_ORDER:
+            y = multi_scores[(grp, spl)]["y"]
+            p = multi_scores[(grp, spl)]["p"]
+            if not y:
+                continue
+            y_arr = np.asarray(y, dtype=np.int64)
+            p_arr = np.vstack(p)
+            y_hat = p_arr.argmax(axis=1) + 1
+            hit      = accuracy_score(y_arr, y_hat)
+            macro_f1 = f1_score(
+                y_arr, y_hat,
+                labels=list(range(1, 10)),
+                average="macro", zero_division=0,
+            )
+            multi_rows.append({"Group": grp, "Split": spl, "Hit": hit, "MacroF1": macro_f1})
 
-    auc_tbl = pivot("AUC")
-    hit_tbl = pivot("Hit")
-    f1_tbl = pivot("F1")
-    auprc_tbl = pivot("AUPRC")
-    thr_tbl = pivot("Threshold")
+    multiclass_metrics = pd.DataFrame(multi_rows)
 
-    macro_period_tbl = (
-        metrics.groupby(["Group", "Split"])[["AUC", "Hit", "F1", "AUPRC"]]
-        .mean()
-        .unstack("Split")
-        .round(4)
-    )
-    macro_period_tbl = macro_period_tbl.reorder_levels([1, 0], axis=1)
-    macro_period_tbl = macro_period_tbl.sort_index(axis=1, level=0)
-    macro_period_tbl = macro_period_tbl[["val", "test"]]
-
-    def _p(title: str, df: pd.DataFrame):
+    # ── Paper-style tables ────────────────────────────────────────────────────
+    def _p(title, df):
         print(f"\n=============  {title}  =======================")
         print(df.fillna(" NA"))
         print("============================================================")
 
-    _p("THRESHOLD TABLE", thr_tbl)
-    _p("BINARY ROC-AUC TABLE", auc_tbl)
-    _p("HIT-RATE (ACCURACY) TABLE", hit_tbl)
-    _p("POSITIVE-CLASS F1 TABLE", f1_tbl)
-    _p("AUPRC TABLE", auprc_tbl)
-    _p("AGGREGATE MACRO METRICS", macro_period_tbl)
+    def pivot(metric):
+        return (
+            metrics.pivot(index=["Task", "Group"], columns="Split", values=metric)
+            .reindex(columns=SPLIT_ORDER).round(4).sort_index()
+        )
 
-    # ---------- Save locally & upload ----------
-    out_dir = Path("/tmp/predict_eval_outputs")
+    auc_tbl   = pivot("AUC")
+    hit_tbl   = pivot("Hit")
+    f1_tbl    = pivot("F1")
+    auprc_tbl = pivot("AUPRC")
+    thr_tbl   = pivot("Threshold")
+
+    macro_period_tbl = (
+        metrics.groupby(["Group", "Split"])[["AUC", "Hit", "F1", "AUPRC"]]
+        .mean().unstack("Split").round(4)
+    )
+    macro_period_tbl = macro_period_tbl.reorder_levels([1, 0], axis=1)
+    macro_period_tbl = macro_period_tbl.sort_index(axis=1, level=0)[SPLIT_ORDER]
+
+    paper_multi_tbl = (
+        multiclass_metrics
+        .pivot(index="Group", columns="Split", values=["Hit", "MacroF1"])
+        .reindex(index=GROUP_ORDER)
+        .reindex(columns=pd.MultiIndex.from_product([["Hit", "MacroF1"], SPLIT_ORDER]))
+        .round(4)
+    )
+
+    def make_multi_panel(group_name):
+        sub = multiclass_metrics[multiclass_metrics["Group"] == group_name]
+        return (
+            sub.pivot(index="Group", columns="Split", values=["Hit", "MacroF1"])
+            .reindex(columns=pd.MultiIndex.from_product([["Hit", "MacroF1"], SPLIT_ORDER]))
+            .round(4)
+        )
+
+    paper_auc = metrics[metrics["Task"].isin(PAPER_AUC_TASKS.keys())].copy()
+    paper_auc["TaskPretty"] = paper_auc["Task"].map(PAPER_AUC_TASKS)
+
+    def make_auc_panel(group_name):
+        sub = paper_auc[paper_auc["Group"] == group_name].copy()
+        return (
+            sub.pivot(index="TaskPretty", columns="Split", values="AUC")
+            .reindex(index=PAPER_AUC_ORDER, columns=SPLIT_ORDER)
+            .round(4)
+        )
+
+    _p("THRESHOLD TABLE",                              thr_tbl)
+    _p("BINARY ROC-AUC TABLE",                         auc_tbl)
+    _p("HIT-RATE (ACCURACY) TABLE",                    hit_tbl)
+    _p("POSITIVE-CLASS F1 TABLE",                      f1_tbl)
+    _p("AUPRC TABLE",                                  auprc_tbl)
+    _p("AGGREGATE MACRO METRICS",                      macro_period_tbl)
+    _p("MULTICLASS TOP-1 HIT / MACRO-F1 TABLE",        paper_multi_tbl)
+    _p("MULTICLASS TOP-1 HIT / MACRO-F1 - CALIBRATION",make_multi_panel("Calibration"))
+    _p("MULTICLASS TOP-1 HIT / MACRO-F1 - HOLDOUT A",  make_multi_panel("HoldoutA"))
+    _p("MULTICLASS TOP-1 HIT / MACRO-F1 - HOLDOUT B",  make_multi_panel("HoldoutB"))
+    _p("SELECTED BINARY AUC TABLE - CALIBRATION",      make_auc_panel("Calibration"))
+    _p("SELECTED BINARY AUC TABLE - HOLDOUT A",        make_auc_panel("HoldoutA"))
+    _p("SELECTED BINARY AUC TABLE - HOLDOUT B",        make_auc_panel("HoldoutB"))
+
+    # ── Save locally & upload to S3 ───────────────────────────────────────────
+    out_dir = Path("/tmp/predict_eval_outputs_mixture2")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    auc_csv = out_dir / "auc_table.csv"
-    hit_csv = out_dir / "hit_table.csv"
-    f1_csv = out_dir / "f1_table.csv"
-    auprc_csv = out_dir / "auprc_table.csv"
-    thr_csv = out_dir / "threshold_table.csv"
-    thr_long_csv = out_dir / "threshold_table_long.csv"
-    macro_csv = out_dir / "macro_period_table.csv"
+    files = {
+        "auc_table.csv":               auc_tbl,
+        "hit_table.csv":               hit_tbl,
+        "f1_table.csv":                f1_tbl,
+        "auprc_table.csv":             auprc_tbl,
+        "threshold_table.csv":         thr_tbl,
+        "threshold_table_long.csv":    threshold_df,
+        "macro_period_table.csv":      macro_period_tbl,
+        "paper_multiclass_table.csv":  paper_multi_tbl,
+        "paper_multi_calibration.csv": make_multi_panel("Calibration"),
+        "paper_multi_holdoutA.csv":    make_multi_panel("HoldoutA"),
+        "paper_multi_holdoutB.csv":    make_multi_panel("HoldoutB"),
+        "paper_auc_calibration.csv":   make_auc_panel("Calibration"),
+        "paper_auc_holdoutA.csv":      make_auc_panel("HoldoutA"),
+        "paper_auc_holdoutB.csv":      make_auc_panel("HoldoutB"),
+    }
 
-    auc_tbl.to_csv(auc_csv)
-    hit_tbl.to_csv(hit_csv)
-    f1_tbl.to_csv(f1_csv)
-    auprc_tbl.to_csv(auprc_csv)
-    thr_tbl.to_csv(thr_csv)
-    threshold_df.to_csv(thr_long_csv, index=False)
-    macro_period_tbl.to_csv(macro_csv)
-
-    for pth in [auc_csv, hit_csv, f1_csv, auprc_csv, thr_csv, thr_long_csv, macro_csv]:
-        dest = s3_join(s3_prefix_effective, pth.name)
+    for fname, df in files.items():
+        pth = out_dir / fname
+        df.to_csv(pth, index=(fname != "threshold_table_long.csv"))
+        dest = s3_join(s3_prefix_effective, fname)
         s3_upload_file(pth, dest)
         print(f"[S3] uploaded: {dest}")
 
