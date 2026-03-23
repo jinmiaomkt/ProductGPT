@@ -38,7 +38,7 @@ def _raw_config():
         "min_lr": 1e-6,
         "d_model": 64,
         "N": 6,
-        "num_heads": 4,
+        "num_heads": 2,
         "dropout": 0.1,
         "kernel_type": "exp",
         "d_ff": 192,
