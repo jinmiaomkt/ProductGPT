@@ -238,8 +238,8 @@ def load_calibrator(
         cal = TemperatureCalibrator(temperature=t_val)
 
     elif calibrator_type == "platt":
-        weight = sd_lower.get("weight") or sd_lower.get("linear.weight")
-        bias = sd_lower.get("bias") or sd_lower.get("linear.bias")
+        weight = sd_lower.get("weight") or sd_lower.get("linear.weight") or sd_lower.get("a")
+        bias = sd_lower.get("bias") or sd_lower.get("linear.bias") or sd_lower.get("b")
         if weight is None or bias is None:
             raise ValueError(
                 f"Platt calibrator requested but weight/bias not found. "
