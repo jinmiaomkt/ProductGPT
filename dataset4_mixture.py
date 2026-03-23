@@ -115,6 +115,17 @@ class TransformerDataset(Dataset):
         self.uid_to_index = {u: i + 1 for i, u in enumerate(unique_uids)}
         self.num_users = len(self.uid_to_index) + 1   # +1 for UNK bucket at index 0
 
+        # Build user-id vocabulary from one normalized key per record
+        unique_uids = sorted({self._normalize_uid(rec.get("uid", "")) for rec in self.data})
+
+        # Optional but recommended: reserve 0 as UNK
+        self.uid_to_index = {u: i + 1 for i, u in enumerate(unique_uids)}
+        self.num_users = len(self.uid_to_index) + 1   # +1 for UNK bucket at index 0
+
+        # ADD THIS
+        self.index_to_uid = {0: "[UNK]"}
+        self.index_to_uid.update({idx: uid for uid, idx in self.uid_to_index.items()})
+
         for rec in self.data:
             # uid = rec.get("uid", "")
             uid = self._normalize_uid(rec.get("uid", ""))

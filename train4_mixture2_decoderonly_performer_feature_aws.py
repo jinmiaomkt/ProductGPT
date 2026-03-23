@@ -115,6 +115,34 @@ def load_feature_tensor(xls_path: Path) -> torch.Tensor:
             arr[token_id] = row[FEATURE_COLS].to_numpy(dtype=np.float32)
     return torch.from_numpy(arr)
 
+def export_user_mixture_weights(state_dict, index_to_uid, out_csv):
+    import pandas as pd
+    import torch
+
+    key = "projection.output_head.user_mix_logits.weight"
+    if key not in state_dict:
+        raise KeyError(f"Missing {key} in checkpoint state_dict")
+
+    mix_logits = state_dict[key].detach().cpu()              # [num_users, num_heads]
+    mix_weights = torch.softmax(mix_logits, dim=-1)          # normalize across heads
+
+    rows = []
+    num_users, num_heads = mix_weights.shape
+
+    for user_index in range(num_users):
+        row = {
+            "user_index": user_index,
+            "uid": index_to_uid.get(user_index, "[MISSING]"),
+        }
+        for h in range(num_heads):
+            row[f"mix_head_{h}_logit"] = float(mix_logits[user_index, h])
+            row[f"mix_head_{h}_weight"] = float(mix_weights[user_index, h])
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    df.to_csv(out_csv, index=False)
+    print(f"[INFO] saved user mixture weights to {out_csv}")
+
 # ══════════════════════════════ 3. Tokenisers ═════════════════════════=
 def _base_tokeniser(extra_vocab: Dict[str, int] | None = None) -> Tokenizer:
     """Word‑level tokeniser with a fixed numeric vocabulary."""
@@ -901,6 +929,11 @@ def train_model(cfg: Dict[str, Any],
     train_dl, val_dl, test_dl, tok_tgt = build_dataloaders(cfg)
     pad_id = tok_tgt.token_to_id("[PAD]")
 
+    base_train_ds = train_dl.dataset.base if hasattr(train_dl.dataset, "base") else train_dl.dataset
+
+    train_uid_to_index = dict(base_train_ds.uid_to_index)
+    train_index_to_uid = dict(base_train_ds.index_to_uid)
+
     # ── optional deterministic subsample for hyperparam search ──
     # cfg["data_frac"] in (0,1] e.g., 0.05 for 5% of records
     # data_frac = float(cfg.get("data_frac", 1.0))
@@ -1101,12 +1134,22 @@ def train_model(cfg: Dict[str, Any],
             ckpt = {"epoch": ep, "best_val_nll": best_val_nll, "model_state_dict": engine.module.state_dict(),
                     "class_weights_9": dec_weights_9.cpu().tolist(),
                     "logit_bias_9": logit_bias_9.cpu().tolist(), "tau": tau,
-                    "projection_mix_space": mix_space}
+                    "projection_mix_space": mix_space,
+                    "train_uid_to_index": train_uid_to_index,
+                    "train_index_to_uid": train_index_to_uid,
+                    }
             torch.save(ckpt, ckpt_path)
+            weights_csv = ckpt_dir / f"FullProductGPT_{uid}_user_mix_weights.csv"
+            export_user_mixture_weights(
+                ckpt["model_state_dict"],
+                train_index_to_uid,
+                weights_csv,
+            )
             json_path.write_text(json.dumps(_json_safe(best_val_metrics), indent=2))
             if s3:
                 s3.upload_file(str(json_path), bucket, js_key, ExtraArgs={"ContentType": "application/json"})
                 s3.upload_file(str(ckpt_path), bucket, ck_key)
+                s3.upload_file(str(weights_csv), bucket, f"Mixture2/performer/FeatureBased/weights/{weights_csv.name}")
         else:
             patience += 1
             if patience >= cfg["patience"]:

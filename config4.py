@@ -24,24 +24,24 @@ def _raw_config():
 
         # ---------- context window ----------
         "ctx_window": 64,
-        "nb_features": 16,
+        "nb_features": 64,
         "window_size": None,          # ← edit 64 * 15
         "seq_len_ai":  None,       # filled in below
         "seq_len_tgt": 1024,
 
         # ---------- training ----------
         "k": 4096,
-        "batch_size": 2,
+        "batch_size": 4,
         "num_epochs": 200,
         "warmup_steps": 5,
         "lr": 1e-4,
         "min_lr": 1e-6,
-        "d_model": 32,
+        "d_model": 64,
         "N": 6,
         "num_heads": 4,
         "dropout": 0.1,
         "kernel_type": "exp",
-        "d_ff": 32,
+        "d_ff": 192,
         "eval_freq": 40,
         "fold_id": 0,
 
