@@ -390,5 +390,57 @@ python3 /home/ec2-user/ProductGPT/predict_productgpt_and_eval.py \
   --pred-out /home/ec2-user/output/evals/phaseB_latest_fold0/preds.jsonl.gz \
   --calibration none
 
+# ── S3 paths ────────────────────────────────────────────────────────────────
+S3_BASE="s3://productgptbucket/FullProductGPT/performer/FeatureBased/checkpoints"
+MODEL_STEM="featurebased_performerfeatures64_dmodel64_ff192_N3_heads2_lr0.000510707329019641_w1_fold0"
 
+S3_CKPT="${S3_BASE}/FullProductGPT_${MODEL_STEM}.pt"
+S3_CAL="${S3_BASE}/calibrator_${MODEL_STEM}.pt"
+
+# ── Local paths ──────────────────────────────────────────────────────────────
+LOCAL_CKPT="/tmp/FullProductGPT_${MODEL_STEM}.pt"
+LOCAL_CAL="/tmp/calibrator_${MODEL_STEM}.pt"
+
+# ── Step 1: Download checkpoints ─────────────────────────────────────────────
+echo "[INFO] Downloading model checkpoint..."
+aws s3 cp "${S3_CKPT}" "${LOCAL_CKPT}"
+
+echo "[INFO] Downloading calibrator checkpoint..."
+aws s3 cp "${S3_CAL}" "${LOCAL_CAL}"
+
+echo "[INFO] Downloads complete."
+ls -lh /tmp/FullProductGPT_*.pt /tmp/calibrator_*.pt
+
+python3 predict_productgpt_and_eval.py \
+  --data        /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --labels      /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --ckpt        "${LOCAL_CKPT}" \
+  --feat-xlsx   /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx \
+  --s3          "s3://productgptbucket/evals/phaseB_fold0_${TIMESTAMP}/" \
+  --pred-out    /tmp/preds_phaseB_fold0.jsonl.gz \
+  --uids-val    s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_val.txt \
+  --uids-test   s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_test.txt \
+  --fold-id     0 \
+  --calibration calibrator \
+  --ai-rate     15 \
+  --batch-size  2 \
+  --split-data-frac 1.0
+
+
+python3 predict_productgpt_and_eval_9class.py \
+  --data        /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --labels      /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --ckpt        /tmp/FullProductGPT_featurebased_performerfeatures64_dmodel64_ff192_N3_heads2_lr0.000510707329019641_w1_fold0.pt \
+  --feat-xlsx   /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx \
+  --s3          "s3://productgptbucket/evals/phaseB_fold0_$(date +%F_%H%M%S)/" \
+  --pred-out    /tmp/preds_phaseB_fold0.jsonl.gz \
+  --uids-val    s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_val.txt \
+  --uids-test   s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_test.txt \
+  --fold-id     0 \
+  --calibration calibrator \
+  --ai-rate     15 \
+  --batch-size  2 \
+  --split-data-frac 1.0
+
+  
 python3 infer_new_campaign_calibrated.py --step 2 --data /home/ec2-user/data/clean_list_int_wide4_simple6.json --ckpt /tmp/FullProductGPT_featurebased_performerfeatures64_dmodel64_ff192_N3_heads2_lr0.000510707329019641_w1_fold0.pt --calibrator_ckpt /tmp/calibrator_featurebased_performerfeatures64_dmodel64_ff192_N3_heads2_lr0.000510707329019641_w1_fold0.pt  --calibrator_type auto --feat_xlsx /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx --out /home/ec2-user/outputs/campaign28_calibrated.jsonl --lto28 30 0 54 51  --temperature 1.0 --seed_base 42 --repeat 5 --first

@@ -7,7 +7,8 @@ End-to-end for GRU — evaluation methodology matches predict_productgpt_and_eva
   - Run inference for per-timestep 9-way decision probabilities (classes 1..9)
   - End-align predictions with labels when lengths differ
   - Compute AUC / AUPRC by (Task, PeriodGroup, Split)  [binary tasks]
-  - Compute multiclass top-1 Hit / macro-F1 by (PeriodGroup, Split)
+  - Compute 6 multiclass metrics by (PeriodGroup, Split):
+      MacroOvR_AUC, MacroAUPRC, MacroF1, MCC, LogLoss, Top2Acc
   - Print paper-style tables to console
   - Save CSV tables (and optional predictions) locally and upload to S3
 
@@ -39,9 +40,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, random_split
 from torch.nn.utils.rnn import pad_sequence
+
+# ── CHANGED: added matthews_corrcoef, log_loss, label_binarize ──────────────
 from sklearn.metrics import (
     roc_auc_score, accuracy_score, f1_score, average_precision_score,
+    matthews_corrcoef, log_loss,
 )
+from sklearn.preprocessing import label_binarize
+# ────────────────────────────────────────────────────────────────────────────
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
@@ -231,6 +237,10 @@ TASK_POSSETS = {k: set(v) for k, v in BIN_TASKS.items()}
 GROUP_ORDER = ["Calibration", "HoldoutA", "HoldoutB"]
 SPLIT_ORDER = ["val", "test"]
 
+# ── CHANGED: class labels for the 9-class problem ───────────────────────────
+NINE_CLASSES = list(range(1, 10))   # [1, 2, ..., 9]
+# ────────────────────────────────────────────────────────────────────────────
+
 PAPER_AUC_TASKS = {
     "BuyOne": "Buy One",
     "BuyTen": "Buy Ten",
@@ -252,6 +262,81 @@ def period_group(idx_h, feat_h):
     if idx_h == 1:                return "HoldoutB"
     return "UNASSIGNED"
 
+# ── CHANGED: helper to compute all six 9-class metrics ──────────────────────
+def compute_multiclass_metrics(
+    y_arr: np.ndarray,
+    p_arr: np.ndarray,
+) -> dict:
+    """
+    Compute 6 multiclass metrics for a single (group, split) bucket.
+
+    Parameters
+    ----------
+    y_arr : (N,) int array, true class labels in {1..9}
+    p_arr : (N, 9) float array, predicted probabilities (must sum to ~1 per row)
+
+    Returns
+    -------
+    dict with keys:
+        MacroOvR_AUC, MacroAUPRC, MacroF1, MCC, LogLoss, Top2Acc
+    """
+    # Hard predictions (argmax → back to 1-indexed)
+    y_hat = p_arr.argmax(axis=1) + 1                      # (N,)
+
+    # ── 1. Macro One-vs-Rest AUC ──────────────────────────────────────────
+    try:
+        macro_ovr_auc = roc_auc_score(
+            y_arr, p_arr,
+            multi_class="ovr",
+            average="macro",
+            labels=NINE_CLASSES,
+        )
+    except ValueError:
+        macro_ovr_auc = np.nan
+
+    # ── 2. Macro AUPRC ────────────────────────────────────────────────────
+    # Binarise labels into a (N, 9) matrix, then average per-class AP.
+    # label_binarize with classes=[1..9] maps label k → column k-1.
+    y_bin = label_binarize(y_arr, classes=NINE_CLASSES)    # (N, 9)
+    per_class_ap = []
+    for c in range(9):
+        if y_bin[:, c].sum() == 0:
+            continue                  # skip entirely absent classes
+        per_class_ap.append(average_precision_score(y_bin[:, c], p_arr[:, c]))
+    macro_auprc = float(np.mean(per_class_ap)) if per_class_ap else np.nan
+
+    # ── 3. Macro-F1 ───────────────────────────────────────────────────────
+    macro_f1 = f1_score(
+        y_arr, y_hat,
+        labels=NINE_CLASSES,
+        average="macro",
+        zero_division=0,
+    )
+
+    # ── 4. Matthews Correlation Coefficient ───────────────────────────────
+    mcc = matthews_corrcoef(y_arr, y_hat)
+
+    # ── 5. Log-Loss (Cross-Entropy) ───────────────────────────────────────
+    p_clipped = np.clip(p_arr, 1e-7, 1.0)
+    ll = log_loss(y_arr, p_clipped, labels=NINE_CLASSES)
+
+    # ── 6. Top-2 Accuracy ─────────────────────────────────────────────────
+    top2_indices = np.argsort(p_arr, axis=1)[:, -2:]      # (N, 2), 0-indexed
+    top2_labels  = top2_indices + 1                        # convert to 1-indexed
+    top2_acc = float(np.mean(
+        [y_arr[i] in top2_labels[i] for i in range(len(y_arr))]
+    ))
+
+    return {
+        "MacroOvR_AUC": round(float(macro_ovr_auc), 4),
+        "MacroAUPRC":   round(float(macro_auprc),   4),
+        "MacroF1":      round(float(macro_f1),       4),
+        "MCC":          round(float(mcc),            4),
+        "LogLoss":      round(float(ll),             4),
+        "Top2Acc":      round(float(top2_acc),       4),
+    }
+# ────────────────────────────────────────────────────────────────────────────
+
 # ======================= Main ==========================
 def main():
     args = parse_args()
@@ -261,7 +346,6 @@ def main():
     s3_prefix  = args.s3 if args.s3.endswith("/") else (args.s3 + "/")
     pred_out   = args.pred_out
 
-    # If fold-id provided, nest under that folder
     s3_prefix_effective = (
         s3_join_folder(s3_prefix, f"fold{args.fold_id}")
         if args.fold_id is not None and args.fold_id >= 0
@@ -312,17 +396,15 @@ def main():
     model.load_state_dict(sd, strict=True)
 
     # ---------- Metric accumulators ----------
-    scores       = defaultdict(lambda: {"y": [], "p": []})          # binary task scores
-    multi_scores = defaultdict(lambda: {"y": [], "p": []})          # multiclass 1..9
+    scores       = defaultdict(lambda: {"y": [], "p": []})
+    multi_scores = defaultdict(lambda: {"y": [], "p": []})
     length_note  = Counter()
     accept = reject = 0
     accept_users = {"val": set(), "test": set(), "train": set()}
 
-    # ── DEBUG: inspect pred>lbl mismatches ─────────────────────
     uid_to_pred_len = {}
     uid_to_lbl_len  = {}
 
-    # Optional predictions writer
     pred_writer = smart_open_w(pred_out) if pred_out else None
 
     # ---------- Inference + streaming eval ----------
@@ -340,7 +422,6 @@ def main():
                 T = Ts[i]
                 probs_seq_np = probs9[i, :T].detach().cpu().numpy()  # (T, 9)
 
-                # write predictions line if requested
                 if pred_writer:
                     pred_writer.write(
                         json.dumps({"uid": uid, "probs": np.round(probs_seq_np, 6).tolist()}) + "\n"
@@ -360,15 +441,13 @@ def main():
                     length_note["pred>lbl" if L_pred > L_lbl else "pred<label"] += 1
 
                 L          = min(L_pred, L_lbl)
-                lbl_offset = L_lbl - L   # align to END: predictions cover the most recent L steps
+                lbl_offset = L_lbl - L
 
-                # ── Build aligned numpy arrays for this user ────────────────────────
                 y_arr      = np.asarray(lbl_info["label"][lbl_offset : lbl_offset + L], dtype=np.int64)
                 idx_h_arr  = np.asarray(lbl_info["idx_h"] [lbl_offset : lbl_offset + L], dtype=np.int64)
                 feat_h_arr = np.asarray(lbl_info["feat_h"][lbl_offset : lbl_offset + L], dtype=np.int64)
                 p_arr      = probs_seq_np[:L]   # (L, 9)
 
-                # ── Vectorised group assignment ─────────────────────────────────────
                 group_idx = np.where(
                     feat_h_arr == 0, 0,
                     np.where((feat_h_arr == 1) & (idx_h_arr == 0), 1, 2)
@@ -377,7 +456,6 @@ def main():
                 split_tag = which_split(uid)
                 accept_users.setdefault(split_tag, set()).add(uid)
 
-                # ── Multiclass scores (vectorised per group) ────────────────────────
                 valid_mask = (y_arr >= 1) & (y_arr <= 9)
                 for g_idx, g_name in enumerate(GROUP_ORDER):
                     mask = valid_mask & (group_idx == g_idx)
@@ -387,7 +465,6 @@ def main():
                     multi_scores[mkey]["y"].extend(y_arr[mask].tolist())
                     multi_scores[mkey]["p"].extend(p_arr[mask])
 
-                # ── Binary task scores (vectorised per task × group) ────────────────
                 for task, pos_classes in BIN_TASKS.items():
                     y_bin   = np.isin(y_arr, list(TASK_POSSETS[task])).astype(np.int8)
                     col_idx = [j - 1 for j in pos_classes]
@@ -440,7 +517,7 @@ def main():
         print(f"[INFO] coverage: val={len(accept_users.get('val', set()))} / {len(load_uid_set(args.uids_val))}, "
               f"test={len(accept_users.get('test', set()))} / {len(load_uid_set(args.uids_test))}")
 
-    # ── Bucket stats & prevalence ──────────────────────────────
+    # ── Bucket stats & prevalence (unchanged) ─────────────────
     bucket_stats = []
     for task in BIN_TASKS:
         for grp in GROUP_ORDER:
@@ -462,7 +539,7 @@ def main():
     print(stats_df.to_string(index=False))
     print("============================================================")
 
-    # ---------- Compute binary task tables (AUC + AUPRC only) ----------
+    # ---------- Compute binary task tables (unchanged) ----------
     rows = []
     for task in BIN_TASKS:
         for grp in GROUP_ORDER:
@@ -483,7 +560,7 @@ def main():
 
     metrics = pd.DataFrame(rows)
 
-    # ---------- Compute multiclass top-1 Hit / macro-F1 ----------
+    # ── CHANGED: compute all 6 multiclass metrics per (group, split) ─────────
     multi_rows = []
     for grp in GROUP_ORDER:
         for spl in SPLIT_ORDER:
@@ -493,46 +570,48 @@ def main():
                 continue
 
             y_arr = np.asarray(y, dtype=np.int64)
-            p_arr = np.vstack(p)   # (N, 9)
-            y_hat = p_arr.argmax(axis=1) + 1
+            p_arr = np.vstack(p)                    # (N, 9)
 
-            hit = accuracy_score(y_arr, y_hat)
-            macro_f1 = f1_score(
-                y_arr, y_hat,
-                labels=list(range(1, 10)),
-                average="macro",
-                zero_division=0,
-            )
-
+            m = compute_multiclass_metrics(y_arr, p_arr)
             multi_rows.append({
-                "Group": grp, "Split": spl,
-                "Hit": hit, "MacroF1": macro_f1,
+                "Group":        grp,
+                "Split":        spl,
+                "MacroOvR_AUC": m["MacroOvR_AUC"],
+                "MacroAUPRC":   m["MacroAUPRC"],
+                "MacroF1":      m["MacroF1"],
+                "MCC":          m["MCC"],
+                "LogLoss":      m["LogLoss"],
+                "Top2Acc":      m["Top2Acc"],
             })
 
     multiclass_metrics = pd.DataFrame(multi_rows)
+    # ────────────────────────────────────────────────────────────────────────
 
-    # ---------- Pretty paper-style multiclass table ----------
+    # ── CHANGED: pivot tables now cover all 6 metrics ────────────────────────
+    MULTI_METRICS = ["MacroOvR_AUC", "MacroAUPRC", "MacroF1", "MCC", "LogLoss", "Top2Acc"]
+
     paper_multi_tbl = (
         multiclass_metrics
-        .pivot(index="Group", columns="Split", values=["Hit", "MacroF1"])
+        .pivot(index="Group", columns="Split", values=MULTI_METRICS)
         .reindex(index=GROUP_ORDER)
-        .reindex(columns=pd.MultiIndex.from_product([["Hit", "MacroF1"], SPLIT_ORDER]))
+        .reindex(columns=pd.MultiIndex.from_product([MULTI_METRICS, SPLIT_ORDER]))
         .round(4)
     )
 
     def make_multi_panel(group_name: str) -> pd.DataFrame:
         sub = multiclass_metrics[multiclass_metrics["Group"] == group_name]
         return (
-            sub.pivot(index="Group", columns="Split", values=["Hit", "MacroF1"])
-            .reindex(columns=pd.MultiIndex.from_product([["Hit", "MacroF1"], SPLIT_ORDER]))
+            sub.pivot(index="Group", columns="Split", values=MULTI_METRICS)
+            .reindex(columns=pd.MultiIndex.from_product([MULTI_METRICS, SPLIT_ORDER]))
             .round(4)
         )
 
     multi_calibration_tbl = make_multi_panel("Calibration")
     multi_holdoutA_tbl    = make_multi_panel("HoldoutA")
     multi_holdoutB_tbl    = make_multi_panel("HoldoutB")
+    # ────────────────────────────────────────────────────────────────────────
 
-    # ---------- Pretty paper-style selected AUC tables ----------
+    # Binary AUC panel helpers (unchanged)
     paper_auc = metrics[metrics["Task"].isin(PAPER_AUC_TASKS.keys())].copy()
     paper_auc["TaskPretty"] = paper_auc["Task"].map(PAPER_AUC_TASKS)
 
@@ -548,19 +627,20 @@ def main():
     auc_holdoutA_tbl    = make_auc_panel("HoldoutA")
     auc_holdoutB_tbl    = make_auc_panel("HoldoutB")
 
-    # ---------- Print tables ----------
+    # ── CHANGED: updated print titles ────────────────────────────────────────
     def _p(title: str, df: pd.DataFrame):
         print(f"\n=============  {title}  =======================")
         print(df.fillna(" NA"))
         print("============================================================")
 
-    _p("MULTICLASS TOP-1 HIT / MACRO-F1 TABLE", paper_multi_tbl)
-    _p("MULTICLASS TOP-1 HIT / MACRO-F1 - CALIBRATION",  multi_calibration_tbl)
-    _p("MULTICLASS TOP-1 HIT / MACRO-F1 - HOLDOUT A",    multi_holdoutA_tbl)
-    _p("MULTICLASS TOP-1 HIT / MACRO-F1 - HOLDOUT B",    multi_holdoutB_tbl)
+    _p("9-CLASS METRICS (ALL GROUPS)", paper_multi_tbl)
+    _p("9-CLASS METRICS - CALIBRATION",  multi_calibration_tbl)
+    _p("9-CLASS METRICS - HOLDOUT A",    multi_holdoutA_tbl)
+    _p("9-CLASS METRICS - HOLDOUT B",    multi_holdoutB_tbl)
     _p("SELECTED BINARY AUC TABLE - CALIBRATION", auc_calibration_tbl)
     _p("SELECTED BINARY AUC TABLE - HOLDOUT A", auc_holdoutA_tbl)
     _p("SELECTED BINARY AUC TABLE - HOLDOUT B", auc_holdoutB_tbl)
+    # ────────────────────────────────────────────────────────────────────────
 
     # ---------- Save locally & upload to S3 ----------
     out_dir = Path("/tmp/predict_eval_outputs_gru")
