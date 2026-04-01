@@ -1024,9 +1024,9 @@ def main():
         print("============================================================")
 
     _p("9-CLASS METRICS (ALL GROUPS)",      paper_multi_tbl)
-    _p("9-CLASS METRICS - CALIBRATION",     multi_calibration_tbl)
-    _p("9-CLASS METRICS - HOLDOUT A",       multi_holdoutA_tbl)
-    _p("9-CLASS METRICS - HOLDOUT B",       multi_holdoutB_tbl)
+    # _p("9-CLASS METRICS - CALIBRATION",     multi_calibration_tbl)
+    # _p("9-CLASS METRICS - HOLDOUT A",       multi_holdoutA_tbl)
+    # _p("9-CLASS METRICS - HOLDOUT B",       multi_holdoutB_tbl)
     _p("PER-CLASS METRICS - CALIBRATION",   perclass_calibration_tbl)
     _p("PER-CLASS METRICS - HOLDOUT A",     perclass_holdoutA_tbl)
     _p("PER-CLASS METRICS - HOLDOUT B",     perclass_holdoutB_tbl)

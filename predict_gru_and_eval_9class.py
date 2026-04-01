@@ -634,9 +634,9 @@ def main():
         print("============================================================")
 
     _p("9-CLASS METRICS (ALL GROUPS)", paper_multi_tbl)
-    _p("9-CLASS METRICS - CALIBRATION",  multi_calibration_tbl)
-    _p("9-CLASS METRICS - HOLDOUT A",    multi_holdoutA_tbl)
-    _p("9-CLASS METRICS - HOLDOUT B",    multi_holdoutB_tbl)
+    # _p("9-CLASS METRICS - CALIBRATION",  multi_calibration_tbl)
+    # _p("9-CLASS METRICS - HOLDOUT A",    multi_holdoutA_tbl)
+    # _p("9-CLASS METRICS - HOLDOUT B",    multi_holdoutB_tbl)
     _p("SELECTED BINARY AUC TABLE - CALIBRATION", auc_calibration_tbl)
     _p("SELECTED BINARY AUC TABLE - HOLDOUT A", auc_holdoutA_tbl)
     _p("SELECTED BINARY AUC TABLE - HOLDOUT B", auc_holdoutB_tbl)

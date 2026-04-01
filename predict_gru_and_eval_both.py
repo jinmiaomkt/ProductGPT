@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-predict_lstm_and_eval_new.py
+predict_gru_and_eval_new.py
 
-Matches a raw-input LSTM checkpoint trained with input_dim=15 and an 'fc' head.
-Evaluation methodology matches predict_productgpt_and_eval.py / predict_gru_and_eval.py:
-  - End-aligns predictions with labels when lengths differ
-  - Computes AUC / AUPRC by (Task, PeriodGroup, Split)  [binary tasks]
-  - Computes 6 multiclass metrics by (PeriodGroup, Split):
+End-to-end for GRU — evaluation methodology matches predict_productgpt_and_eval.py:
+  - Run inference for per-timestep 9-way decision probabilities (classes 1..9)
+  - End-align predictions with labels when lengths differ
+  - Compute AUC / AUPRC by (Task, PeriodGroup, Split)  [binary tasks]
+  - Compute 6 multiclass metrics by (PeriodGroup, Split):
       MacroOvR_AUC, MacroAUPRC, MacroF1, MCC, LogLoss, Top2Acc
-  - Prints paper-style tables, saves CSVs locally, uploads to S3
+  - Print paper-style tables to console
+  - Save CSV tables (and optional predictions) locally and upload to S3
 
 Usage (example):
-  python predict_lstm_and_eval_new.py \
+  python predict_gru_and_eval_new.py \
     --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
-    --ckpt /home/ec2-user/tmp_lstm/lstm_h128_lr0.001_bs4.pt \
+    --ckpt /home/ec2-user/tmp_gru/gru_h128_lr0.001_bs4.pt \
     --hidden-size 128 \
     --input-dim 15 \
     --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
-    --s3 s3://productgptbucket/experiments/lstm/run_001/ \
-    --pred-out /tmp/lstm_preds.jsonl.gz \
+    --s3 s3://productgptbucket/experiments/gru/run_001/ \
+    --pred-out /tmp/gru_preds.jsonl.gz \
     --uids-val s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_val.txt \
     --uids-test s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_test.txt \
     --fold-id 0
@@ -40,38 +41,37 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, random_split
 from torch.nn.utils.rnn import pad_sequence
 
-# ── CHANGED: added matthews_corrcoef, log_loss, label_binarize ──────────────
 from sklearn.metrics import (
     roc_auc_score, accuracy_score, f1_score, average_precision_score,
     matthews_corrcoef, log_loss,
 )
 from sklearn.preprocessing import label_binarize
-# ────────────────────────────────────────────────────────────────────────────
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 # ===================== CLI ======================
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--data",        required=True, help="JSON array of user records (AggregateInput present)")
-    p.add_argument("--ckpt",        required=True, help="LSTM *.pt (state_dict with lstm.* and fc.*)")
-    p.add_argument("--hidden-size", type=int,     required=True, help="Hidden size used in training (match ckpt)")
-    p.add_argument("--input-dim",   type=int,     default=15,    help="Feature dim per timestep (raw features)")
-    p.add_argument("--batch-size",  type=int,     default=128)
-    p.add_argument("--labels",      required=True, help="Labels JSON with Decision/IndexBasedHoldout/FeatureBasedHoldout")
-    p.add_argument("--s3",          required=True, help="S3 prefix for uploads (s3://bucket/path/)")
-    p.add_argument("--pred-out",    default="",    help="Optional local predictions path (.jsonl or .jsonl.gz)")
-    p.add_argument("--seed",        type=int,      default=33)
+    p.add_argument("--data",        required=True)
+    p.add_argument("--ckpt",        required=True)
+    p.add_argument("--hidden-size", type=int, required=True)
+    p.add_argument("--input-dim",   type=int, default=15)
+    p.add_argument("--batch-size",  type=int, default=128)
+    p.add_argument("--labels",      required=True)
+    p.add_argument("--s3",          required=True)
+    p.add_argument("--pred-out",    default="")
+    p.add_argument("--seed",        type=int, default=33)
     p.add_argument("--uids-val",    default="")
     p.add_argument("--uids-test",   default="")
-    p.add_argument("--fold-id",     type=int,      default=-1)
+    p.add_argument("--fold-id",     type=int, default=-1)
     return p.parse_args()
 
 # ================== Utilities ===================
 def smart_open_w(path: str | Path):
+    if isinstance(path, Path):
+        path = str(path)
     if not path:
         raise ValueError("Empty path for smart_open_w")
-    path = str(path)
     if path == "-":
         return nullcontext(sys.stdout)
     if path.endswith(".gz"):
@@ -133,6 +133,12 @@ def load_uid_set(path_or_s3: str) -> Set[str]:
     return uids
 
 # ================= Data / Labels =================
+def _json_array(path: str | Path):
+    raw = json.loads(Path(path).read_text())
+    if not isinstance(raw, list):
+        raise ValueError("Input JSON must be a list of objects")
+    return raw
+
 def to_int_vec(x):
     if isinstance(x, str):
         return [int(v) for v in x.split()]
@@ -174,13 +180,10 @@ def build_splits(records, seed: int):
         return "val" if u in val_uid else "test" if u in test_uid else "train"
     return which_split
 
-# ================= Dataset & Collate (LSTM) =============
+# ================= Dataset & Collate (GRU) =============
 class PredictDataset(Dataset):
     def __init__(self, json_path: Path, input_dim: int):
-        raw = json.loads(json_path.read_text())
-        if not isinstance(raw, list):
-            raise ValueError("Input JSON must be an array of objects")
-        self.rows = raw
+        self.rows = _json_array(json_path)
         self.input_dim = input_dim
 
     def __len__(self): return len(self.rows)
@@ -199,21 +202,21 @@ class PredictDataset(Dataset):
         return {"uid": uid, "x": x, "T": T}
 
 def collate(batch):
-    uids = [b["uid"] for b in batch]
-    xs   = [b["x"] for b in batch]
-    Ts   = [b["T"] for b in batch]
+    uids  = [b["uid"] for b in batch]
+    xs    = [b["x"]   for b in batch]
+    Ts    = [b["T"]   for b in batch]
     x_pad = pad_sequence(xs, batch_first=True, padding_value=0.0)
     return {"uid": uids, "x": x_pad, "T": Ts}
 
-# ================== LSTM Model ==========================
-class LSTMDecisionModel(nn.Module):
+# ================== GRU Model ==========================
+class GRUClassifier(nn.Module):
     def __init__(self, input_dim: int, hidden_size: int, num_classes: int = 10):
         super().__init__()
-        self.lstm = nn.LSTM(input_dim, hidden_size, batch_first=True)
-        self.fc   = nn.Linear(hidden_size, num_classes)
+        self.gru = nn.GRU(input_dim, hidden_size, batch_first=True)
+        self.fc  = nn.Linear(hidden_size, num_classes)
 
     def forward(self, x):
-        out, _ = self.lstm(x)
+        out, _ = self.gru(x)
         return self.fc(out)           # (B, T, C=10)
 
 # =================== Metrics Setup =====================
@@ -230,16 +233,14 @@ TASK_POSSETS = {k: set(v) for k, v in BIN_TASKS.items()}
 GROUP_ORDER = ["Calibration", "HoldoutA", "HoldoutB"]
 SPLIT_ORDER = ["val", "test"]
 
-# ── CHANGED: class labels for the 9-class problem ───────────────────────────
 NINE_CLASSES = list(range(1, 10))   # [1, 2, ..., 9]
-# ────────────────────────────────────────────────────────────────────────────
 
 PAPER_AUC_TASKS = {
-    "BuyOne": "Buy One",
-    "BuyTen": "Buy Ten",
+    "BuyOne":    "Buy One",
+    "BuyTen":    "Buy Ten",
     "BuyFigure": "Character Event Wish",
     "BuyWeapon": "Weapon Event Wish",
-    "BuyRegular": "Regular Wish",
+    "BuyRegular":"Regular Wish",
 }
 PAPER_AUC_ORDER = [
     "Buy One",
@@ -250,75 +251,36 @@ PAPER_AUC_ORDER = [
 ]
 
 def period_group(idx_h, feat_h):
-    if feat_h == 0:               return "Calibration"
-    if feat_h == 1 and idx_h == 0:return "HoldoutA"
-    if idx_h == 1:                return "HoldoutB"
+    if feat_h == 0:                return "Calibration"
+    if feat_h == 1 and idx_h == 0: return "HoldoutA"
+    if idx_h == 1:                 return "HoldoutB"
     return "UNASSIGNED"
 
-# ── CHANGED: helper to compute all six 9-class metrics ──────────────────────
-def compute_multiclass_metrics(
-    y_arr: np.ndarray,
-    p_arr: np.ndarray,
-) -> dict:
-    """
-    Compute 6 multiclass metrics for a single (group, split) bucket.
+# ── Aggregate 9-class metrics ────────────────────────────────────────────────
+def compute_multiclass_metrics(y_arr: np.ndarray, p_arr: np.ndarray) -> dict:
+    """6 aggregate multiclass metrics for a single (group, split) bucket."""
+    y_hat = p_arr.argmax(axis=1) + 1
 
-    Parameters
-    ----------
-    y_arr : (N,) int array, true class labels in {1..9}
-    p_arr : (N, 9) float array, predicted probabilities (must sum to ~1 per row)
-
-    Returns
-    -------
-    dict with keys:
-        MacroOvR_AUC, MacroAUPRC, MacroF1, MCC, LogLoss, Top2Acc
-    """
-    # Hard predictions (argmax → back to 1-indexed)
-    y_hat = p_arr.argmax(axis=1) + 1                      # (N,)
-
-    # ── 1. Macro One-vs-Rest AUC ──────────────────────────────────────────
     try:
         macro_ovr_auc = roc_auc_score(
-            y_arr, p_arr,
-            multi_class="ovr",
-            average="macro",
-            labels=NINE_CLASSES,
+            y_arr, p_arr, multi_class="ovr", average="macro", labels=NINE_CLASSES,
         )
     except ValueError:
         macro_ovr_auc = np.nan
 
-    # ── 2. Macro AUPRC ────────────────────────────────────────────────────
-    # Binarise labels into a (N, 9) matrix, then average per-class AP.
-    # label_binarize with classes=[1..9] maps label k → column k-1.
-    y_bin = label_binarize(y_arr, classes=NINE_CLASSES)    # (N, 9)
-    per_class_ap = []
-    for c in range(9):
-        if y_bin[:, c].sum() == 0:
-            continue                  # skip entirely absent classes
-        per_class_ap.append(average_precision_score(y_bin[:, c], p_arr[:, c]))
+    y_bin = label_binarize(y_arr, classes=NINE_CLASSES)
+    per_class_ap = [
+        average_precision_score(y_bin[:, c], p_arr[:, c])
+        for c in range(9) if y_bin[:, c].sum() > 0
+    ]
     macro_auprc = float(np.mean(per_class_ap)) if per_class_ap else np.nan
 
-    # ── 3. Macro-F1 ───────────────────────────────────────────────────────
-    macro_f1 = f1_score(
-        y_arr, y_hat,
-        labels=NINE_CLASSES,
-        average="macro",
-        zero_division=0,
-    )
+    macro_f1 = f1_score(y_arr, y_hat, labels=NINE_CLASSES, average="macro", zero_division=0)
+    mcc       = matthews_corrcoef(y_arr, y_hat)
+    ll        = log_loss(y_arr, np.clip(p_arr, 1e-7, 1.0), labels=NINE_CLASSES)
 
-    # ── 4. Matthews Correlation Coefficient ───────────────────────────────
-    mcc = matthews_corrcoef(y_arr, y_hat)
-
-    # ── 5. Log-Loss (Cross-Entropy) ───────────────────────────────────────
-    p_clipped = np.clip(p_arr, 1e-7, 1.0)
-    ll = log_loss(y_arr, p_clipped, labels=NINE_CLASSES)
-
-    # ── 6. Top-2 Accuracy ─────────────────────────────────────────────────
-    top2_indices = np.argsort(p_arr, axis=1)[:, -2:]      # (N, 2), 0-indexed
-    top2_labels  = top2_indices + 1                        # convert to 1-indexed
-    top2_acc = float(np.mean(
-        [y_arr[i] in top2_labels[i] for i in range(len(y_arr))]
-    ))
+    top2_labels = np.argsort(p_arr, axis=1)[:, -2:] + 1
+    top2_acc    = float(np.mean([y_arr[i] in top2_labels[i] for i in range(len(y_arr))]))
 
     return {
         "MacroOvR_AUC": round(float(macro_ovr_auc), 4),
@@ -328,7 +290,50 @@ def compute_multiclass_metrics(
         "LogLoss":      round(float(ll),             4),
         "Top2Acc":      round(float(top2_acc),       4),
     }
+
+
+# ── Per-class (one-vs-rest) metrics ─────────────────────────────────────────
+PERCLASS_METRICS = ["AUC_OvR", "AUPRC", "F1", "Support"]
+
+
+def compute_perclass_metrics(y_arr: np.ndarray, p_arr: np.ndarray) -> dict:
+    """
+    Per-class One-vs-Rest metrics for each of the 9 decision classes.
+
+    Returns
+    -------
+    dict  {class_int (1-9): {"AUC_OvR", "AUPRC", "F1", "Support"}}
+    """
+    y_hat = p_arr.argmax(axis=1) + 1                     # (N,) 1-indexed
+    y_bin = label_binarize(y_arr, classes=NINE_CLASSES)  # (N, 9)
+
+    results = {}
+    for c_idx, c in enumerate(NINE_CLASSES):
+        support     = int((y_arr == c).sum())
+        y_bin_c     = y_bin[:, c_idx]
+        p_c         = p_arr[:, c_idx]
+        y_hat_bin_c = (y_hat == c).astype(int)
+
+        if y_bin_c.sum() == 0 or y_bin_c.sum() == len(y_arr):
+            auc = np.nan
+        else:
+            try:
+                auc = roc_auc_score(y_bin_c, p_c)
+            except ValueError:
+                auc = np.nan
+
+        auprc = average_precision_score(y_bin_c, p_c) if y_bin_c.sum() > 0 else np.nan
+        f1    = f1_score(y_bin_c, y_hat_bin_c, zero_division=0)
+
+        results[c] = {
+            "AUC_OvR": round(float(auc),   4),
+            "AUPRC":   round(float(auprc), 4),
+            "F1":      round(float(f1),    4),
+            "Support": support,
+        }
+    return results
 # ────────────────────────────────────────────────────────────────────────────
+
 
 # ======================= Main ==========================
 def main():
@@ -349,7 +354,7 @@ def main():
     # ---------- Labels ----------
     label_dict, records = load_labels(label_path)
 
-    # ---------- EXACT MATCH OVERRIDE or fallback 80/10/10 ----------
+    # ---------- Split ----------
     uids_val_override  = load_uid_set(args.uids_val)  if args.uids_val  else set()
     uids_test_override = load_uid_set(args.uids_test) if args.uids_test else set()
 
@@ -359,7 +364,6 @@ def main():
         overlap = uids_val_override & uids_test_override
         if overlap:
             raise ValueError(f"UIDs present in BOTH val and test: {sorted(list(overlap))[:5]} ...")
-
         def which_split(u):
             return "val" if u in uids_val_override else "test" if u in uids_test_override else "train"
         print(f"[INFO] Using EXACT UID lists: val={len(uids_val_override)}, test={len(uids_test_override)}")
@@ -373,10 +377,8 @@ def main():
 
     # ---------- Model ----------
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model  = LSTMDecisionModel(
-        input_dim   = args.input_dim,
-        hidden_size = args.hidden_size,
-        num_classes = 10,
+    model  = GRUClassifier(
+        input_dim=args.input_dim, hidden_size=args.hidden_size, num_classes=10,
     ).to(device).eval()
 
     # ---------- Load checkpoint ----------
@@ -385,7 +387,7 @@ def main():
         sd = state
     else:
         sd = state.get("model_state_dict", state)
-    sd = { (k[7:] if k.startswith("module.") else k): v for k, v in sd.items() }
+    sd = {(k[7:] if k.startswith("module.") else k): v for k, v in sd.items()}
     model.load_state_dict(sd, strict=True)
 
     # ---------- Metric accumulators ----------
@@ -403,7 +405,7 @@ def main():
     # ---------- Inference + streaming eval ----------
     with torch.no_grad():
         for batch in loader:
-            x    = batch["x"].to(device)   # (B, T, D)
+            x    = batch["x"].to(device)
             Ts   = batch["T"]
             uids = batch["uid"]
 
@@ -439,7 +441,7 @@ def main():
                 y_arr      = np.asarray(lbl_info["label"][lbl_offset : lbl_offset + L], dtype=np.int64)
                 idx_h_arr  = np.asarray(lbl_info["idx_h"] [lbl_offset : lbl_offset + L], dtype=np.int64)
                 feat_h_arr = np.asarray(lbl_info["feat_h"][lbl_offset : lbl_offset + L], dtype=np.int64)
-                p_arr      = probs_seq_np[:L]   # (L, 9)
+                p_arr      = probs_seq_np[:L]
 
                 group_idx = np.where(
                     feat_h_arr == 0, 0,
@@ -473,7 +475,7 @@ def main():
 
                 accept += 1
 
-    # ── Debug output ───────────────────────────────────────────
+    # ── Debug output ──────────────────────────────────────────────────────────
     print("\n[DEBUG] group distribution in scored samples:")
     for grp in GROUP_ORDER:
         for spl in SPLIT_ORDER:
@@ -510,7 +512,7 @@ def main():
         print(f"[INFO] coverage: val={len(accept_users.get('val', set()))} / {len(load_uid_set(args.uids_val))}, "
               f"test={len(accept_users.get('test', set()))} / {len(load_uid_set(args.uids_test))}")
 
-    # ── Bucket stats & prevalence (unchanged) ─────────────────
+    # ── Bucket stats ──────────────────────────────────────────────────────────
     bucket_stats = []
     for task in BIN_TASKS:
         for grp in GROUP_ORDER:
@@ -518,13 +520,10 @@ def main():
                 y = scores[(task, grp, spl)]["y"]
                 if not y:
                     continue
-                n = len(y)
-                pos = sum(y)
-                neg = n - pos
-                prev = pos / n if n else float('nan')
+                n = len(y); pos = sum(y); neg = n - pos
                 bucket_stats.append({
                     "Task": task, "Group": grp, "Split": spl,
-                    "N": n, "Pos": pos, "Neg": neg, "Prev": round(prev, 4)
+                    "N": n, "Pos": pos, "Neg": neg, "Prev": round(pos / n, 4)
                 })
 
     stats_df = pd.DataFrame(bucket_stats).sort_values(["Split", "Group", "Task"])
@@ -532,7 +531,7 @@ def main():
     print(stats_df.to_string(index=False))
     print("============================================================")
 
-    # ---------- Compute binary task tables (unchanged) ----------
+    # ── Binary task metrics ───────────────────────────────────────────────────
     rows = []
     for task in BIN_TASKS:
         for grp in GROUP_ORDER:
@@ -541,19 +540,16 @@ def main():
                 if not y:
                     continue
                 if len(set(y)) < 2:
-                    auc = np.nan
-                    auprc = np.nan
+                    auc = auprc = np.nan
                 else:
                     auc   = roc_auc_score(y, p)
                     auprc = average_precision_score(y, p)
-                rows.append({
-                    "Task": task, "Group": grp, "Split": spl,
-                    "AUC": auc, "AUPRC": auprc,
-                })
+                rows.append({"Task": task, "Group": grp, "Split": spl,
+                             "AUC": auc, "AUPRC": auprc})
 
     metrics = pd.DataFrame(rows)
 
-    # ── CHANGED: compute all 6 multiclass metrics per (group, split) ─────────
+    # ── Aggregate 9-class metrics per (group, split) ──────────────────────────
     multi_rows = []
     for grp in GROUP_ORDER:
         for spl in SPLIT_ORDER:
@@ -561,28 +557,37 @@ def main():
             p = multi_scores[(grp, spl)]["p"]
             if not y:
                 continue
-
-            y_arr = np.asarray(y, dtype=np.int64)
-            p_arr = np.vstack(p)                    # (N, 9)
-
-            m = compute_multiclass_metrics(y_arr, p_arr)
-            multi_rows.append({
-                "Group":        grp,
-                "Split":        spl,
-                "MacroOvR_AUC": m["MacroOvR_AUC"],
-                "MacroAUPRC":   m["MacroAUPRC"],
-                "MacroF1":      m["MacroF1"],
-                "MCC":          m["MCC"],
-                "LogLoss":      m["LogLoss"],
-                "Top2Acc":      m["Top2Acc"],
-            })
+            m = compute_multiclass_metrics(
+                np.asarray(y, dtype=np.int64), np.vstack(p)
+            )
+            multi_rows.append({"Group": grp, "Split": spl, **m})
 
     multiclass_metrics = pd.DataFrame(multi_rows)
-    # ────────────────────────────────────────────────────────────────────────
 
-    # ── CHANGED: pivot tables now cover all 6 metrics ────────────────────────
-    MULTI_METRICS = ["MacroOvR_AUC", "MacroAUPRC", "MacroF1", "MCC", "LogLoss", "Top2Acc"]
+    # ── Per-class metrics per (group, split) ──────────────────────────────────
+    perclass_rows = []
+    for grp in GROUP_ORDER:
+        for spl in SPLIT_ORDER:
+            y = multi_scores[(grp, spl)]["y"]
+            p = multi_scores[(grp, spl)]["p"]
+            if not y:
+                continue
+            pc = compute_perclass_metrics(
+                np.asarray(y, dtype=np.int64), np.vstack(p)
+            )
+            for c, cm in pc.items():
+                perclass_rows.append({"Group": grp, "Split": spl, "Class": c, **cm})
 
+    perclass_df = pd.DataFrame(perclass_rows)
+
+    # ── Column layouts ────────────────────────────────────────────────────────
+    MULTI_METRICS    = ["MacroOvR_AUC", "MacroAUPRC", "MacroF1", "MCC", "LogLoss", "Top2Acc"]
+    BIN_METRIC_COLS  = ["BinaryAUC", "BinaryAUPRC"]
+    COMBINED_METRICS = MULTI_METRICS + PERCLASS_METRICS + BIN_METRIC_COLS
+    COMBINED_COLS    = pd.MultiIndex.from_product([COMBINED_METRICS, SPLIT_ORDER],
+                                                  names=["Metric", "Split"])
+
+    # ── Individual panel builders ─────────────────────────────────────────────
     paper_multi_tbl = (
         multiclass_metrics
         .pivot(index="Group", columns="Split", values=MULTI_METRICS)
@@ -599,14 +604,20 @@ def main():
             .round(4)
         )
 
-    multi_calibration_tbl = make_multi_panel("Calibration")
-    multi_holdoutA_tbl    = make_multi_panel("HoldoutA")
-    multi_holdoutB_tbl    = make_multi_panel("HoldoutB")
-    # ────────────────────────────────────────────────────────────────────────
+    def make_perclass_panel(group_name: str) -> pd.DataFrame:
+        sub = perclass_df[perclass_df["Group"] == group_name].copy()
+        tbl = (
+            sub.pivot(index="Class", columns="Split", values=PERCLASS_METRICS)
+            .reindex(index=NINE_CLASSES)
+            .reindex(columns=pd.MultiIndex.from_product([PERCLASS_METRICS, SPLIT_ORDER]))
+            .round(4)
+        )
+        tbl.index.name = "Class"
+        return tbl
 
-    # Binary AUC panel helpers (unchanged)
     paper_auc = metrics[metrics["Task"].isin(PAPER_AUC_TASKS.keys())].copy()
     paper_auc["TaskPretty"] = paper_auc["Task"].map(PAPER_AUC_TASKS)
+    all_binary = metrics.copy()
 
     def make_auc_panel(group_name: str) -> pd.DataFrame:
         sub = paper_auc[paper_auc["Group"] == group_name].copy()
@@ -616,49 +627,129 @@ def main():
             .round(4)
         )
 
-    auc_calibration_tbl = make_auc_panel("Calibration")
-    auc_holdoutA_tbl    = make_auc_panel("HoldoutA")
-    auc_holdoutB_tbl    = make_auc_panel("HoldoutB")
+    multi_calibration_tbl    = make_multi_panel("Calibration")
+    multi_holdoutA_tbl       = make_multi_panel("HoldoutA")
+    multi_holdoutB_tbl       = make_multi_panel("HoldoutB")
 
-    # ── CHANGED: updated print titles ────────────────────────────────────────
+    perclass_calibration_tbl = make_perclass_panel("Calibration")
+    perclass_holdoutA_tbl    = make_perclass_panel("HoldoutA")
+    perclass_holdoutB_tbl    = make_perclass_panel("HoldoutB")
+
+    auc_calibration_tbl      = make_auc_panel("Calibration")
+    auc_holdoutA_tbl         = make_auc_panel("HoldoutA")
+    auc_holdoutB_tbl         = make_auc_panel("HoldoutB")
+
+    # ── Combined report builder ───────────────────────────────────────────────
+    def build_combined_report(group_name: str) -> pd.DataFrame:
+        """
+        One flat DataFrame per group with three stacked sections:
+          [1] Aggregate 9-class  (1 row  — "Aggregate")
+          [2] Per-class OvR      (9 rows — "Class 1" … "Class 9")
+          [3] Binary tasks       (6 rows — one per BIN_TASKS entry)
+
+        Columns: MultiIndex (Metric, Split).  Off-section cells are NaN.
+        """
+        rows = {}
+
+        # Section 1 — aggregate
+        agg_sub = multiclass_metrics[multiclass_metrics["Group"] == group_name]
+        for _, row in agg_sub.iterrows():
+            spl = row["Split"]
+            for m in MULTI_METRICS:
+                rows.setdefault("Aggregate", {})[m, spl] = row[m]
+
+        # Section 2 — per-class
+        pc_sub = perclass_df[perclass_df["Group"] == group_name]
+        for _, row in pc_sub.iterrows():
+            label = f"Class {int(row['Class'])}"
+            spl   = row["Split"]
+            for m in PERCLASS_METRICS:
+                rows.setdefault(label, {})[m, spl] = row[m]
+
+        # Section 3 — binary tasks (all 6, pretty labels where available)
+        bin_sub = all_binary[all_binary["Group"] == group_name].copy()
+        bin_sub["Label"] = bin_sub["Task"].map(lambda t: PAPER_AUC_TASKS.get(t, t))
+        for _, row in bin_sub.iterrows():
+            label = row["Label"]
+            spl   = row["Split"]
+            rows.setdefault(label, {})["BinaryAUC",   spl] = row["AUC"]
+            rows.setdefault(label, {})["BinaryAUPRC", spl] = row["AUPRC"]
+
+        # Assemble with stable ordering
+        class_labels  = [f"Class {c}" for c in NINE_CLASSES]
+        binary_labels = bin_sub[["Label"]].drop_duplicates()["Label"].tolist()
+        seen, ordered_labels = set(), []
+        for lbl in ["Aggregate"] + class_labels + binary_labels:
+            if lbl not in seen and lbl in rows:
+                ordered_labels.append(lbl); seen.add(lbl)
+
+        tbl = pd.DataFrame(rows, dtype=float).T.reindex(ordered_labels)
+        tbl.columns = pd.MultiIndex.from_tuples(tbl.columns, names=["Metric", "Split"])
+        tbl = tbl.reindex(columns=COMBINED_COLS).round(4)
+        tbl.index.name = "Row"
+
+        # Blank separator rows between sections
+        agg_rows   = ["Aggregate"]
+        class_rows = [l for l in ordered_labels if l.startswith("Class")]
+        bin_rows   = [l for l in ordered_labels if l not in agg_rows and l not in class_rows]
+        sep = pd.DataFrame([[np.nan]*len(COMBINED_COLS)], columns=COMBINED_COLS,
+                           index=["─────────────────"])
+        sep.index.name = "Row"
+
+        parts = []
+        if agg_rows:   parts += [tbl.loc[agg_rows],  sep]
+        if class_rows: parts += [tbl.loc[class_rows], sep]
+        if bin_rows:   parts += [tbl.loc[bin_rows]]
+        return pd.concat(parts)
+
+    combined_calibration_tbl = build_combined_report("Calibration")
+    combined_holdoutA_tbl    = build_combined_report("HoldoutA")
+    combined_holdoutB_tbl    = build_combined_report("HoldoutB")
+
+    # ── Print tables ──────────────────────────────────────────────────────────
     def _p(title: str, df: pd.DataFrame):
         print(f"\n=============  {title}  =======================")
         print(df.fillna(" NA"))
         print("============================================================")
 
-    _p("9-CLASS METRICS (ALL GROUPS)", paper_multi_tbl)
-    #_p("9-CLASS METRICS - CALIBRATION",  multi_calibration_tbl)
-    #_p("9-CLASS METRICS - HOLDOUT A",    multi_holdoutA_tbl)
-    #_p("9-CLASS METRICS - HOLDOUT B",    multi_holdoutB_tbl)
+    _p("9-CLASS METRICS (ALL GROUPS)",            paper_multi_tbl)
+    # _p("9-CLASS METRICS - CALIBRATION",          multi_calibration_tbl)
+    # _p("9-CLASS METRICS - HOLDOUT A",            multi_holdoutA_tbl)
+    # _p("9-CLASS METRICS - HOLDOUT B",            multi_holdoutB_tbl)
+    _p("PER-CLASS METRICS - CALIBRATION",         perclass_calibration_tbl)
+    _p("PER-CLASS METRICS - HOLDOUT A",           perclass_holdoutA_tbl)
+    _p("PER-CLASS METRICS - HOLDOUT B",           perclass_holdoutB_tbl)
     _p("SELECTED BINARY AUC TABLE - CALIBRATION", auc_calibration_tbl)
-    _p("SELECTED BINARY AUC TABLE - HOLDOUT A", auc_holdoutA_tbl)
-    _p("SELECTED BINARY AUC TABLE - HOLDOUT B", auc_holdoutB_tbl)
-    # ────────────────────────────────────────────────────────────────────────
+    _p("SELECTED BINARY AUC TABLE - HOLDOUT A",   auc_holdoutA_tbl)
+    _p("SELECTED BINARY AUC TABLE - HOLDOUT B",   auc_holdoutB_tbl)
+    _p("COMBINED REPORT - CALIBRATION",           combined_calibration_tbl)
+    _p("COMBINED REPORT - HOLDOUT A",             combined_holdoutA_tbl)
+    _p("COMBINED REPORT - HOLDOUT B",             combined_holdoutB_tbl)
 
-    # ---------- Save locally & upload to S3 ----------
-    out_dir = Path("/tmp/predict_eval_outputs_lstm_raw")
+    # ── Save locally & upload to S3 ───────────────────────────────────────────
+    out_dir = Path("/tmp/predict_eval_outputs_gru")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    paper_multi_csv       = out_dir / "paper_multiclass_table.csv"
-    multi_calibration_csv = out_dir / "paper_multi_calibration.csv"
-    multi_holdoutA_csv    = out_dir / "paper_multi_holdoutA.csv"
-    multi_holdoutB_csv    = out_dir / "paper_multi_holdoutB.csv"
-    auc_calibration_csv   = out_dir / "paper_auc_calibration.csv"
-    auc_holdoutA_csv      = out_dir / "paper_auc_holdoutA.csv"
-    auc_holdoutB_csv      = out_dir / "paper_auc_holdoutB.csv"
+    csv_map = {
+        "paper_multiclass_table.csv":      paper_multi_tbl,
+        "paper_multi_calibration.csv":     multi_calibration_tbl,
+        "paper_multi_holdoutA.csv":        multi_holdoutA_tbl,
+        "paper_multi_holdoutB.csv":        multi_holdoutB_tbl,
+        "perclass_calibration.csv":        perclass_calibration_tbl,
+        "perclass_holdoutA.csv":           perclass_holdoutA_tbl,
+        "perclass_holdoutB.csv":           perclass_holdoutB_tbl,
+        "paper_auc_calibration.csv":       auc_calibration_tbl,
+        "paper_auc_holdoutA.csv":          auc_holdoutA_tbl,
+        "paper_auc_holdoutB.csv":          auc_holdoutB_tbl,
+        "combined_report_calibration.csv": combined_calibration_tbl,
+        "combined_report_holdoutA.csv":    combined_holdoutA_tbl,
+        "combined_report_holdoutB.csv":    combined_holdoutB_tbl,
+    }
 
-    paper_multi_tbl.to_csv(paper_multi_csv)
-    multi_calibration_tbl.to_csv(multi_calibration_csv)
-    multi_holdoutA_tbl.to_csv(multi_holdoutA_csv)
-    multi_holdoutB_tbl.to_csv(multi_holdoutB_csv)
-    auc_calibration_tbl.to_csv(auc_calibration_csv)
-    auc_holdoutA_tbl.to_csv(auc_holdoutA_csv)
-    auc_holdoutB_tbl.to_csv(auc_holdoutB_csv)
-
-    for pth in [paper_multi_csv, multi_calibration_csv, multi_holdoutA_csv,
-                multi_holdoutB_csv, auc_calibration_csv, auc_holdoutA_csv,
-                auc_holdoutB_csv]:
-        dest = s3_join(s3_prefix_effective, pth.name)
+    for fname, df in csv_map.items():
+        pth = out_dir / fname
+        df.to_csv(pth)
+        dest = s3_join(s3_prefix_effective, fname)
         s3_upload_file(pth, dest)
         print(f"[S3] uploaded: {dest}")
 
