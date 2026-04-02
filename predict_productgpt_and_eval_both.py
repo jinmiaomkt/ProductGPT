@@ -641,7 +641,6 @@ def main():
     uid_to_lbl_len  = {}
 
     # ---------- Inference + streaming eval ----------
-    focus_ids = torch.arange(1, 10, device=device)
     with torch.no_grad():
         for batch in loader:
             x    = batch["x"].to(device)
@@ -654,38 +653,36 @@ def main():
             else:
                 pos = torch.arange(cfg["ai_rate"] - 1, x.size(1), cfg["ai_rate"], device=device)
 
+            # Align to decision-slot axis
             if logits_full.size(1) == x.size(1):
-                logits = logits_full[:, pos, :]
+                logits = logits_full[:, pos, :]   # (B, Nslots, V)
             else:
-                logits = logits_full
+                logits = logits_full              # (B, Nslots, V)
 
             V_out = logits.size(-1)
 
+            # Step 1: always get 9 DECISION LOGITS first
             if V_out == 9:
-                prob_dec_9 = torch.softmax(logits, dim=-1)
+                logits_dec_9 = logits
             else:
-                probs_all = torch.softmax(logits, dim=-1)
-                prob_dec_9 = probs_all[..., 1:10]
+                # full-vocab model: decision classes are tokens 1..9
+                logits_dec_9 = logits[..., 1:10]
+
+            # Step 2: apply calibration on the 9-class logits
+            if args.calibration == "calibrator" and calibrator is not None:
+                prob_dec_9 = calibrator(logits_dec_9)   # already softmaxed over 9 classes
+            elif args.calibration == "analytic" and logit_bias_9 is not None:
+                prob_dec_9 = torch.softmax(
+                    logits_dec_9 + logit_bias_9.view(1, 1, 9),
+                    dim=-1
+                )
+            else:
+                prob_dec_9 = torch.softmax(logits_dec_9, dim=-1)
 
             prob_dec_focus = prob_dec_9
 
+            # Keep only ONE per-user loop
             for i, uid in enumerate(uids):
-                actual_len_i   = int((x[i] != pad_id).sum().item())
-                n_valid_slots_i = actual_len_i // cfg["ai_rate"]
-                probs_seq_np   = prob_dec_focus[i, :n_valid_slots_i].detach().cpu().numpy()
-
-                if pred_writer:
-                    pred_writer.write(
-                        json.dumps({"uid": uid, "probs": np.round(probs_seq_np, 6).tolist()}) + "\n"
-                    )
-
-                lbl_info = label_dict.get(uid)
-                if lbl_info is None:
-                    reject += 1
-                    continue
-
-            for i, uid in enumerate(uids):
-
                 actual_len_i    = lens[i]
                 n_valid_slots_i = actual_len_i // cfg["ai_rate"]
                 probs_seq_np    = prob_dec_focus[i, :n_valid_slots_i].detach().cpu().numpy()
@@ -712,7 +709,7 @@ def main():
                 lbl_offset = L_lbl - L
 
                 y_arr      = np.asarray(lbl_info["label"][lbl_offset : lbl_offset + L], dtype=np.int64)
-                idx_h_arr  = np.asarray(lbl_info["idx_h"] [lbl_offset : lbl_offset + L], dtype=np.int64)
+                idx_h_arr  = np.asarray(lbl_info["idx_h"][lbl_offset : lbl_offset + L], dtype=np.int64)
                 feat_h_arr = np.asarray(lbl_info["feat_h"][lbl_offset : lbl_offset + L], dtype=np.int64)
                 p_arr      = probs_seq_np[:L]
 
@@ -734,9 +731,9 @@ def main():
                     multi_scores[mkey]["p"].extend(p_arr[mask])
 
                 for task, pos_classes in BIN_TASKS.items():
-                    y_bin  = np.isin(y_arr, list(TASK_POSSETS[task])).astype(np.int8)
+                    y_bin = np.isin(y_arr, list(TASK_POSSETS[task])).astype(np.int8)
                     col_idx = [j - 1 for j in pos_classes]
-                    p_bin   = p_arr[:, col_idx].sum(axis=1)
+                    p_bin = p_arr[:, col_idx].sum(axis=1)
 
                     for g_idx, g_name in enumerate(GROUP_ORDER):
                         mask = (group_idx == g_idx)
@@ -747,6 +744,114 @@ def main():
                         scores[key]["p"].extend(p_bin[mask].tolist())
 
                 accept += 1
+
+    # # ---------- Inference + streaming eval ----------
+    # focus_ids = torch.arange(1, 10, device=device)
+    # with torch.no_grad():
+    #     for batch in loader:
+    #         x    = batch["x"].to(device)
+    #         uids = batch["uid"]
+    #         lens = batch["lens"]
+    #         logits_full = model(x)
+
+    #         if x.size(1) < cfg["ai_rate"]:
+    #             pos = torch.empty((0,), dtype=torch.long, device=device)
+    #         else:
+    #             pos = torch.arange(cfg["ai_rate"] - 1, x.size(1), cfg["ai_rate"], device=device)
+
+    #         if logits_full.size(1) == x.size(1):
+    #             logits = logits_full[:, pos, :]
+    #         else:
+    #             logits = logits_full
+
+    #         V_out = logits.size(-1)
+
+    #         if V_out == 9:
+    #             prob_dec_9 = torch.softmax(logits, dim=-1)
+    #         else:
+    #             probs_all = torch.softmax(logits, dim=-1)
+    #             prob_dec_9 = probs_all[..., 1:10]
+
+    #         prob_dec_focus = prob_dec_9
+
+    #         for i, uid in enumerate(uids):
+    #             actual_len_i   = int((x[i] != pad_id).sum().item())
+    #             n_valid_slots_i = actual_len_i // cfg["ai_rate"]
+    #             probs_seq_np   = prob_dec_focus[i, :n_valid_slots_i].detach().cpu().numpy()
+
+    #             if pred_writer:
+    #                 pred_writer.write(
+    #                     json.dumps({"uid": uid, "probs": np.round(probs_seq_np, 6).tolist()}) + "\n"
+    #                 )
+
+    #             lbl_info = label_dict.get(uid)
+    #             if lbl_info is None:
+    #                 reject += 1
+    #                 continue
+
+    #         for i, uid in enumerate(uids):
+
+    #             actual_len_i    = lens[i]
+    #             n_valid_slots_i = actual_len_i // cfg["ai_rate"]
+    #             probs_seq_np    = prob_dec_focus[i, :n_valid_slots_i].detach().cpu().numpy()
+
+    #             if pred_writer:
+    #                 pred_writer.write(
+    #                     json.dumps({"uid": uid, "probs": np.round(probs_seq_np, 6).tolist()}) + "\n"
+    #                 )
+
+    #             lbl_info = label_dict.get(uid)
+    #             if lbl_info is None:
+    #                 reject += 1
+    #                 continue
+
+    #             L_pred = len(probs_seq_np)
+    #             L_lbl  = len(lbl_info["label"])
+    #             uid_to_pred_len[uid] = L_pred
+    #             uid_to_lbl_len[uid]  = L_lbl
+
+    #             if L_pred != L_lbl:
+    #                 length_note["pred>lbl" if L_pred > L_lbl else "pred<label"] += 1
+
+    #             L          = min(L_pred, L_lbl)
+    #             lbl_offset = L_lbl - L
+
+    #             y_arr      = np.asarray(lbl_info["label"][lbl_offset : lbl_offset + L], dtype=np.int64)
+    #             idx_h_arr  = np.asarray(lbl_info["idx_h"] [lbl_offset : lbl_offset + L], dtype=np.int64)
+    #             feat_h_arr = np.asarray(lbl_info["feat_h"][lbl_offset : lbl_offset + L], dtype=np.int64)
+    #             p_arr      = probs_seq_np[:L]
+
+    #             group_idx = np.where(
+    #                 feat_h_arr == 0, 0,
+    #                 np.where((feat_h_arr == 1) & (idx_h_arr == 0), 1, 2)
+    #             )
+
+    #             split_tag = which_split(uid)
+    #             accept_users.setdefault(split_tag, set()).add(uid)
+
+    #             valid_mask = (y_arr >= 1) & (y_arr <= 9)
+    #             for g_idx, g_name in enumerate(GROUP_ORDER):
+    #                 mask = valid_mask & (group_idx == g_idx)
+    #                 if not mask.any():
+    #                     continue
+    #                 mkey = (g_name, split_tag)
+    #                 multi_scores[mkey]["y"].extend(y_arr[mask].tolist())
+    #                 multi_scores[mkey]["p"].extend(p_arr[mask])
+
+    #             for task, pos_classes in BIN_TASKS.items():
+    #                 y_bin  = np.isin(y_arr, list(TASK_POSSETS[task])).astype(np.int8)
+    #                 col_idx = [j - 1 for j in pos_classes]
+    #                 p_bin   = p_arr[:, col_idx].sum(axis=1)
+
+    #                 for g_idx, g_name in enumerate(GROUP_ORDER):
+    #                     mask = (group_idx == g_idx)
+    #                     if not mask.any():
+    #                         continue
+    #                     key = (task, g_name, split_tag)
+    #                     scores[key]["y"].extend(y_bin[mask].tolist())
+    #                     scores[key]["p"].extend(p_bin[mask].tolist())
+
+    #             accept += 1
 
     print("\n[DEBUG] group distribution in scored samples:")
     for grp in GROUP_ORDER:
@@ -1033,10 +1138,9 @@ def main():
     _p("SELECTED BINARY AUC TABLE - CALIBRATION", auc_calibration_tbl)
     _p("SELECTED BINARY AUC TABLE - HOLDOUT A",   auc_holdoutA_tbl)
     _p("SELECTED BINARY AUC TABLE - HOLDOUT B",   auc_holdoutB_tbl)
-    # Combined reports (aggregate + per-class + binary in one table per group)
-    _p("COMBINED REPORT - CALIBRATION",  combined_calibration_tbl)
-    _p("COMBINED REPORT - HOLDOUT A",    combined_holdoutA_tbl)
-    _p("COMBINED REPORT - HOLDOUT B",    combined_holdoutB_tbl)
+    #_p("COMBINED REPORT - CALIBRATION",  combined_calibration_tbl)
+    #_p("COMBINED REPORT - HOLDOUT A",    combined_holdoutA_tbl)
+    #_p("COMBINED REPORT - HOLDOUT B",    combined_holdoutB_tbl)
 
     # ── Save locally & upload to S3 ──────────────────────────────────────────
     out_dir = Path("/tmp/predict_eval_outputs")

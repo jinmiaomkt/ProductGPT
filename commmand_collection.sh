@@ -411,36 +411,20 @@ aws s3 cp "${S3_CAL}" "${LOCAL_CAL}"
 echo "[INFO] Downloads complete."
 ls -lh /tmp/FullProductGPT_*.pt /tmp/calibrator_*.pt
 
-python3 predict_productgpt_and_eval.py \
-  --data        /home/ec2-user/data/clean_list_int_wide4_simple6.json \
-  --labels      /home/ec2-user/data/clean_list_int_wide4_simple6.json \
-  --ckpt        "${LOCAL_CKPT}" \
-  --feat-xlsx   /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx \
-  --s3          "s3://productgptbucket/evals/phaseB_fold0_${TIMESTAMP}/" \
-  --pred-out    /tmp/preds_phaseB_fold0.jsonl.gz \
-  --uids-val    s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_val.txt \
-  --uids-test   s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_test.txt \
-  --fold-id     0 \
-  --calibration calibrator \
-  --ai-rate     15 \
-  --batch-size  2 \
-  --split-data-frac 1.0
-
-
-python3 predict_productgpt_and_eval_9class.py \
-  --data        /home/ec2-user/data/clean_list_int_wide4_simple6.json \
-  --labels      /home/ec2-user/data/clean_list_int_wide4_simple6.json \
-  --ckpt        /tmp/FullProductGPT_featurebased_performerfeatures64_dmodel64_ff192_N3_heads2_lr0.000510707329019641_w1_fold0.pt \
-  --feat-xlsx   /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx \
-  --s3          "s3://productgptbucket/evals/phaseB_fold0_$(date +%F_%H%M%S)/" \
-  --pred-out    /tmp/preds_phaseB_fold0.jsonl.gz \
-  --uids-val    s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_val.txt \
-  --uids-test   s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_test.txt \
-  --fold-id     0 \
-  --calibration calibrator \
-  --ai-rate     15 \
-  --batch-size  2 \
-  --split-data-frac 1.0
+# python3 predict_productgpt_and_eval.py \
+#   --data        /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+#   --labels      /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+#   --ckpt        "${LOCAL_CKPT}" \
+#   --feat-xlsx   /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx \
+#   --s3          "s3://productgptbucket/evals/phaseB_fold0_${TIMESTAMP}/" \
+#   --pred-out    /tmp/preds_phaseB_fold0.jsonl.gz \
+#   --uids-val    s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_val.txt \
+#   --uids-test   s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_test.txt \
+#   --fold-id     0 \
+#   --calibration calibrator \
+#   --ai-rate     15 \
+#   --batch-size  2 \
+#   --split-data-frac 1.0
 
   
 python3 infer_new_campaign_calibrated.py --step 2 --data /home/ec2-user/data/clean_list_int_wide4_simple6.json --ckpt /tmp/FullProductGPT_featurebased_performerfeatures64_dmodel64_ff192_N3_heads2_lr0.000510707329019641_w1_fold0.pt --calibrator_ckpt /tmp/calibrator_featurebased_performerfeatures64_dmodel64_ff192_N3_heads2_lr0.000510707329019641_w1_fold0.pt  --calibrator_type auto --feat_xlsx /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx --out /home/ec2-user/outputs/campaign28_calibrated.jsonl --lto28 30 0 54 51  --temperature 1.0 --seed_base 42 --repeat 5 --first
@@ -460,3 +444,38 @@ python3 predict_productgpt_and_eval_both.py \
   --ai-rate     15 \
   --batch-size  2 \
   --split-data-frac 1.0
+
+
+mkdir -p /home/ec2-user/tmp_gru
+aws s3 cp s3://productgptbucket/GRU/gru_h128_lr0.001_bs4.pt /home/ec2-user/tmp_gru/gru_h128_lr0.001_bs4.pt
+ls -lh /home/ec2-user/tmp_gru/gru_h128_lr0.001_bs4.pt
+
+mkdir -p /home/ec2-user/tmp_lstm
+aws s3 cp s3://productgptbucket/LSTM/lstm_h128_lr0.001_bs4.pt /home/ec2-user/tmp_lstm/lstm_h128_lr0.001_bs4.pt
+ls -lh /home/ec2-user/tmp_lstm/lstm_h128_lr0.001_bs4.pt
+
+python3 predict_lstm_and_eval_both.py \
+  --data        /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --labels      /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --ckpt        /home/ec2-user/tmp_lstm/lstm_h128_lr0.001_bs4.pt \
+  --hidden-size 128 \
+  --input-dim   15 \
+  --s3          "s3://productgptbucket/evals/lstm_fold0_$(date +%F_%H%M%S)/" \
+  --pred-out    /tmp/preds_lstm_fold0.jsonl.gz \
+  --uids-val    s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_val.txt \
+  --uids-test   s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_test.txt \
+  --fold-id     0 \
+  --batch-size  128
+
+  python3 predict_gru_and_eval_both.py \
+  --data        /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --labels      /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --ckpt        /home/ec2-user/tmp_gru/gru_h128_lr0.001_bs4.pt \
+  --hidden-size 128 \
+  --input-dim   15 \
+  --s3          "s3://productgptbucket/evals/gru_fold0_$(date +%F_%H%M%S)/" \
+  --pred-out    /tmp/preds_gru_fold0.jsonl.gz \
+  --uids-val    s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_val.txt \
+  --uids-test   s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_test.txt \
+  --fold-id     0 \
+  --batch-size  128

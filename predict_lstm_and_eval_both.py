@@ -717,9 +717,9 @@ def main():
     _p("SELECTED BINARY AUC TABLE - CALIBRATION", auc_calibration_tbl)
     _p("SELECTED BINARY AUC TABLE - HOLDOUT A",   auc_holdoutA_tbl)
     _p("SELECTED BINARY AUC TABLE - HOLDOUT B",   auc_holdoutB_tbl)
-    _p("COMBINED REPORT - CALIBRATION",          combined_calibration_tbl)
-    _p("COMBINED REPORT - HOLDOUT A",            combined_holdoutA_tbl)
-    _p("COMBINED REPORT - HOLDOUT B",            combined_holdoutB_tbl)
+    # _p("COMBINED REPORT - CALIBRATION",          combined_calibration_tbl)
+    # _p("COMBINED REPORT - HOLDOUT A",            combined_holdoutA_tbl)
+    # _p("COMBINED REPORT - HOLDOUT B",            combined_holdoutB_tbl)
 
     # ── Save locally & upload to S3 ───────────────────────────────────────────
     out_dir = Path("/tmp/predict_eval_outputs_lstm_raw")
