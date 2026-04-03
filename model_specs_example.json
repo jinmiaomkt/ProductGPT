@@ -20,18 +20,6 @@
     "ai_rate": 15
   },
   {
-    "name": "Mixture",
-    "model_family": "mixture",
-    "ckpt": "/tmp/recovered_ckpts/FullProductGPT_mixture2_performerfeatures64_dmodel64_ff192_N3_heads2_lr0.000510707329019641_w1_fold0.pt",
-    "feat_xlsx": "/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx",
-    "calibration": "calibrator",
-    "ai_rate": 15,
-    "batch_size": 2,
-    "fold_spec": "s3://productgptbucket/folds/productgptfolds.json",
-    "train_file": "/home/ec2-user/data/clean_list_int_wide4_simple6.json",
-    "enabled": false
-  },
-  {
     "name": "Mixture-Calibrated",
     "model_family": "mixture",
     "ckpt": "/home/ec2-user/output/checkpoints/FullProductGPT_mixture2_performerfeatures32_dmodel64_ff192_N3_heads4_lr0.0002_w2_fold0.pt",
