@@ -28,7 +28,8 @@
     "ai_rate": 15,
     "batch_size": 2,
     "fold_spec": "s3://productgptbucket/folds/productgptfolds.json",
-    "train_file": "/home/ec2-user/data/clean_list_int_wide4_simple6.json"
+    "train_file": "/home/ec2-user/data/clean_list_int_wide4_simple6.json",
+    "enabled": false
   },
   {
     "name": "Mixture-Calibrated",
