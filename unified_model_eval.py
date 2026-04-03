@@ -405,7 +405,7 @@ class BaseAdapter:
         self.spec = spec
         self.args = args
         self.name = spec["name"]
-        self.family = spec["family"]
+        self.model_family = spec["model_family"]
 
     def build_dataloader(self) -> DataLoader:
         raise NotImplementedError
@@ -684,14 +684,14 @@ class LSTMAdapter(BaseAdapter):
 
 
 def make_adapter(spec: Dict[str, Any], args: argparse.Namespace) -> BaseAdapter:
-    family = spec["family"].lower()
+    model_family = spec["model_family"].lower()
     if family == "productgpt":
         return ProductGPTAdapter(spec, args)
-    if family == "gru":
+    if model_family == "gru":
         return GRUAdapter(spec, args)
-    if family == "lstm":
+    if model_family == "lstm":
         return LSTMAdapter(spec, args)
-    raise ValueError(f"Unsupported family: {family}")
+    raise ValueError(f"Unsupported model_family: {model_family}")
 
 
 # =============================
@@ -840,7 +840,7 @@ def evaluate_model(
         "missing_labels": reject,
         "length_note": dict(length_note),
         "coverage": {k: len(v) for k, v in accept_users.items()},
-        "family": adapter.family,
+        "model_family": adapter.model_family,
         "spec": adapter.spec,
     }
     with open(model_dir / "run_info.json", "w") as f:
@@ -995,7 +995,7 @@ def main() -> None:
 
     results: List[EvalResult] = []
     for spec in models:
-        print(f"\n[INFO] Evaluating {spec['name']} ({spec['family']})")
+        print(f"\n[INFO] Evaluating {spec['name']} ({spec['model_family']})")
         adapter = make_adapter(spec, args)
         res = evaluate_model(adapter, label_dict, which_split, args, output_dir)
         results.append(res)
