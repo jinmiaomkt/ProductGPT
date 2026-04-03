@@ -1,0 +1,22 @@
+[
+  {
+    "name": "c28_30_0_54_51",
+    "lto28": [30, 0, 54, 51],
+    "notes": "figA=30, figB=none, wep1=54, wep2=51"
+  },
+  {
+    "name": "c28_22_30_45_50",
+    "lto28": [22, 30, 45, 50],
+    "notes": "figA=22, figB=30, wep1=45, wep2=50"
+  },
+  {
+    "name": "c28_30_22_51_54",
+    "lto28": [30, 22, 51, 54],
+    "notes": "swap figA/figB and wep order"
+  },
+  {
+    "name": "c28_wep_only_54_51",
+    "lto28": [0, 0, 54, 51],
+    "notes": "no figure banners active"
+  }
+]

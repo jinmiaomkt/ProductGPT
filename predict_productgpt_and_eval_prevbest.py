@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-predict_productgpt_and_eval.py
+predict_productgpt_and_eval_prevbest.py
 
 End-to-end:
   - Run inference for 9-way decision probabilities (every ai_rate steps)

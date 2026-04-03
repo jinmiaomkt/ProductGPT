@@ -479,3 +479,18 @@ python3 predict_lstm_and_eval_both.py \
   --uids-test   s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_test.txt \
   --fold-id     0 \
   --batch-size  128
+
+python3 predict_productgpt_and_eval_both.py \
+  --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --ckpt /tmp/FullProductGPT_featurebased_performerfeatures64_dmodel64_ff192_N3_heads2_lr0.000510707329019641_w1_fold0.pt \
+  --feat-xlsx /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx \
+  --s3 "s3://productgptbucket/evals/phaseB_calibrator_fold0_$(date +%F_%H%M%S)/" \
+  --pred-out /tmp/preds_phaseB_calibrator_fold0.jsonl.gz \
+  --uids-val s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_val.txt \
+  --uids-test s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_test.txt \
+  --fold-id 0 \
+  --calibration calibrator \
+  --ai-rate 15 \
+  --batch-size 2 \
+  --split-data-frac 1.0
