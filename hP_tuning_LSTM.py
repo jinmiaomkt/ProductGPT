@@ -106,8 +106,7 @@ def collate_fn(batch):
 class LSTMClassifier(nn.Module):
     def __init__(self, hidden_size: int):
         super().__init__()
-        self.lstm = nn.LSTM(INPUT_DIM, hidden_size,
-                            batch_first=True)
+        self.lstm = nn.LSTM(INPUT_DIM, hidden_size, batch_first=True)
         self.fc   = nn.Linear(hidden_size, NUM_CLASSES)
 
     def forward(self, x):
