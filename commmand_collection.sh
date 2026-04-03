@@ -494,3 +494,15 @@ python3 predict_productgpt_and_eval_both.py \
   --ai-rate 15 \
   --batch-size 2 \
   --split-data-frac 1.0
+
+
+  python3 run_campaign28_sweep.py \
+  --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --ckpt /tmp/FullProductGPT_featurebased_performerfeatures64_dmodel64_ff192_N3_heads2_lr0.000510707329019641_w1_fold0.pt \
+  --feat_xlsx /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx \
+  --lto28_configs lto28_configs.json \
+  --sweep_name c28_v1 \
+  --out_root /home/ec2-user/outputs \
+  --n_seeds 50 --seed_base 42 \
+  --calibrator_ckpt /tmp/calibrator_...pt --calibrator_type auto \
+  --quiet
