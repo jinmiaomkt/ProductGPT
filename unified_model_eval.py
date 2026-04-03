@@ -685,7 +685,7 @@ class LSTMAdapter(BaseAdapter):
 
 def make_adapter(spec: Dict[str, Any], args: argparse.Namespace) -> BaseAdapter:
     model_family = spec["model_family"].lower()
-    if family == "productgpt":
+    if model_family == "productgpt":
         return ProductGPTAdapter(spec, args)
     if model_family == "gru":
         return GRUAdapter(spec, args)
