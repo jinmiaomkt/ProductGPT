@@ -1,0 +1,30 @@
+{
+  "models": [
+    {
+      "name": "ProductGPT_Calibrator",
+      "family": "productgpt",
+      "ckpt": "/tmp/FullProductGPT_featurebased_performerfeatures64_dmodel64_ff192_N3_heads2_lr0.000510707329019641_w1_fold0.pt",
+      "calibrator_ckpt": "/tmp/calibrator_featurebased_performerfeatures64_dmodel64_ff192_N3_heads2_lr0.000510707329019641_w1_fold0.pt",
+      "feat_xlsx": "/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx",
+      "calibration": "calibrator",
+      "ai_rate": 15,
+      "batch_size": 2
+    },
+    {
+      "name": "LSTM_h128",
+      "family": "lstm",
+      "ckpt": "/home/ec2-user/tmp_lstm/lstm_h128_lr0.001_bs4.pt",
+      "hidden_size": 128,
+      "input_dim": 15,
+      "batch_size": 128
+    },
+    {
+      "name": "GRU_h128",
+      "family": "gru",
+      "ckpt": "/home/ec2-user/tmp_gru/gru_h128_lr0.001_bs4.pt",
+      "hidden_size": 128,
+      "input_dim": 15,
+      "batch_size": 128
+    }
+  ]
+}
