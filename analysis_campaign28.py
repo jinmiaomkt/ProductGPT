@@ -235,12 +235,27 @@ def compare_c28_vs_history(
 # 5. Seed variance: how stable are predictions across 50 seeds?
 # ─────────────────────────────────────────────────────────────────────────────
 
+# def seed_variance_by_user_config(runs_df: pd.DataFrame) -> pd.DataFrame:
+#     """
+#     For each (uid, lto28_name), compute the variance in stop_step and n_decisions
+#     across seeds. High variance → model is uncertain for this user × config.
+#     """
+#     return (
+#         runs_df
+#         .groupby(["uid", "lto28_name"])
+#         .agg(
+#             n_seeds=("seed", "count"),
+#             stop_rate=("stopped", "mean"),
+#             mean_stop_step=("stop_step", "mean"),
+#             std_stop_step=("stop_step", "std"),
+#             cv_stop_step=lambda x: x["stop_step"].std() / (x["stop_step"].mean() + 1e-8),
+#             mean_n_decisions=("n_decisions", "mean"),
+#             std_n_decisions=("n_decisions", "std"),
+#         )
+#         .reset_index()
+#     )
 def seed_variance_by_user_config(runs_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    For each (uid, lto28_name), compute the variance in stop_step and n_decisions
-    across seeds. High variance → model is uncertain for this user × config.
-    """
-    return (
+    df = (
         runs_df
         .groupby(["uid", "lto28_name"])
         .agg(
@@ -248,13 +263,13 @@ def seed_variance_by_user_config(runs_df: pd.DataFrame) -> pd.DataFrame:
             stop_rate=("stopped", "mean"),
             mean_stop_step=("stop_step", "mean"),
             std_stop_step=("stop_step", "std"),
-            cv_stop_step=lambda x: x["stop_step"].std() / (x["stop_step"].mean() + 1e-8),
             mean_n_decisions=("n_decisions", "mean"),
             std_n_decisions=("n_decisions", "std"),
         )
         .reset_index()
     )
-
+    df["cv_stop_step"] = df["std_stop_step"] / (df["mean_stop_step"] + 1e-8)
+    return df
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Main
