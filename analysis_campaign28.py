@@ -51,9 +51,11 @@ def load_sweep(sweep_dir: str) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     p = Path(sweep_dir)
     runs_df  = pd.read_csv(p / "summary" / "all_runs.csv")
     stats_df = pd.read_csv(p / "summary" / "stop_stats.csv")
-    with open(p / "config.json") as f:
-        config = json.load(f)
-
+    # with open(p / "config.json") as f:
+    #     config = json.load(f)
+    config_path = p / "config.json"
+    config = json.load(open(config_path)) if config_path.exists() else {}
+    
     # Parse JSON columns
     runs_df["decisions_list"] = runs_df["decisions"].apply(
         lambda x: json.loads(x) if isinstance(x, str) else []
