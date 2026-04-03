@@ -64,7 +64,7 @@ import numpy as np
 import torch
 
 # ── imports from the calibrated inference module ──────────────────────────────
-from infer_new_campaign_advanced import (
+from infer_new_campaign_calibrated import (
     AI_RATE,
     DECISION_IDS,
     EOS_PROD_ID_LOCAL,
