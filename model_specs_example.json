@@ -22,7 +22,7 @@
   {
     "name": "Mixture",
     "model_family": "mixture",
-    "ckpt": "/tmp/FullProductGPT_mixture2_performerfeatures64_dmodel64_ff192_N3_heads2_lr0.000510707329019641_w1_fold0.pt",
+    "ckpt": "/tmp/recovered_ckpts/FullProductGPT_mixture2_performerfeatures64_dmodel64_ff192_N3_heads2_lr0.000510707329019641_w1_fold0.pt",
     "feat_xlsx": "/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx",
     "calibration": "calibrator",
     "ai_rate": 15,
