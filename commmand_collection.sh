@@ -496,13 +496,39 @@ python3 predict_productgpt_and_eval_both.py \
   --split-data-frac 1.0
 
 
-  python3 run_campaign28_sweep.py \
+MODEL_STEM="featurebased_performerfeatures64_dmodel64_ff192_N3_heads2_lr0.000510707329019641_w1_fold0"
+LOCAL_CKPT="/tmp/FullProductGPT_${MODEL_STEM}.pt"
+LOCAL_CAL="/tmp/calibrator_${MODEL_STEM}.pt"
+
+# Confirm both files exist
+ls -lh "${LOCAL_CKPT}" "${LOCAL_CAL}"
+
+python3 run_campaign28_sweep.py \
   --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
-  --ckpt /tmp/FullProductGPT_featurebased_performerfeatures64_dmodel64_ff192_N3_heads2_lr0.000510707329019641_w1_fold0.pt \
+  --ckpt "${LOCAL_CKPT}" \
   --feat_xlsx /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx \
   --lto28_configs lto28_configs.json \
   --sweep_name c28_v1 \
   --out_root /home/ec2-user/outputs \
   --n_seeds 50 --seed_base 42 \
-  --calibrator_ckpt /tmp/calibrator_...pt --calibrator_type auto \
+  --calibrator_ckpt "${LOCAL_CAL}" \
+  --calibrator_type platt \
   --quiet
+
+python3 analysis_campaign28.py \
+  --sweep_dir /home/ec2-user/outputs/c28_v1_20240402_120000 \
+  --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --out_dir /home/ec2-user/analysis/c28_v1
+
+
+python3 unified_model_eval.py \
+  --config model_specs_example.json \
+  --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --uids-val s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_val.txt \
+  --uids-test s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_test.txt \
+  --fold-id 0 \
+  --compare-on test \
+  --output-dir /home/ec2-user/eval_unified_fold0 \
+  --s3 s3://productgptbucket/evals/unified_compare_$(date +%F_%H%M%S)/ \
+  --save-preds
