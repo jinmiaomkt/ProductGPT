@@ -22,15 +22,15 @@ from torch.utils.data import DataLoader, Dataset, random_split
 from tqdm import tqdm
 
 # ═════════ 0.  Hyper-params ═════════════
-HIDDEN_SIZES = [128, 256, 512, 1024]
+HIDDEN_SIZES = [64, 128, 256]
 LR_VALUES    = [1e-3]
-BATCH_SIZES  = [2, 4, 8, 16]
+BATCH_SIZES  = [8, 16, 32]
 HP_GRID      = list(itertools.product(HIDDEN_SIZES, LR_VALUES, BATCH_SIZES))
 
 INPUT_DIM      = 15          # feature dim per timestep
 NUM_CLASSES    = 10          # 0 = PAD, 1-9 = decisions
 EPOCHS         = 80
-CLASS_9_WEIGHT = 5.0
+CLASS_9_WEIGHT = 1.0
 
 JSON_PATH = "/home/ec2-user/data/clean_list_int_wide4_simple6_FeatureBasedTrain.json"
 S3_BUCKET = "productgptbucket"
@@ -47,46 +47,25 @@ class SequenceDataset(Dataset):
         with open(json_path, "r") as f:
             rows = json.load(f)
 
-        # self.x, self.y = [], []
-        # for row in rows:
-        #     flat = [0 if t == "NA" else int(t)
-        #             for t in row["AggregateInput"][0].split()]
-        #     T = len(flat) // INPUT_DIM
-        #     x = torch.tensor(flat, dtype=torch.float32).view(T, INPUT_DIM)
-
-        #     dec   = [0 if t == "NA" else int(t)
-        #              for t in row["Decision"][0].split()]
-        #     valid = min(T, len(dec)) - 1
-        #     y = torch.tensor(dec[1:valid + 1], dtype=torch.long)
-
-        #     self.x.append(x[:valid])
-        #     self.y.append(y)
-
-
         self.x, self.y = [], []
         for row in rows:
-            # 1) Parse inputs → shape [T, INPUT_DIM]
             flat = [0 if t == "NA" else int(t)
                     for t in row["AggregateInput"][0].split()]
             T = len(flat) // INPUT_DIM
             x = torch.tensor(flat, dtype=torch.float32).view(T, INPUT_DIM)
 
-            # 2) Parse decisions (already "next decision" per timestep)
             dec = [0 if t == "NA" else int(t)
                 for t in row["Decision"][0].split()]
 
-            # 3) Align lengths WITHOUT any shift
             valid = min(T, len(dec))
             if valid == 0:
-                continue  # skip empty sequences just in case
+                continue
 
             y = torch.tensor(dec[:valid], dtype=torch.long)
 
-            # 4) Store aligned slices: x[t] ↔ y[t]
             self.x.append(x[:valid])
             self.y.append(y)
 
-        # (optional) quick integrity check:
         for xi, yi in zip(self.x, self.y):
             assert len(xi) == len(yi)
 
@@ -111,14 +90,10 @@ class LSTMClassifier(nn.Module):
 
     def forward(self, x):
         out, _ = self.lstm(x)
-        return self.fc(out)            # (B, T, C)
+        return self.fc(out)
 
 # ═════════ 3.  Metric helpers ═══════════
 REV_VEC = torch.tensor([1, 10, 1, 10, 1, 10, 1, 10, 0], dtype=torch.float32)
-
-def transition_mask(seq):
-    prev = F.pad(seq, (1, 0), value=-1)[:, :-1]
-    return seq != prev
 
 def _json_safe(o):
     import numpy as _np, torch as _th
@@ -144,29 +119,26 @@ def _subset(pred, lbl, probs, rev_err, mask, classes=np.arange(1, 10)):
         auprc = float("nan")
     return dict(hit=hit, f1=f1, auprc=auprc, rev_mae=re.mean())
 
-
 # ═════════ 4.  Evaluation ═══════════════
 def evaluate(loader, model, device, loss_fn):
     model.eval()
     P, L, PR, RE = [], [], [], []
-    tot_loss_batch_mean = 0.0          # keeps your printed "avg_loss" behavior
-    nll_sum = 0.0                      # token-level sum NLL for PPL
+    tot_loss_batch_mean = 0.0
+    nll_sum = 0.0
     token_count = 0
     rev_vec = REV_VEC.to(device)
 
     with torch.no_grad():
         for xb, yb in loader:
             xb, yb = xb.to(device), yb.to(device)
-            logits = model(xb)                       # (B, T, C)
+            logits = model(xb)
             B, T, C = logits.shape
             flat_logits = logits.reshape(-1, C)
             flat_labels = yb.reshape(-1)
 
-            # 1) Your normal (mean) loss for logging/early stop
-            loss = loss_fn(flat_logits, flat_labels)  # ignore_index=0 inside
+            loss = loss_fn(flat_logits, flat_labels)
             tot_loss_batch_mean += loss.item()
 
-            # 2) Proper PPL pieces: sum NLL over non-pad tokens
             log_probs = F.log_softmax(flat_logits, dim=-1)
             nll_sum += F.nll_loss(
                 log_probs, flat_labels,
@@ -174,7 +146,6 @@ def evaluate(loader, model, device, loss_fn):
             ).item()
             token_count += (flat_labels != 0).sum().item()
 
-            # --- metrics (mask out pads) ---
             probs = log_probs.exp()
             probs_np = probs.cpu().numpy()
             preds_np = probs_np.argmax(1)
@@ -193,10 +164,7 @@ def evaluate(loader, model, device, loss_fn):
     masks = dict(all=np.ones_like(P, dtype=bool))
     out = {k: _subset(P, L, PR, RE, m) for k, m in masks.items()}
 
-    # Keep your displayed avg_loss semantics (mean over batches of the mean loss)
     avg_loss = tot_loss_batch_mean / len(loader)
-
-    # True perplexity over all non-pad tokens
     avg_ppl = math.exp(nll_sum / max(1, token_count))
 
     return avg_loss, avg_ppl, out
@@ -210,7 +178,6 @@ def run_one(params):
     ds = SequenceDataset(JSON_PATH)
     n = len(ds)
     tr_n, va_n = int(.8*n), int(.1*n)
-    # tr, va, te = random_split(ds, [tr_n, va_n, n-tr_n-va_n])
     g = torch.Generator().manual_seed(33)
     tr, va, te = random_split(ds, [tr_n, va_n, n-tr_n-va_n], generator=g)
     LD = lambda d, sh: DataLoader(d, bs, shuffle=sh, collate_fn=collate_fn)
@@ -219,6 +186,8 @@ def run_one(params):
     # ----- model & opt -----
     dev   = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = LSTMClassifier(hidden).to(dev)
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"[{uid}] Parameters: {n_params:,}")
 
     w = torch.ones(NUM_CLASSES, device=dev)
     w[9] = CLASS_9_WEIGHT
@@ -266,6 +235,7 @@ def run_one(params):
     model.load_state_dict(torch.load(ckpt_path, map_location=dev))
     t_loss, t_ppl, t = evaluate(te_ld, model, dev, loss_fn)
     metrics = {"hidden_size": hidden, "lr": lr, "batch_size": bs,
+               "n_params": n_params,
                **best_metrics,
                "test_loss": t_loss, "test_ppl": t_ppl,
                **{f"test_{k}_{m}": t[k][m] for k in t for m in t[k]}}
@@ -281,20 +251,63 @@ def run_one(params):
         local.unlink(missing_ok=True)
         print(f"[S3] {local.name} → s3://{S3_BUCKET}/{key}")
 
-    return uid
+    return uid, metrics
 
-# ═════════ 6.  Parallel sweep ═══════════
+# ═════════ 6.  Sweep + select best ══════
 def sweep(max_workers=None):
     if max_workers is None:
-        max_workers = torch.cuda.device_count() or mp.cpu_count()-1
+        max_workers = torch.cuda.device_count() or mp.cpu_count() - 1
+
+    all_results = []
+
     with ProcessPoolExecutor(max_workers=max_workers) as ex:
         fut = {ex.submit(run_one, p): p for p in HP_GRID}
         for f in as_completed(fut):
             p = fut[f]
             try:
-                print(f"[Done] {f.result()}")
+                uid, metrics = f.result()
+                all_results.append(metrics)
+                print(f"[Done] {uid}")
             except Exception as e:
                 print(f"[Error] params={p} → {e}")
+
+    # ── Print summary table ──
+    all_results.sort(key=lambda m: m.get("val_loss", float("inf")))
+
+    print("\n" + "=" * 100)
+    print(f"{'Hidden':>8} {'BS':>4} {'Params':>10} "
+          f"{'ValLoss':>9} {'ValPPL':>9} {'ValHit':>8} {'ValF1':>8} "
+          f"{'TstLoss':>9} {'TstPPL':>9} {'TstHit':>8} {'TstF1':>8}")
+    print("=" * 100)
+
+    for m in all_results:
+        print(
+            f"{m['hidden_size']:>8} {m['batch_size']:>4} {m['n_params']:>10,} "
+            f"{m['val_loss']:>9.4f} {m['val_ppl']:>9.4f} "
+            f"{m.get('val_all_hit', 0):>8.4f} {m.get('val_all_f1', 0):>8.4f} "
+            f"{m['test_loss']:>9.4f} {m['test_ppl']:>9.4f} "
+            f"{m.get('test_all_hit', 0):>8.4f} {m.get('test_all_f1', 0):>8.4f}"
+        )
+
+    # ── Select best by val_loss ──
+    best = all_results[0]
+    print("\n" + "=" * 100)
+    print(f"BEST CONFIG: hidden={best['hidden_size']}, "
+          f"lr={best['lr']}, bs={best['batch_size']}, "
+          f"params={best['n_params']:,}")
+    print(f"  Val  → loss={best['val_loss']:.4f}  ppl={best['val_ppl']:.4f}  "
+          f"hit={best.get('val_all_hit',0):.4f}  f1={best.get('val_all_f1',0):.4f}")
+    print(f"  Test → loss={best['test_loss']:.4f}  ppl={best['test_ppl']:.4f}  "
+          f"hit={best.get('test_all_hit',0):.4f}  f1={best.get('test_all_f1',0):.4f}")
+    print("=" * 100)
+
+    # ── Save summary to S3 ──
+    summary = {"all_results": all_results, "best": best}
+    summary_path = LOCAL_TMP / "sweep_summary.json"
+    summary_path.write_text(json.dumps(_json_safe(summary), indent=2))
+    s3.upload_file(str(summary_path), S3_BUCKET, f"{S3_PREFIX}/sweep_summary.json")
+    summary_path.unlink(missing_ok=True)
+    print(f"[S3] summary → s3://{S3_BUCKET}/{S3_PREFIX}/sweep_summary.json")
 
 # ═════════ entry-point ═════════════════
 if __name__ == "__main__":
