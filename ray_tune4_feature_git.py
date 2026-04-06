@@ -118,7 +118,6 @@ def trainable_ray(config: dict):
     # You usually don't need stop_check_fn, but here’s a safe placeholder:
     def stop_check_fn() -> bool:
         return False
-    # train_model(cfg, report_fn=report_fn if in_tune else None, stop_check_fn=stop_check_fn)
 
     try:
         train_model(cfg, report_fn=report_fn if in_tune else None, 

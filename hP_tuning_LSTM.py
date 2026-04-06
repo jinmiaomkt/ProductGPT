@@ -210,7 +210,9 @@ def run_one(params):
     ds = SequenceDataset(JSON_PATH)
     n = len(ds)
     tr_n, va_n = int(.8*n), int(.1*n)
-    tr, va, te = random_split(ds, [tr_n, va_n, n-tr_n-va_n])
+    # tr, va, te = random_split(ds, [tr_n, va_n, n-tr_n-va_n])
+    g = torch.Generator().manual_seed(33)
+    tr, va, te = random_split(ds, [tr_n, va_n, n-tr_n-va_n], generator=g)
     LD = lambda d, sh: DataLoader(d, bs, shuffle=sh, collate_fn=collate_fn)
     tr_ld, va_ld, te_ld = LD(tr, True), LD(va, False), LD(te, False)
 

@@ -425,7 +425,7 @@ def build_dataloaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, Data
 
     data_frac = float(cfg.get("data_frac", 1.0))          # e.g., 0.05
     subsample_seed = int(cfg.get("subsample_seed", 33))   # deterministic
-    raw = _deterministic_subsample(raw, data_frac, subsample_seed)
+    # raw = _deterministic_subsample(raw, data_frac, subsample_seed)
 
     # ── split ───────────────────────────────────────────────────────────
     if mode == "infer":
@@ -438,6 +438,7 @@ def build_dataloaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, Data
 
         g = torch.Generator().manual_seed(33)
         tr_split, va_split, te_split = random_split(raw, [n_train, n_val, n_test], generator=g)
+        tr_split = _deterministic_subsample(list(tr_split), data_frac, subsample_seed)
 
     # ── tokenizers ─────────────────────────────────────────────────────
     tok_src = build_tokenizer_src()
@@ -887,7 +888,7 @@ def train_model(cfg: Dict[str, Any],
     feat_tensor = load_feature_tensor(FEAT_FILE)
     model = build_model(cfg, feat_tensor).to(device)
 
- # ──────────────────────────────────────────────────────────
+    # ──────────────────────────────────────────────────────────
     # CHANGED: compute per-class weights from training data
     # ──────────────────────────────────────────────────────────
     tau = float(cfg.get("tau", 0.5))
@@ -901,11 +902,11 @@ def train_model(cfg: Dict[str, Any],
     loss_fn = FocalLoss(cfg["gamma"], pad_id, full_weights)
 
     # ---- criterion ----------------------------------------------------
-    weights = torch.ones(cfg["vocab_size_tgt"], device=device)
-    weights[9] = cfg["weight"]
-    loss_fn = FocalLoss(cfg["gamma"], pad_id, weights)
+    # weights = torch.ones(cfg["vocab_size_tgt"], device=device)
+    # weights[9] = cfg["weight"]
+    # loss_fn = FocalLoss(cfg["gamma"], pad_id, weights)
 
-  # ──────────────────────────────────────────────────────────
+    # ──────────────────────────────────────────────────────────
     # CHANGED: per-class logit bias for analytic correction (all 9 classes)
     # ──────────────────────────────────────────────────────────
     logit_bias_9 = torch.log(dec_weights_9).to(device=device, dtype=torch.float32)  # (9,)
