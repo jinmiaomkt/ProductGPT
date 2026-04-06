@@ -24,7 +24,7 @@ from tqdm import tqdm
 # ═════════ 0.  Hyper-params ═════════════
 HIDDEN_SIZES = [64, 128, 256]
 LR_VALUES    = [1e-3]
-BATCH_SIZES  = [8, 16, 32]
+BATCH_SIZES  = [4, 8, 16]
 HP_GRID      = list(itertools.product(HIDDEN_SIZES, LR_VALUES, BATCH_SIZES))
 
 INPUT_DIM      = 15          # feature dim per timestep
@@ -311,4 +311,4 @@ def sweep(max_workers=None):
 
 # ═════════ entry-point ═════════════════
 if __name__ == "__main__":
-    sweep()
+    sweep(max_workers=1)
