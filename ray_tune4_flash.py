@@ -64,7 +64,7 @@ def trainable_ray(config: dict):
     })
     cfg["seq_len_ai"] = cfg["ai_rate"] * cfg["seq_len_tgt"]
     cfg["batch_size"] = config.get("batch_size", cfg["batch_size"])
-    
+
     # ---- unpack coupled params ----
     d_model, num_heads = config["dm_heads"]
     cfg["d_model"] = d_model
@@ -133,13 +133,13 @@ def main():
     param_space = {
         # Stage-A tuning knobs
         "num_epochs": 120,
-        "data_frac": 0.15,
+        "data_frac": 0.3,
         "augment_train": False,
         "permute_repeat": 1,
 
         # Architecture
         "dm_heads": tune.choice(valid_dm_heads),
-        "N": tune.randint(2, 9),                     # 2..8 layers
+        "N": tune.randint(4, 9),                     # 4..8 layers
         "dff_mult": tune.choice([2, 3, 4]),           # d_ff = d_model * mult
         "dropout": tune.uniform(0.0, 0.3),
         "batch_size": tune.choice([4, 8, 16, 32]),

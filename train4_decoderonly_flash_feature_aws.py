@@ -359,14 +359,6 @@ def transition_mask(seq: torch.Tensor) -> torch.Tensor:  # (B, T)
     prev = F.pad(seq, (1, 0), value=-1)[:, :-1]
     return seq != prev
 
-# def perplexity(logits: torch.Tensor, targets: torch.Tensor, pad: int = PAD_ID) -> float:
-#     logp = F.log_softmax(logits, dim=-1)
-#     lp2d, tgt = logp.view(-1, logp.size(-1)), targets.view(-1)
-#     mask = tgt != pad
-#     if mask.sum() == 0:
-#         return float("nan")
-#     return torch.exp(F.nll_loss(lp2d[mask], tgt[mask], reduction="mean")).item()
-
 class RepeatWithPermutation(torch.utils.data.Dataset):
     """
     Treat each base record as K distinct samples by repeating indices.
@@ -532,19 +524,6 @@ def _upload_and_unlink(local: Path, bucket: str, key: str, s3, *, gzip_json: boo
     except botocore.exceptions.BotoCoreError as e:
         print(f"[S3-ERR] {e}")
         return False
-
-# ─────────────────── pretty-printer for metric blocks ───────────────────
-def _show(tag: str, metrics: Tuple[float, float, dict, dict, dict, dict]) -> None:
-    loss, ppl, m_all, m_st, m_af, m_tr = metrics
-    print(f"{tag}  Loss={loss:.4f}  PPL={ppl:.4f}")
-    for name, d in (
-        ("all",          m_all),
-        ("cur-STOP",     m_st),
-        ("after-STOP",   m_af),
-        ("transition",   m_tr),
-    ):
-        print(f"  {name:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
-              f"AUPRC={d['auprc']:.4f}")
 
 # ══════════════════════════════ 8. Model builder ═════════════════════=
 def build_model(cfg: Dict[str, Any], feat_tensor: torch.Tensor) -> nn.Module:
@@ -887,7 +866,7 @@ def train_model(cfg: Dict[str, Any],
     feat_tensor = load_feature_tensor(FEAT_FILE)
     model = build_model(cfg, feat_tensor).to(device)
 
- # ──────────────────────────────────────────────────────────
+    # ──────────────────────────────────────────────────────────
     # CHANGED: compute per-class weights from training data
     # ──────────────────────────────────────────────────────────
     tau = float(cfg.get("tau", 0.5))
