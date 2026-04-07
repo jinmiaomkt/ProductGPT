@@ -7,7 +7,7 @@ import boto3
 import torch
 
 from config4 import get_config
-from train4_flash_aws import train_model
+from train4_decoderonly_flash_feature_aws import train_model
 
 import ray
 from ray import tune
@@ -63,7 +63,8 @@ def trainable_ray(config: dict):
         "permute_repeat": config.get("permute_repeat", 1),
     })
     cfg["seq_len_ai"] = cfg["ai_rate"] * cfg["seq_len_tgt"]
-
+    cfg["batch_size"] = config.get("batch_size", cfg["batch_size"])
+    
     # ---- unpack coupled params ----
     d_model, num_heads = config["dm_heads"]
     cfg["d_model"] = d_model
@@ -141,6 +142,7 @@ def main():
         "N": tune.randint(2, 9),                     # 2..8 layers
         "dff_mult": tune.choice([2, 3, 4]),           # d_ff = d_model * mult
         "dropout": tune.uniform(0.0, 0.3),
+        "batch_size": tune.choice([4, 8, 16, 32]),
 
         # Optimization
         "lr": tune.loguniform(1e-5, 1e-3),            # wider range for larger models
