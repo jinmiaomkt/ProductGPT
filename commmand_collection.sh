@@ -747,7 +747,7 @@ python3 unified_model_eval.py \
 # Also download the updated GRU/LSTM with best configs (h256, bs16)
 mkdir -p /home/ec2-user/tmp_gru /home/ec2-user/tmp_lstm
 aws s3 cp s3://productgptbucket/GRU/checkpoints/gru_h128_lr0.001_bs4.pt /home/ec2-user/tmp_gru/gru_h128_lr0.001_bs4.pt
-aws s3 cp s3://productgptbucket/LSTM/checkpoints/lstm_h128_lr0.001_bs4.pt /home/ec2-user/tmp_lstm/lstm_h128_lr0.001_bs4.pt
+aws s3 cp s3://productgptbucket/LSTM/checkpoints/lstm_h128_lr0.0001_bs4.pt /home/ec2-user/tmp_lstm/lstm_h128_lr0.0001_bs4.pt
 
 python3 unified_model_eval.py \
   --config model_specs_example2.json \
