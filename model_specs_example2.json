@@ -1,0 +1,20 @@
+{
+  "models": [
+    {
+      "name": "LSTM",
+      "model_family": "lstm",
+      "ckpt": "/home/ec2-user/tmp_lstm/lstm_h128_lr0.0001_bs4.pt",
+      "hidden_size": 128,
+      "input_dim": 15,
+      "batch_size": 4
+    },
+    {
+      "name": "GRU",
+      "model_family": "gru",
+      "ckpt": "/home/ec2-user/tmp_gru/gru_h128_lr0.001_bs4.pt",
+      "hidden_size": 128,
+      "input_dim": 15,
+      "batch_size": 4
+    }
+  ]
+}
