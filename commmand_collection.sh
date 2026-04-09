@@ -727,3 +727,25 @@ aws s3 cp s3://productgptbucket/GRU/checkpoints/gru_h256_lr0.001_bs16.pt /home/e
 aws s3 cp s3://productgptbucket/LSTM/checkpoints/lstm_h256_lr0.001_bs16.pt /home/ec2-user/tmp_lstm/lstm_h256_lr0.001_bs16.pt
 
 ls -lh /tmp/FullProductGPT_*.pt /tmp/calibrator_*.pt /home/ec2-user/tmp_gru/*.pt /home/ec2-user/tmp_lstm/*.pt
+
+python3 unified_eval_and_compare.py \
+    --config model_specs_example.json \
+    --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+    --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+    --fold-id 0 \
+    --output-dir /tmp/unified_eval_flash \
+    --compare-on test
+    --s3 s3://productgptbucket/evals/unified_compare_$(date +%F_%H%M%S)/ \
+    --save-preds
+
+python3 unified_model_eval.py \
+  --config model_specs_example.json \
+  --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --uids-val s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_val.txt \
+  --uids-test s3://productgptbucket/ProductGPT/CV/exp_001/train/fold0/uids_test.txt \
+  --fold-id 0 \
+  --compare-on test \
+  --output-dir /home/ec2-user/eval_unified_fold0 \
+  --s3 s3://productgptbucket/evals/unified_compare_$(date +%F_%H%M%S)/ \
+  --save-preds
