@@ -714,4 +714,16 @@ python3 unified_model_eval.py \
   --s3 s3://productgptbucket/evals/unified_compare_$(date +%F_%H%M%S)/ \
   --save-preds
 
+# Flash attention model
+S3_BASE="s3://productgptbucket/FullProductGPT/flash/FeatureBased/checkpoints"
+MODEL_STEM="featurebased_flash_dmodel128_ff384_N6_heads8_lr0.00089497_w1_fold0"
 
+aws s3 cp "${S3_BASE}/FullProductGPT_${MODEL_STEM}.pt" "/tmp/FullProductGPT_${MODEL_STEM}.pt"
+aws s3 cp "${S3_BASE}/calibrator_${MODEL_STEM}.pt" "/tmp/calibrator_${MODEL_STEM}.pt"
+
+# Also download the updated GRU/LSTM with best configs (h256, bs16)
+mkdir -p /home/ec2-user/tmp_gru /home/ec2-user/tmp_lstm
+aws s3 cp s3://productgptbucket/GRU/checkpoints/gru_h256_lr0.001_bs16.pt /home/ec2-user/tmp_gru/gru_h256_lr0.001_bs16.pt
+aws s3 cp s3://productgptbucket/LSTM/checkpoints/lstm_h256_lr0.001_bs16.pt /home/ec2-user/tmp_lstm/lstm_h256_lr0.001_bs16.pt
+
+ls -lh /tmp/FullProductGPT_*.pt /tmp/calibrator_*.pt /home/ec2-user/tmp_gru/*.pt /home/ec2-user/tmp_lstm/*.pt

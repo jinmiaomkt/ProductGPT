@@ -1137,7 +1137,8 @@ def train_model(cfg: Dict[str, Any],
                 x   = batch["aggregate_input"].to(device)
                 uids = batch["uid"]  # list[str] length B
                 logits = engine(x)[:, cfg["ai_rate"]-1::cfg["ai_rate"], :]
-                probs  = torch.softmax(logits, -1).cpu().numpy()   # (B, N, 60)
+                # probs  = torch.softmax(logits, -1).cpu().numpy()   # (B, N, 60)
+                probs  = torch.softmax(logits, -1).float().cpu().numpy()   # (B, N, 60)
                 for u, p in zip(uids, probs):
                     fp.write(json.dumps({"uid": u, "probs": p.tolist()}) + "\n")
 

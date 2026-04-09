@@ -8,50 +8,6 @@ Runs end-to-end inference + evaluation for any combination of:
   - GRU
   - LSTM
 
-and produces cross-model comparison tables.
-
-Config JSON example (models.json):
-  {
-    "models": [
-      {
-        "name": "productgpt_fold0",
-        "model_family": "productgpt",
-        "ckpt": "/tmp/FullProductGPT_featurebased_performerfeatures64_dmodel64_ff192_N3_heads2_lr0.0005_w1_fold0.pt",
-        "feat_xlsx": "/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx",
-        "calibration": "calibrator",
-        "ai_rate": 15,
-        "batch_size": 2
-      },
-      {
-        "name": "mixture2_fold0",
-        "model_family": "mixture",
-        "ckpt": "/tmp/FullProductGPT_mixture2_performerfeatures64_dmodel64_ff192_N3_heads2_lr0.0005_w1_fold0.pt",
-        "feat_xlsx": "/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx",
-        "calibration": "calibrator",
-        "ai_rate": 15,
-        "batch_size": 2,
-        "fold_spec": "s3://productgptbucket/folds/productgptfolds.json",
-        "train_file": "/home/ec2-user/data/clean_list_int_wide4_simple6.json"
-      },
-      {
-        "name": "gru_fold0",
-        "model_family": "gru",
-        "ckpt": "/home/ec2-user/tmp_gru/gru_h128_lr0.001_bs4.pt",
-        "hidden_size": 128,
-        "input_dim": 15,
-        "batch_size": 128
-      },
-      {
-        "name": "lstm_fold0",
-        "model_family": "lstm",
-        "ckpt": "/home/ec2-user/tmp_lstm/lstm_h128_lr0.001_bs4.pt",
-        "hidden_size": 128,
-        "input_dim": 15,
-        "batch_size": 128
-      }
-    ]
-  }
-
 Usage:
   python3 unified_eval_and_compare.py \\
     --config    models.json \\
@@ -139,6 +95,13 @@ except Exception as exc:
     mixture_load_json_dataset = None
     MIXTURE_IMPORT_ERROR = exc
 
+# ── Optional Flash attention model imports ────────────────────────────────────
+try:
+    from flash_eval_patch import FlashAdapter
+    FLASH_IMPORT_ERROR = None
+except Exception as exc:
+    FlashAdapter = None
+    FLASH_IMPORT_ERROR = exc
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Constants
@@ -968,6 +931,7 @@ class LSTMAdapter(BaseAdapter):
 
 def make_adapter(spec: Dict[str, Any], args: argparse.Namespace) -> BaseAdapter:
     family = spec["model_family"].lower()
+    if family == "flash":      return FlashAdapter(spec, args)
     if family == "productgpt": return ProductGPTAdapter(spec, args)
     if family == "mixture":    return MixtureAdapter(spec, args)
     if family == "gru":        return GRUAdapter(spec, args)
