@@ -37,7 +37,7 @@ except Exception as exc:
     FLASH_IMPORT_ERROR = exc
 
 # ── Reuse shared helpers from the eval script ──
-from unified_eval_and_compare import (
+from unified_model_eval import (
     BaseAdapter,
     VectorScaling,
     load_calibrator_from_path,
