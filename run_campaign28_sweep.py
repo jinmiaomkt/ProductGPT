@@ -1,48 +1,7 @@
 #!/usr/bin/env python3
 """
 run_campaign28_sweep.py
-
 Disciplined sweep orchestrator for Campaign 28 inference.
-
-Outer loop : lto28 configs  (loaded from JSON)
-Middle loop: users          (all or --n_users)
-Inner loop : seeds          (--n_seeds, starting at --seed_base)
-
-The model and calibrator are loaded ONCE and reused across all (user, lto28) pairs.
-
-Output layout (S3 mode)
-───────────────────────
-s3://{bucket}/{s3_prefix}/{sweep_name}_{timestamp}/
-  config.json
-  manifest.json
-  raw/{lto28_name}/{uid}.jsonl
-  summary/all_runs.csv
-  summary/stop_stats.csv
-
-Output layout (local mode, no --s3_bucket)
-──────────────────────────────────────────
-{out_root}/{sweep_name}_{timestamp}/   (same structure, written to disk)
-
-Usage examples
-──────────────
-# S3 output (recommended — avoids filling local disk)
-python3 run_campaign28_sweep.py \\
-    --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \\
-    --ckpt /tmp/FullProductGPT_...pt \\
-    --feat_xlsx /home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx \\
-    --lto28_configs lto28_configs.json \\
-    --sweep_name c28_v1 \\
-    --s3_bucket productgptbucket \\
-    --s3_prefix outputs/campaign28 \\
-    --n_seeds 50 --seed_base 42 \\
-    --calibrator_ckpt /tmp/calibrator_...pt --calibrator_type platt \\
-    --quiet
-
-# Resume: skip already-done pairs (reads manifest from S3)
-python3 run_campaign28_sweep.py \\
-    ... same args ... \\
-    --s3_prefix outputs/campaign28/c28_v1_20260403_004318 \\
-    --skip_done
 """
 
 import argparse

@@ -701,7 +701,12 @@ python3 analysis_campaign28.py \
   --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
   --out_dir /home/ec2-user/analysis/c28_v1
 
-
+python3 analysis_campaign28.py \
+  --jsonl /home/ec2-user/outputs/campaign28_calibrated.jsonl \
+  --lto28_name "30_0_54_51" \
+  --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+  --out_dir /home/ec2-user/analysis/c28
+  
 python3 unified_model_eval.py \
   --config model_specs_example.json \
   --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
