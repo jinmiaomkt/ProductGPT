@@ -784,15 +784,4 @@ aws s3 cp s3://productgptbucket/LSTM/checkpoints/lstm_h128_lr0.0001_bs4.pt /home
 python3 generate_uid_splits.py
 
 # Step 2: Run evaluation with the splits
-python3 unified_model_eval.py \
-  --config model_specs_example3.json \
-    --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
-    --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
-    --uids-val /tmp/uids_val.txt \
-    --uids-test /tmp/uids_test.txt \
-    --fold-id 0 \
-    --output-dir /tmp/unified_eval_flash \
-    --compare-on test
-    --s3 s3://productgptbucket/evals/unified_compare_$(date +%F_%H%M%S)/ \
-    --save-preds
-
+python3 unified_model_eval.py --config model_specs_example3.json --data /home/ec2-user/data/clean_list_int_wide4_simple6.json --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json --uids-val /tmp/uids_val.txt --uids-test /tmp/uids_test.txt --fold-id 0 --output-dir /tmp/unified_eval_flash --compare-on test --s3 s3://productgptbucket/evals/unified_compare_$(date +%F_%H%M%S)/ --save-preds
