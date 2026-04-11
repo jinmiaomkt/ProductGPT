@@ -706,7 +706,7 @@ python3 analysis_campaign28.py \
   --lto28_name "30_0_54_51" \
   --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
   --out_dir /home/ec2-user/analysis/c28
-  
+
 python3 unified_model_eval.py \
   --config model_specs_example.json \
   --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
@@ -765,3 +765,34 @@ python3 unified_model_eval.py \
     --compare-on test
     --s3 s3://productgptbucket/evals/unified_compare_$(date +%F_%H%M%S)/ \
     --save-preds
+
+
+
+# Flash attention model
+S3_BASE="s3://productgptbucket/FullProductGPT/flash/FeatureBased/checkpoints"
+MODEL_STEM="featurebased_flash_dmodel128_ff384_N7_heads4_lr0.0009973854016532193_w1_fold0"
+
+aws s3 cp "${S3_BASE}/FullProductGPT_${MODEL_STEM}.pt" "/tmp/FullProductGPT_${MODEL_STEM}.pt"
+aws s3 cp "${S3_BASE}/calibrator_${MODEL_STEM}.pt" "/tmp/calibrator_${MODEL_STEM}.pt"
+
+# baseline models
+mkdir -p /home/ec2-user/tmp_gru /home/ec2-user/tmp_lstm
+aws s3 cp s3://productgptbucket/GRU/checkpoints/gru_h128_lr0.001_bs4.pt /home/ec2-user/tmp_gru/gru_h128_lr0.001_bs4.pt
+aws s3 cp s3://productgptbucket/LSTM/checkpoints/lstm_h128_lr0.0001_bs4.pt /home/ec2-user/tmp_lstm/lstm_h128_lr0.0001_bs4.pt
+
+# Step 1: Generate the split files (run once)
+python3 generate_uid_splits.py
+
+# Step 2: Run evaluation with the splits
+python3 unified_model_eval.py \
+  --config model_specs_example3.json \
+    --data /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+    --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json \
+    --uids-val /tmp/uids_val.txt \
+    --uids-test /tmp/uids_test.txt \
+    --fold-id 0 \
+    --output-dir /tmp/unified_eval_flash \
+    --compare-on test
+    --s3 s3://productgptbucket/evals/unified_compare_$(date +%F_%H%M%S)/ \
+    --save-preds
+

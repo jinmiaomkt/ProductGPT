@@ -1,0 +1,49 @@
+{
+  "models": [
+    {
+      "name": "FlashAttn-Calibrated",
+      "model_family": "flash",
+      "ckpt": "/tmp/FullProductGPT_featurebased_flash_dmodel128_ff384_N7_heads4_lr0.0009973854016532193_w1_fold0.pt",
+      "calibrator_ckpt": "/tmp/calibrator_featurebased_flash_dmodel128_ff384_N7_heads4_lr0.0009973854016532193_w1_fold0.pt",
+      "calibration": "calibrator",
+      "feat_xlsx": "/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx",
+      "batch_size": 2,
+      "ai_rate": 15,
+      "d_model": 128,
+      "num_heads": 8,
+      "N": 6,
+      "d_ff": 384,
+      "nb_features": 0
+    },
+    {
+      "name": "FlashAttn-Analytic",
+      "model_family": "flash",
+      "ckpt": "/tmp/FullProductGPT_featurebased_flash_dmodel128_ff384_N7_heads4_lr0.0009973854016532193_w1_fold0.pt",
+      "calibration": "analytic",
+      "feat_xlsx": "/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx",
+      "batch_size": 2,
+      "ai_rate": 15,
+      "d_model": 128,
+      "num_heads": 8,
+      "N": 6,
+      "d_ff": 384,
+      "nb_features": 0
+    },
+    {
+      "name": "LSTM",
+      "model_family": "lstm",
+      "ckpt": "/home/ec2-user/tmp_lstm/lstm_h128_lr0.0001_bs4.pt",
+      "hidden_size": 128,
+      "input_dim": 15,
+      "batch_size": 4
+    },
+    {
+      "name": "GRU",
+      "model_family": "gru",
+      "ckpt": "/home/ec2-user/tmp_gru/gru_h128_lr0.001_bs4.pt",
+      "hidden_size": 128,
+      "input_dim": 15,
+      "batch_size": 4
+    }
+  ]
+}
