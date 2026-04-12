@@ -143,8 +143,8 @@ def main():
     # ── Search space ──
     param_space = {
         # Stage A: fast search
-        "num_epochs": 120,
-        "data_frac": 0.3,
+        "num_epochs": 60,
+        "data_frac": 0.15,
 
         # Architecture
         "dm_heads": tune.choice(valid_dm_heads),
@@ -174,9 +174,9 @@ def main():
         time_attr="epoch",
         metric="val_nll",
         mode="min",
-        max_t=120,
-        grace_period=10,
-        reduction_factor=3,
+        max_t=60,
+        grace_period=5,
+        reduction_factor=4,
     )
 
     # ── HyperOpt: Bayesian search ──
@@ -190,7 +190,7 @@ def main():
     tuner = tune.Tuner(
         tune.with_resources(trainable_ray, resources={"cpu": 4, "gpu": 1}),
         tune_config=tune.TuneConfig(
-            num_samples=100,
+            num_samples=50,
             max_concurrent_trials=1,
             search_alg=algo,
             scheduler=asha,
