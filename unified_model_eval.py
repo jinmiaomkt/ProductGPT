@@ -103,6 +103,14 @@ except Exception as exc:
     FlashAdapter = None
     FLASH_IMPORT_ERROR = exc
 
+# ── Optional GRU_embed model imports ──────────────────────────────────────────
+try:
+    from gru_embed_eval_patch import GRUEmbedAdapter
+    GRU_EMBED_IMPORT_ERROR = None
+except Exception as exc:
+    GRUEmbedAdapter = None
+    GRU_EMBED_IMPORT_ERROR = exc
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Constants
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -933,6 +941,7 @@ def make_adapter(spec: Dict[str, Any], args: argparse.Namespace) -> BaseAdapter:
     family = spec["model_family"].lower()
     if family == "flash":      return FlashAdapter(spec, args)
     if family == "productgpt": return ProductGPTAdapter(spec, args)
+    if family == "gru_embed":  return GRUEmbedAdapter(spec, args)
     if family == "mixture":    return MixtureAdapter(spec, args)
     if family == "gru":        return GRUAdapter(spec, args)
     if family == "lstm":       return LSTMAdapter(spec, args)
