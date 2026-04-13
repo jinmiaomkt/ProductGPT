@@ -120,7 +120,15 @@ def trainable_ray(config: dict):
     try:
         result = train_model(cfg, report_fn=report_fn if in_tune else None,
                              stop_check_fn=stop_check_fn)
-        return result
+    
+        if in_tune and result:
+            session.report({
+                "epoch": result.get("fold_id", 0),
+                "val_nll": result.get("best_val_nll", float("inf")),
+                "val_hit": result.get("val_hit", 0),
+                "val_f1_macro": result.get("val_f1_macro", 0),
+        })
+        # return result
     except torch.cuda.OutOfMemoryError:
         torch.cuda.empty_cache()
         print("[WARN] OOM — skipping this trial")
