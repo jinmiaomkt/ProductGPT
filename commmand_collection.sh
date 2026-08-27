@@ -787,7 +787,10 @@ python3 unified_model_eval.py \
 # python3 unified_model_eval.py --config model_specs_example3.json --data /home/ec2-user/data/clean_list_int_wide4_simple6.json --labels /home/ec2-user/data/clean_list_int_wide4_simple6.json --uids-val /tmp/uids_val.txt --uids-test /tmp/uids_test.txt --fold-id 0 --output-dir /tmp/unified_eval_flash --compare-on test --s3 s3://productgptbucket/evals/unified_compare_$(date +%F_%H%M%S)/ --save-preds
 
 
+# Best GRU
 aws s3 cp s3://productgptbucket/GRU_embed/checkpoints/gru_embed_dm64_h256_lr0.001_bs16.pt /tmp/gru_embed_dm64_h256_lr0.001_bs16.pt
+# Best LSTM
+aws s3 cp s3://productgptbucket/LSTM_embed/checkpoints/lstm_embed_dm128_h256_lr0.001_bs16.pt /tmp/lstm_embed_dm128_h256_lr0.001_bs16.pt
 
 # Flash attention model
 S3_BASE="s3://productgptbucket/FullProductGPT/flash/FeatureBased/checkpoints"

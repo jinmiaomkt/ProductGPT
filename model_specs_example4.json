@@ -26,20 +26,13 @@
       "batch_size": 4
     },
     {
-      "name": "GRU-Feature",
-      "model_family": "gru",
-      "ckpt": "/home/ec2-user/tmp_gru/gru_h128_lr0.001_bs4.pt",
-      "hidden_size": 128,
-      "input_dim": 15,
-      "batch_size": 128
-    },
-    {
-      "name": "LSTM-Feature",
-      "model_family": "lstm",
-      "ckpt": "/home/ec2-user/tmp_lstm/lstm_h128_lr0.0001_bs4.pt",
-      "hidden_size": 128,
-      "input_dim": 15,
-      "batch_size": 128
+      "name": "LSTM-Embed",
+      "model_family": "lstm_embed",
+      "ckpt": "/home/ec2-user/tmp_lstm/lstm_embed_dm128_h256_lr0.001_bs16.pt",
+      "d_model": 128,
+      "hidden_size": 256,
+      "ai_rate": 15,
+      "batch_size": 4
     }
   ]
 }
