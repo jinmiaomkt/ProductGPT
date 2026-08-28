@@ -1,0 +1,82 @@
+#!/bin/bash
+#PBS -N productgpt_eval
+#PBS -l select=1:ncpus=4:ngpus=1:mem=64GB
+#PBS -q GPU
+#PBS -l walltime=12:00:00
+#PBS -j oe
+
+set -eo pipefail
+
+module purge
+module load python/3.11.4 cuda/12.5
+
+cd "$PBS_O_WORKDIR"
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
+
+export PYTHONUNBUFFERED=1
+export TOKENIZERS_PARALLELISM=false
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export OMP_NUM_THREADS=4
+export PYTHONPATH="$PBS_O_WORKDIR:${PYTHONPATH:-}"
+
+job_tag="${PBS_JOBID%%.*}"
+log_dir=/storage/home/jinmiao/ProductGPT/logs
+output_dir="/storage/home/jinmiao/ProductGPT/evals/unified_eval_flash_gru_${job_tag}"
+mkdir -p "$log_dir" "$output_dir"
+exec >"$log_dir/unified_eval_${job_tag}.log" 2>&1
+
+echo "Start time: $(date --iso-8601=seconds)"
+echo "PBS job:    $PBS_JOBID"
+echo "Host:       $(hostname)"
+echo "Work dir:   $PBS_O_WORKDIR"
+echo "Output dir: $output_dir"
+echo "Python:     $(which python)"
+python --version
+nvidia-smi
+
+required_files=(
+  "$PBS_O_WORKDIR/unified_model_eval_hpcc.py"
+  "$PBS_O_WORKDIR/flash_eval_patch_hpcc.py"
+  "$PBS_O_WORKDIR/gru_embed_eval_patch_hpcc.py"
+  "$PBS_O_WORKDIR/model_specs_hpcc.json"
+  "$PBS_O_WORKDIR/model4_decoderonly_feature_flash.py"
+  "$PBS_O_WORKDIR/config4.py"
+  "$PBS_O_WORKDIR/dataset4_productgpt.py"
+  "/storage/home/jinmiao/ProductGPT/data/clean_list_int_wide4_simple6.json"
+  "/storage/home/jinmiao/ProductGPT/data/SelectedFigureWeaponEmbeddingIndex.xlsx"
+  "/storage/home/jinmiao/ProductGPT/eval_inputs/fold0/uids_val.txt"
+  "/storage/home/jinmiao/ProductGPT/eval_inputs/fold0/uids_test.txt"
+)
+
+for required_file in "${required_files[@]}"; do
+  if [[ ! -f "$required_file" ]]; then
+    echo "ERROR: required file not found: $required_file" >&2
+    exit 2
+  fi
+done
+
+python - <<'PY'
+import torch
+
+print("PyTorch:", torch.__version__)
+print("PyTorch CUDA runtime:", torch.version.cuda)
+print("CUDA available:", torch.cuda.is_available())
+if not torch.cuda.is_available():
+    raise SystemExit("ERROR: PBS job did not receive a usable CUDA GPU")
+print("GPU:", torch.cuda.get_device_name(0))
+PY
+
+python unified_model_eval_hpcc.py \
+  --config model_specs_hpcc.json \
+  --data /storage/home/jinmiao/ProductGPT/data/clean_list_int_wide4_simple6.json \
+  --labels /storage/home/jinmiao/ProductGPT/data/clean_list_int_wide4_simple6.json \
+  --uids-val /storage/home/jinmiao/ProductGPT/eval_inputs/fold0/uids_val.txt \
+  --uids-test /storage/home/jinmiao/ProductGPT/eval_inputs/fold0/uids_test.txt \
+  --fold-id 0 \
+  --output-dir "$output_dir" \
+  --compare-on test \
+  --save-preds
+
+echo "Finish time: $(date --iso-8601=seconds)"
+echo "Results:     $output_dir"
+find "$output_dir" -maxdepth 2 -type f -printf '%p\n' | sort
