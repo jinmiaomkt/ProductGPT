@@ -27,7 +27,7 @@ FEATURE_COLS = [
     "WeaponTypeOneHandSword", "WeaponTypeTwoHandSword", "WeaponTypeArrow",
     "WeaponTypeMagic", "WeaponTypePolearm", "EthnicityIce", "EthnicityRock",
     "EthnicityWater", "EthnicityFire", "EthnicityThunder", "EthnicityWind",
-    "GenderFemale", "GenderMale", "CountryRuiYue", "CountryDaoQi",
+    "GenderFemale", "GenderMale", "CountryLiYue", "CountryDaoQi",
     "CountryZhiDong", "CountryMengDe", "type_figure", "MinimumAttack",
     "MaximumAttack", "MinSpecialEffect", "MaxSpecialEffect",
     "SpecialEffectEfficiency", "SpecialEffectExpertise", "SpecialEffectAttack",
