@@ -15,6 +15,15 @@
 #     qstat -f <jobid>            # full detail incl. why it is queued
 #     tail -f ~/ProductGPT/logs/gen5_train_<jobid>.log
 #     qdel <jobid>                # cancel
+#
+# VERIFIED SITE FACTS (from `qstat -Q -f GPU` and `df -h`, Sep 2026):
+#   - The GPU queue defines NO resources_max.walltime, so the 24h request
+#     below is not capped by the queue.
+#   - max_run_res.ngpus = [u:PBS_GENERIC=2]  ->  at most TWO GPUs running
+#     per user at once. A third job queues. Plan sweeps in batches of 2.
+#   - There is NO /storage/scratch/$USER on this cluster. Everything lives
+#     under /storage/home. The filesystem had 14T free of 19T, so
+#     checkpoint size is not a practical concern.
 # ============================================================================
 
 #PBS -N gen5_train
