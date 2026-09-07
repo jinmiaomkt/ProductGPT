@@ -1,10 +1,16 @@
 @echo off
 REM env.bat - set up the ProductGPT import path (Windows / cmd.exe)
 REM
-REM This is the cmd.exe counterpart of env.ps1. Use whichever matches your
-REM shell -- you can tell them apart by the prompt:
-REM     C:\...>            cmd.exe        -> use  env.bat
-REM     PS C:\...>         PowerShell     -> use  . .\env.ps1
+REM This is the cmd.exe counterpart of env.ps1. Tell them apart by the prompt:
+REM     C:\...^>       cmd.exe      run:  .\env.bat
+REM     PS C:\...^>    PowerShell   run:  . .\env.ps1
+REM
+REM IMPORTANT: the leading  .\  is REQUIRED on this machine.
+REM Windows here has NoDefaultCurrentDirectoryInExePath=1 (a security
+REM hardening setting) which stops cmd.exe searching the current directory.
+REM Plain "env.bat" fails with:
+REM     'env.bat' is not recognized as an internal or external command
+REM Writing  .\env.bat  makes the path explicit and works.
 REM
 REM WHY THIS EXISTS
 REM ---------------
@@ -15,10 +21,10 @@ REM look. Putting every code folder on PYTHONPATH restores the same import
 REM namespace as before, so no Python file had to be edited.
 REM
 REM USAGE (from the repo root, once per terminal session):
-REM     env.bat
+REM     .\env.bat
 REM
 REM Then run scripts normally, e.g.
-REM     python gen4_full_productgpt\train4_decoderonly_flash_feature_aws.py
+REM     python gen5_multistream\train5_multistream.py --profile pilot
 REM
 REM NOTE: this only sets PYTHONPATH. The data location comes from
 REM PRODUCTGPT_DATA, which should already be set permanently via:

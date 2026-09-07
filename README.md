@@ -139,8 +139,11 @@ Pick the one matching your shell. The prompt tells you which you're in:
 
 **Windows / cmd.exe:**
 ```
-env.bat
+.\env.bat
 ```
+The leading `.\` is required: this machine sets
+`NoDefaultCurrentDirectoryInExePath=1`, so `cmd.exe` will not search the
+current directory and plain `env.bat` reports "is not recognized".
 
 **Windows / PowerShell:**
 ```powershell
