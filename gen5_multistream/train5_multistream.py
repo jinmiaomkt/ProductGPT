@@ -215,23 +215,80 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device,
 
 
 # ────────────────────────────── data ──────────────────────────────
-def build_loaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, DataLoader, int]:
+def _load_uid_split(uids_dir: Path, raw: List[Dict[str, Any]]
+                    ) -> Tuple[List[int], List[int], List[int]]:
+    """
+    Partition records by explicit uid lists written by scripts/export_gen5_split.py.
+
+    Preferred over the derived split for anything reportable: the derived one
+    depends on record ORDER in the JSON, so regenerating the data silently
+    changes the test set. These files pin the held-out users so the gen-5
+    LSTM/GRU baselines hold out exactly the same ones as the transformer.
+    """
+    parts: Dict[str, set] = {}
+    for name in ("train", "val", "test"):
+        f = uids_dir / f"uids_{name}.txt"
+        if not f.exists():
+            raise FileNotFoundError(
+                f"{f} not found. Generate the split first:\n"
+                f"    python scripts/export_gen5_split.py --out {uids_dir}"
+            )
+        parts[name] = {ln.strip() for ln in f.read_text(encoding="utf-8").splitlines()
+                       if ln.strip()}
+
+    overlap = ((parts["train"] & parts["val"]) | (parts["train"] & parts["test"])
+               | (parts["val"] & parts["test"]))
+    if overlap:
+        raise ValueError(
+            f"uid split files overlap in {len(overlap)} uid(s) -- a user would appear "
+            "in more than one split, which invalidates the held-out metrics."
+        )
+
+    by_uid: Dict[str, int] = {}
+    for i, rec in enumerate(raw):
+        by_uid.setdefault(TransformerDataset._uid(rec), i)
+
+    out = []
+    for name in ("train", "val", "test"):
+        idxs = [by_uid[u] for u in parts[name] if u in by_uid]
+        missing = len(parts[name]) - len(idxs)
+        if missing:
+            print(f"[split] WARNING: {missing} uid(s) listed for {name} are not in "
+                  f"this data file (cohort changed?)")
+        out.append(sorted(idxs))
+
+    unassigned = len(raw) - sum(len(o) for o in out)
+    if unassigned:
+        print(f"[split] note: {unassigned} record(s) in the file are in no split file "
+              "and will be ignored")
+    return out[0], out[1], out[2]
+
+
+def build_loaders(cfg: Dict[str, Any],
+                  uids_dir: Optional[Path] = None
+                  ) -> Tuple[DataLoader, DataLoader, DataLoader, int]:
     path = config5.data_path(cfg)
     print(f"[data] {path}")
     raw = load_json_dataset(str(path))
     print(f"[data] {len(raw)} users in file")
 
-    rng = random.Random(cfg["seed"])
-    idx = list(range(len(raw)))
-    rng.shuffle(idx)
-    if cfg.get("max_users"):
-        idx = idx[: int(cfg["max_users"])]
-        print(f"[data] subsampled to {len(idx)} users (max_users)")
+    if uids_dir is not None:
+        print(f"[split] using frozen uid split from {uids_dir}")
+        tr_i, va_i, te_i = _load_uid_split(uids_dir, raw)
+    else:
+        print("[split] deriving split from seed (NOT frozen -- depends on record "
+              "order in the JSON; use --uids-dir for reportable runs)")
+        rng = random.Random(cfg["seed"])
+        idx = list(range(len(raw)))
+        rng.shuffle(idx)
+        if cfg.get("max_users"):
+            idx = idx[: int(cfg["max_users"])]
+            print(f"[data] subsampled to {len(idx)} users (max_users)")
 
-    n = len(idx)
-    n_tr = int(cfg["train_frac"] * n)
-    n_va = int(cfg["val_frac"] * n)
-    tr_i, va_i, te_i = idx[:n_tr], idx[n_tr:n_tr + n_va], idx[n_tr + n_va:]
+        n = len(idx)
+        n_tr = int(cfg["train_frac"] * n)
+        n_va = int(cfg["val_frac"] * n)
+        tr_i, va_i, te_i = idx[:n_tr], idx[n_tr:n_tr + n_va], idx[n_tr + n_va:]
 
     def subset(ii: List[int]) -> List[Dict[str, Any]]:
         return [raw[i] for i in ii]
@@ -281,6 +338,13 @@ def main() -> None:
                     help="Stop cleanly after this many minutes and save "
                          "last.pt, so the run ends before PBS kills it. "
                          "Set it a little under the job's walltime.")
+    ap.add_argument("--uids-dir", default=None,
+                    help="Directory holding uids_train/val/test.txt from "
+                         "scripts/export_gen5_split.py. Use this for any run "
+                         "whose numbers you intend to report or compare "
+                         "against another model -- without it the split is "
+                         "re-derived from record order and can shift if the "
+                         "data file is regenerated.")
     args = ap.parse_args()
 
     cfg = config5.get_config(args.profile)
@@ -298,7 +362,9 @@ def main() -> None:
         print(f"[env] gpu={torch.cuda.get_device_name(0)} "
               f"total={human(torch.cuda.get_device_properties(0).total_memory)}")
 
-    train_dl, val_dl, test_dl, num_users = build_loaders(cfg)
+    uids_dir = Path(args.uids_dir) if args.uids_dir else None
+    cfg["uids_dir"] = str(uids_dir) if uids_dir else None
+    train_dl, val_dl, test_dl, num_users = build_loaders(cfg, uids_dir=uids_dir)
 
     feat = load_feature_tensor(config5.feature_path())
     model = build_transformer(

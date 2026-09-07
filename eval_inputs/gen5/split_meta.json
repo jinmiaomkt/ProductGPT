@@ -1,0 +1,16 @@
+{
+  "profile": "hpcc",
+  "seed": 33,
+  "data_file": "clean_list_int_wide4_simple6_IPT.json",
+  "n_users_in_file": 5004,
+  "max_users": null,
+  "train_frac": 0.8,
+  "val_frac": 0.1,
+  "counts": {
+    "train": 4003,
+    "val": 500,
+    "test": 501
+  },
+  "split_sha256": "c779dcb5a1e18270543d900c9816eaa9023d429cc4b95a3794232fa9af0238d0",
+  "note": "Reproduces train5_multistream.build_loaders' index shuffle. Any model comparing against this split must read these files."
+}

@@ -38,3 +38,12 @@ venv/
 Thumbs.db
 .vscode/
 .idea/
+
+# ---------------------------------------------------------------
+# Split definitions: uid lists are DATA (user identifiers from the
+# confidential dataset) and must never be published. Regenerate them
+# with scripts/export_gen5_split.py -- it is deterministic, and
+# split_meta.json (which is tracked) carries a sha256 of the
+# membership so you can verify a regenerated split is identical.
+# ---------------------------------------------------------------
+eval_inputs/**/uids_*.txt
