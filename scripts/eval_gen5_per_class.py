@@ -53,6 +53,16 @@ def main() -> None:
         raise SystemExit(f"checkpoint not found: {ckpt_path}")
 
     device = pick_device()
+    if device.type == "cuda":
+        print(f"[env] device={device} ({torch.cuda.get_device_name(0)})")
+    else:
+        # The login node has no GPU. Evaluation still works but the O(S**2)
+        # cross-attention over the whole test split takes minutes rather than
+        # seconds, so say so rather than appearing to hang.
+        print("[env] device=cpu -- NO GPU FOUND. This will be slow "
+              "(minutes, not seconds) at large max_events. On HPCC, submit "
+              "this as a GPU job instead of running it on the login node.")
+
     state = torch.load(ckpt_path, map_location=device, weights_only=False)
     cfg = state["cfg"]
     num_users = state["num_users"]
