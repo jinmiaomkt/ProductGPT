@@ -1,0 +1,145 @@
+#!/bin/bash
+# ============================================================================
+# Train the gen-5 multi-stream state-space model on SMU HPCC.
+#
+# SUBMIT FROM THE REPO ROOT so $PBS_O_WORKDIR is the repo root:
+#     cd ~/ProductGPT/ProductGPT
+#     qsub scripts/gen5_train_hpcc.pbs
+#
+# Override settings without editing this file, using -v:
+#     qsub -v MAX_EVENTS=768,EPOCHS=80 scripts/gen5_train_hpcc.pbs
+#     qsub -v RESUME=1 scripts/gen5_train_hpcc.pbs        # continue a run
+#
+# Monitor:
+#     qstat -u $USER              # queued / running
+#     qstat -f <jobid>            # full detail incl. why it is queued
+#     tail -f ~/ProductGPT/logs/gen5_train_<jobid>.log
+#     qdel <jobid>                # cancel
+# ============================================================================
+
+#PBS -N gen5_train
+#PBS -l select=1:ncpus=8:ngpus=1:mem=64GB
+#PBS -q GPU
+#PBS -l walltime=24:00:00
+#PBS -j oe
+
+set -eo pipefail
+
+# ---------------------------------------------------------------- modules
+module purge
+module load python/3.11.4 cuda/12.5
+
+cd "$PBS_O_WORKDIR"
+
+# Reuses the eval venv: gen 5 needs torch, pandas, numpy, scikit-learn and
+# openpyxl, all of which that venv already has. It deliberately does NOT need
+# deepspeed -- train5_multistream.py is plain PyTorch, which is also why the
+# same script runs on the Windows laptop.
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
+
+# ---------------------------------------------------------------- env
+export PYTHONUNBUFFERED=1
+export TOKENIZERS_PARALLELISM=false
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export OMP_NUM_THREADS=${OMP_NUM_THREADS:-8}
+
+# paths.py resolves every data path from this. Required.
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+
+# Puts gen5_multistream/, shared/, the repo root etc. on PYTHONPATH so the
+# bare-module imports resolve.
+source "$PBS_O_WORKDIR/env.sh"
+
+# ---------------------------------------------------------------- knobs
+# Defaults here; override any of them at submit time with -v NAME=value.
+PROFILE="${PROFILE:-hpcc}"
+MAX_EVENTS="${MAX_EVENTS:-512}"
+EPOCHS="${EPOCHS:-60}"
+BATCH_SIZE="${BATCH_SIZE:-4}"
+MAX_USERS="${MAX_USERS:-}"          # empty = all users
+DATA_FILE="${DATA_FILE:-}"          # empty = whatever config5 defaults to
+RESUME="${RESUME:-0}"
+
+# Stop cleanly ~30 min before the 24h walltime so last.pt is written and the
+# job can be resubmitted with RESUME=1 instead of losing the run.
+TIME_BUDGET_MIN="${TIME_BUDGET_MIN:-1410}"
+
+job_tag="${PBS_JOBID%%.*}"
+log_dir=/storage/home/jinmiao/ProductGPT/logs
+mkdir -p "$log_dir"
+
+# Checkpoints must NOT go in the data dir. Keep a STABLE directory per
+# configuration (not per job id) so a resubmitted job finds its own last.pt.
+run_id="gen5_${PROFILE}_S${MAX_EVENTS}_b${BATCH_SIZE}"
+output_dir="/storage/home/jinmiao/ProductGPT/runs/${run_id}"
+mkdir -p "$output_dir"
+export PRODUCTGPT_OUTPUT="$output_dir"
+
+exec >"$log_dir/gen5_train_${job_tag}.log" 2>&1
+
+# ---------------------------------------------------------------- banner
+echo "Start time:  $(date --iso-8601=seconds)"
+echo "PBS job:     $PBS_JOBID"
+echo "Host:        $(hostname)"
+echo "Work dir:    $PBS_O_WORKDIR"
+echo "Run id:      $run_id"
+echo "Output dir:  $output_dir"
+echo "Python:      $(which python)"
+python --version
+nvidia-smi
+echo
+
+# ---------------------------------------------------------------- preflight
+required_files=(
+  "$PBS_O_WORKDIR/gen5_multistream/train5_multistream.py"
+  "$PBS_O_WORKDIR/gen5_multistream/config5.py"
+  "$PBS_O_WORKDIR/gen5_multistream/dataset_multistream.py"
+  "$PBS_O_WORKDIR/gen5_multistream/model_multistream_state_space.py"
+  "$PBS_O_WORKDIR/paths.py"
+  "$PBS_O_WORKDIR/shared/features.py"
+)
+for f in "${required_files[@]}"; do
+  [[ -f "$f" ]] || { echo "ERROR: missing required file: $f" >&2; exit 2; }
+done
+
+if [[ ! -d "${PRODUCTGPT_DATA:-}" ]]; then
+  echo "ERROR: PRODUCTGPT_DATA unset or not a directory: '${PRODUCTGPT_DATA:-}'" >&2
+  exit 2
+fi
+echo "PRODUCTGPT_DATA:   $PRODUCTGPT_DATA"
+echo "PRODUCTGPT_OUTPUT: $PRODUCTGPT_OUTPUT"
+ls -la "$PRODUCTGPT_DATA" | head -20
+echo
+
+# Fail fast if the job did not actually get a GPU, rather than silently
+# training on CPU for 24 hours.
+python - <<'PY'
+import torch
+print("PyTorch:", torch.__version__, "| CUDA runtime:", torch.version.cuda)
+if not torch.cuda.is_available():
+    raise SystemExit("ERROR: no usable CUDA device in this job")
+p = torch.cuda.get_device_properties(0)
+print(f"GPU: {p.name}  {p.total_memory/1024**3:.1f} GB  sm_{p.major}{p.minor}")
+PY
+echo
+
+# ---------------------------------------------------------------- run
+args=(
+  --profile "$PROFILE"
+  --max-events "$MAX_EVENTS"
+  --epochs "$EPOCHS"
+  --batch-size "$BATCH_SIZE"
+  --time-budget-min "$TIME_BUDGET_MIN"
+)
+[[ -n "$MAX_USERS" ]] && args+=(--max-users "$MAX_USERS")
+[[ -n "$DATA_FILE" ]] && args+=(--data-file "$DATA_FILE")
+[[ "$RESUME" == "1" ]] && args+=(--resume)
+
+echo "Command: python gen5_multistream/train5_multistream.py ${args[*]}"
+echo
+python gen5_multistream/train5_multistream.py "${args[@]}"
+
+echo
+echo "Finish time: $(date --iso-8601=seconds)"
+echo "Artifacts in $output_dir:"
+ls -la "$output_dir"

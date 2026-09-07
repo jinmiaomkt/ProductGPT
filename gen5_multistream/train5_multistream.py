@@ -273,6 +273,14 @@ def main() -> None:
     ap.add_argument("--batch-size", type=int, default=None)
     ap.add_argument("--max-users", type=int, default=None)
     ap.add_argument("--data-file", default=None)
+    ap.add_argument("--resume", action="store_true",
+                    help="Resume from last.pt in the output dir if present. "
+                         "Use this on HPCC so a job killed by the walltime "
+                         "limit can be requeued and continue.")
+    ap.add_argument("--time-budget-min", type=float, default=None,
+                    help="Stop cleanly after this many minutes and save "
+                         "last.pt, so the run ends before PBS kills it. "
+                         "Set it a little under the job's walltime.")
     args = ap.parse_args()
 
     cfg = config5.get_config(args.profile)
@@ -340,13 +348,37 @@ def main() -> None:
 
     out_dir = config5.output_dir(cfg)
     ckpt_path = out_dir / "best.pt"
+    last_path = out_dir / "last.pt"
     hist_path = out_dir / "history.json"
     print(f"[out] {out_dir}")
 
     best_nll, best_epoch, patience = float("inf"), -1, 0
     history: List[Dict[str, Any]] = []
+    start_epoch = 0
 
-    for ep in range(cfg["num_epochs"]):
+    # ---- resume (HPCC: a walltime kill should not lose the run) ----------
+    if args.resume and last_path.exists():
+        state = torch.load(last_path, map_location=device, weights_only=False)
+        model.load_state_dict(state["model_state_dict"])
+        opt.load_state_dict(state["optimizer_state_dict"])
+        sched.load_state_dict(state["scheduler_state_dict"])
+        if state.get("scaler_state_dict") and scaler.is_enabled():
+            scaler.load_state_dict(state["scaler_state_dict"])
+        start_epoch = int(state["epoch"]) + 1
+        best_nll = float(state.get("best_nll", float("inf")))
+        best_epoch = int(state.get("best_epoch", -1))
+        patience = int(state.get("patience", 0))
+        history = state.get("history", [])
+        print(f"[resume] continuing from epoch {start_epoch} "
+              f"(best val_nll so far {best_nll:.4f} at epoch {best_epoch})")
+    elif args.resume:
+        print(f"[resume] no {last_path.name} found; starting fresh")
+
+    t_start = time.time()
+    budget_s = args.time_budget_min * 60 if args.time_budget_min else None
+    stopped_early_for_time = False
+
+    for ep in range(start_epoch, cfg["num_epochs"]):
         model.train()
         if hasattr(train_dl.dataset, "set_epoch"):
             train_dl.dataset.set_epoch(ep)
@@ -404,7 +436,8 @@ def main() -> None:
         history.append({"epoch": ep, "train_loss": tr_loss, **v, "secs": dt})
         hist_path.write_text(json.dumps(history, indent=2))
 
-        if v["nll"] < best_nll:
+        improved = v["nll"] < best_nll
+        if improved:
             best_nll, best_epoch, patience = v["nll"], ep, 0
             torch.save({
                 "epoch": ep, "val_nll": best_nll,
@@ -415,9 +448,30 @@ def main() -> None:
             print(f"          saved best -> {ckpt_path.name}")
         else:
             patience += 1
-            if patience >= cfg["patience"]:
-                print("[early stop] val_nll stopped improving")
-                break
+
+        # Always refresh last.pt: this is what --resume reads. It carries the
+        # optimiser and scheduler state too, so a requeued job continues the
+        # schedule instead of restarting warmup.
+        torch.save({
+            "epoch": ep,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": opt.state_dict(),
+            "scheduler_state_dict": sched.state_dict(),
+            "scaler_state_dict": scaler.state_dict() if scaler.is_enabled() else None,
+            "best_nll": best_nll, "best_epoch": best_epoch, "patience": patience,
+            "history": history, "cfg": cfg, "num_users": num_users,
+            "class_weights_9": w9.tolist(),
+        }, last_path)
+
+        if not improved and patience >= cfg["patience"]:
+            print("[early stop] val_nll stopped improving")
+            break
+
+        if budget_s is not None and (time.time() - t_start) > budget_s:
+            print(f"[time budget] {args.time_budget_min:.0f} min reached after "
+                  f"epoch {ep}; stopping cleanly. Resubmit with --resume to continue.")
+            stopped_early_for_time = True
+            break
 
     if ckpt_path.exists():
         state = torch.load(ckpt_path, map_location=device, weights_only=False)
@@ -429,7 +483,12 @@ def main() -> None:
 
     (out_dir / "final.json").write_text(json.dumps(
         {"best_val_nll": best_nll, "best_epoch": best_epoch, "test": t,
-         "cfg": cfg, "params": n_par}, indent=2))
+         "cfg": cfg, "params": n_par,
+         "stopped_for_time_budget": stopped_early_for_time,
+         "epochs_completed": len(history)}, indent=2))
+    if stopped_early_for_time:
+        print("[note] run ended on the time budget, not on convergence. "
+              "Resubmit the same job with --resume to continue.")
     if device.type == "cuda":
         print(f"[env] peak GPU memory: {human(torch.cuda.max_memory_allocated())}")
 

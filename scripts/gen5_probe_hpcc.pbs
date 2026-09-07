@@ -1,0 +1,60 @@
+#!/bin/bash
+# ============================================================================
+# Short job: find the largest event window (max_events) that fits on the GPU
+# this cluster actually gives you.
+#
+# Run this ONCE before submitting a long training job. The gen-5
+# offer-inventory cross-attention costs O(S^2), so the safe max_events depends
+# entirely on the card. Measured on the 6 GB laptop:
+#     S=256 0.35 GB | S=512 1.29 GB | S=768 2.87 GB | S=1024 5.08 GB
+# An A100 (40/80 GB) will go far higher, but measure rather than guess.
+#
+#     cd ~/ProductGPT/ProductGPT
+#     qsub scripts/gen5_probe_hpcc.pbs
+#     tail -f ~/ProductGPT/logs/gen5_probe_<jobid>.log
+# ============================================================================
+
+#PBS -N gen5_probe
+#PBS -l select=1:ncpus=4:ngpus=1:mem=32GB
+#PBS -q GPU
+#PBS -l walltime=00:30:00
+#PBS -j oe
+
+set -eo pipefail
+
+module purge
+module load python/3.11.4 cuda/12.5
+
+cd "$PBS_O_WORKDIR"
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
+
+export PYTHONUNBUFFERED=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+job_tag="${PBS_JOBID%%.*}"
+log_dir=/storage/home/jinmiao/ProductGPT/logs
+mkdir -p "$log_dir"
+exec >"$log_dir/gen5_probe_${job_tag}.log" 2>&1
+
+echo "Start: $(date --iso-8601=seconds)  host: $(hostname)"
+nvidia-smi
+echo
+
+# Probe at the pilot model size, then at the hpcc model size, so you can see
+# how much of the cost is the model and how much is the S^2 attention.
+echo "=============== pilot model (d_model=64, N=2, heads=4) ==============="
+python gen5_multistream/probe_memory.py \
+  --d-model 64 --heads 4 --layers 2 --d-ff 128 --batch 4 \
+  --events 256 512 768 1024 1536 2048
+
+echo
+echo "=============== hpcc model (d_model=128, N=4, heads=8) ==============="
+python gen5_multistream/probe_memory.py \
+  --d-model 128 --heads 8 --layers 4 --d-ff 384 --batch 4 \
+  --events 256 512 768 1024 1536 2048
+
+echo
+echo "Finish: $(date --iso-8601=seconds)"
+echo "Pick max_events with headroom -- real batches vary in length."
