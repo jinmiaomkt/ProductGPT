@@ -1,5 +1,40 @@
-clean_list_int_wide4_simple6_FeatureBasedTrain.json
-clean_list_int_wide4_simple6.json
-clean_list_int_wide4_simple6.json
-.DS_Store
+# ---------------------------------------------------------------
+# Confidential data - NEVER commit
+# ---------------------------------------------------------------
+data/
 /Tabular Data/
+clean_list_int_wide4_simple6.json
+clean_list_int_wide4_simple6_FeatureBasedTrain.json
+*.xlsx
+
+# ---------------------------------------------------------------
+# Model artefacts - NEVER commit
+# ---------------------------------------------------------------
+checkpoints/
+results/
+runs/
+logs/
+evals/
+*.pt
+*.pth
+*.ckpt
+*.jsonl.gz
+*.pkl
+
+# ---------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# ---------------------------------------------------------------
+# OS / editor
+# ---------------------------------------------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

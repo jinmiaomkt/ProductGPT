@@ -1,0 +1,15 @@
+# Keep Unix line endings on files that Linux/HPCC must execute.
+# Without this, Git on Windows can write CRLF and bash on the cluster
+# fails with errors like: /bin/bash^M: bad interpreter
+*.sh   text eol=lf
+*.pbs  text eol=lf
+env.sh text eol=lf
+
+# Python is safe either way, but keep it consistent across machines.
+*.py   text eol=lf
+
+# Never try to diff/convert binary artefacts.
+*.pt   binary
+*.pth  binary
+*.xlsx binary
+*.pdf  binary

@@ -17,7 +17,11 @@ export PYTHONUNBUFFERED=1
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export OMP_NUM_THREADS=4
-export PYTHONPATH="$PBS_O_WORKDIR:${PYTHONPATH:-}"
+# Submit this job FROM THE REPO ROOT so that $PBS_O_WORKDIR is the repo root:
+#     qsub scripts/productgpt_eval_hpcc.pbs
+# env.sh puts every code folder (gen4_full_productgpt/, evaluation/, ...) on
+# PYTHONPATH, which is what lets the scripts import each other by plain name.
+source "$PBS_O_WORKDIR/env.sh"
 
 job_tag="${PBS_JOBID%%.*}"
 log_dir=/storage/home/jinmiao/ProductGPT/logs
@@ -35,13 +39,13 @@ python --version
 nvidia-smi
 
 required_files=(
-  "$PBS_O_WORKDIR/unified_model_eval_hpcc.py"
-  "$PBS_O_WORKDIR/flash_eval_patch_hpcc.py"
-  "$PBS_O_WORKDIR/gru_embed_eval_patch_hpcc.py"
-  "$PBS_O_WORKDIR/model_specs_hpcc.json"
-  "$PBS_O_WORKDIR/model4_decoderonly_feature_flash.py"
-  "$PBS_O_WORKDIR/config4.py"
-  "$PBS_O_WORKDIR/dataset4_productgpt.py"
+  "$PBS_O_WORKDIR/evaluation/unified_model_eval_hpcc.py"
+  "$PBS_O_WORKDIR/evaluation/flash_eval_patch_hpcc.py"
+  "$PBS_O_WORKDIR/evaluation/gru_embed_eval_patch_hpcc.py"
+  "$PBS_O_WORKDIR/evaluation/model_specs_hpcc.json"
+  "$PBS_O_WORKDIR/gen4_full_productgpt/model4_decoderonly_feature_flash.py"
+  "$PBS_O_WORKDIR/gen4_full_productgpt/config4.py"
+  "$PBS_O_WORKDIR/gen4_full_productgpt/dataset4_productgpt.py"
   "/storage/home/jinmiao/ProductGPT/data/clean_list_int_wide4_simple6.json"
   "/storage/home/jinmiao/ProductGPT/data/SelectedFigureWeaponEmbeddingIndex.xlsx"
   "/storage/home/jinmiao/ProductGPT/eval_inputs/fold0/uids_val.txt"
@@ -66,8 +70,8 @@ if not torch.cuda.is_available():
 print("GPU:", torch.cuda.get_device_name(0))
 PY
 
-python unified_model_eval_hpcc.py \
-  --config model_specs_hpcc.json \
+python evaluation/unified_model_eval_hpcc.py \
+  --config evaluation/model_specs_hpcc.json \
   --data /storage/home/jinmiao/ProductGPT/data/clean_list_int_wide4_simple6.json \
   --labels /storage/home/jinmiao/ProductGPT/data/clean_list_int_wide4_simple6.json \
   --uids-val /storage/home/jinmiao/ProductGPT/eval_inputs/fold0/uids_val.txt \
