@@ -47,6 +47,16 @@ N_CLASSES = 9
 # Revenue per decision: 1..8 alternate 1 / 10 draws, 9 = NotBuy earns nothing.
 REV_VEC = [1.0, 10.0, 1.0, 10.0, 1.0, 10.0, 1.0, 10.0, 0.0]
 
+# Decision semantics, from Code/GenerateJSON.R via analysis/analyze_users_campaign28.py.
+# 9 is NotBuy -- an ordinary class (the majority one), NOT end-of-sequence.
+DECISION_LABELS = {
+    1: "Buy1_Reg",  2: "Buy10_Reg",
+    3: "Buy1_FigA", 4: "Buy10_FigA",
+    5: "Buy1_FigB", 6: "Buy10_FigB",
+    7: "Buy1_Wep",  8: "Buy10_Wep",
+    9: "NotBuy",
+}
+
 
 # ────────────────────────────── utilities ──────────────────────────────
 def set_seed(seed: int) -> None:
@@ -132,19 +142,42 @@ def macro_f1(tp: np.ndarray, pred_cnt: np.ndarray, true_cnt: np.ndarray) -> floa
     return float(np.mean(out)) if out else float("nan")
 
 
-def macro_auprc(y_true: np.ndarray, scores: np.ndarray) -> float:
-    """Average precision per class, averaged over classes with support."""
+def per_class_auprc(y_true: np.ndarray, scores: np.ndarray) -> List[float]:
+    """
+    Average precision for each of the 9 classes. NaN where a class has no
+    support in this split (AP is undefined with no positives).
+    """
     try:
         from sklearn.metrics import average_precision_score
     except ImportError:
-        return float("nan")
-    vals = []
+        return [float("nan")] * N_CLASSES
+    out = []
     for k in range(N_CLASSES):
         pos = (y_true == k + 1).astype(np.int8)
-        if pos.sum() == 0:
-            continue
-        vals.append(average_precision_score(pos, scores[:, k]))
+        out.append(float(average_precision_score(pos, scores[:, k]))
+                   if pos.sum() else float("nan"))
+    return out
+
+
+def macro_auprc(y_true: np.ndarray, scores: np.ndarray) -> float:
+    """Average precision averaged over classes that have support."""
+    vals = [v for v in per_class_auprc(y_true, scores) if not math.isnan(v)]
     return float(np.mean(vals)) if vals else float("nan")
+
+
+def format_per_class(per_class: Dict[str, Dict[str, Any]]) -> str:
+    """Readable table for the job log -- macro numbers hide which classes fail."""
+    hdr = (f"{'id':>2}  {'label':<12} {'support':>8} {'pred':>8} "
+           f"{'prec':>6} {'recall':>6} {'F1':>6} {'AUPRC':>6}")
+    lines = [hdr, "-" * len(hdr)]
+    for c in range(1, N_CLASSES + 1):
+        d = per_class[str(c)]
+        lines.append(
+            f"{c:>2}  {d['label']:<12} {d['support']:>8,} {d['predicted']:>8,} "
+            f"{d['precision']:>6.3f} {d['recall']:>6.3f} {d['f1']:>6.3f} "
+            f"{d['auprc']:>6.3f}"
+        )
+    return "\n".join(lines)
 
 
 @torch.no_grad()
@@ -204,13 +237,37 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device,
 
     y_all = np.concatenate(ys)
     p_all = np.concatenate(ps)
+    aps = per_class_auprc(y_all, p_all)
+
+    # Per-class breakdown. Macro averages hide which classes actually work;
+    # here the rare Buy10_* decisions are the 10x-revenue events, so whether
+    # they are genuinely predicted or quietly ignored is the interesting part.
+    per_class: Dict[str, Dict[str, Any]] = {}
+    for k in range(N_CLASSES):
+        c = k + 1
+        tpk, pk, tk = int(tp[k]), int(pred_cnt[k]), int(true_cnt[k])
+        prec = tpk / pk if pk else 0.0
+        rec = tpk / tk if tk else 0.0
+        per_class[str(c)] = {
+            "label": DECISION_LABELS[c],
+            "support": tk,
+            "predicted": pk,
+            "true_positives": tpk,
+            "precision": prec,
+            "recall": rec,
+            "f1": (2 * prec * rec / (prec + rec)) if (prec + rec) else 0.0,
+            "auprc": aps[k],
+        }
+
     return {
         "nll": nll_sum / total,
         "hit": correct / total,
         "f1_macro": macro_f1(tp, pred_cnt, true_cnt),
-        "auprc_macro": macro_auprc(y_all, p_all),
+        "auprc_macro": float(np.mean([v for v in aps if not math.isnan(v)]))
+                       if any(not math.isnan(v) for v in aps) else float("nan"),
         "rev_mae": rev_err / total,
         "n": float(total),
+        "per_class": per_class,
     }
 
 
@@ -499,7 +556,10 @@ def main() -> None:
         print(f"[ep {ep:02d}] train_loss={tr_loss:.4f}  val_nll={v['nll']:.4f}  "
               f"hit={v['hit']:.4f}  f1={v['f1_macro']:.4f}  auprc={v['auprc_macro']:.4f}  "
               f"revMAE={v['rev_mae']:.3f}  ({dt:.0f}s)")
-        history.append({"epoch": ep, "train_loss": tr_loss, **v, "secs": dt})
+        # Keep history.json a readable learning curve: the per-class block goes
+        # only into final.json, where it describes the selected model.
+        history.append({"epoch": ep, "train_loss": tr_loss, "secs": dt,
+                        **{k: val for k, val in v.items() if k != "per_class"}})
         hist_path.write_text(json.dumps(history, indent=2))
 
         improved = v["nll"] < best_nll
@@ -544,6 +604,9 @@ def main() -> None:
         model.load_state_dict(state["model_state_dict"])
         print(f"[test] loaded best epoch {state['epoch']}")
     t = evaluate(model, test_dl, device, adtype)
+    if "per_class" in t:
+        print("\n** TEST: per-class breakdown **")
+        print(format_per_class(t["per_class"]))
     print(f"\n** TEST ** nll={t['nll']:.4f} hit={t['hit']:.4f} f1={t['f1_macro']:.4f} "
           f"auprc={t['auprc_macro']:.4f} revMAE={t['rev_mae']:.3f} n={int(t['n'])}")
 
