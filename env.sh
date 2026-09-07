@@ -49,4 +49,16 @@ export PYTHONPATH
 echo "PYTHONPATH set for ProductGPT (${#_productgpt_dirs[@]} folders)."
 echo "Repo root: ${_productgpt_root}"
 
+# This script only sets PYTHONPATH. The data location comes from
+# PRODUCTGPT_DATA, which the PBS job scripts export themselves but an
+# interactive shell does not. Say so here rather than letting it surface as a
+# traceback from paths.py three calls deep.
+if [ -n "${PRODUCTGPT_DATA:-}" ]; then
+    echo "PRODUCTGPT_DATA: ${PRODUCTGPT_DATA}"
+else
+    echo "WARNING: PRODUCTGPT_DATA is not set - get_config() will fail."
+    echo "  On SMU HPCC:  export PRODUCTGPT_DATA=/storage/home/\$USER/ProductGPT/data"
+    echo "  Add that line to ~/.bashrc to make it permanent."
+fi
+
 unset _d _productgpt_dirs _productgpt_root

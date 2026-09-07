@@ -42,3 +42,14 @@ $env:PYTHONPATH = ($paths -join ";") + $(if ($env:PYTHONPATH) { ";" + $env:PYTHO
 
 Write-Host "PYTHONPATH set for ProductGPT ($($codeDirs.Count) folders)."
 Write-Host "Repo root: $repo"
+
+# Only PYTHONPATH is set here. The data location comes from PRODUCTGPT_DATA;
+# report it plainly rather than letting a missing value surface as a traceback
+# from paths.py.
+if ($env:PRODUCTGPT_DATA) {
+    Write-Host "PRODUCTGPT_DATA: $($env:PRODUCTGPT_DATA)"
+} else {
+    Write-Host "WARNING: PRODUCTGPT_DATA is not set - get_config() will fail."
+    Write-Host '  Fix with: setx PRODUCTGPT_DATA "C:\Users\jinmiao\ResearchData\productgpt"'
+    Write-Host "  then open a NEW terminal (setx does not affect the current one)."
+}
