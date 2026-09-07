@@ -190,8 +190,8 @@ def _show(tag: str, metrics: Tuple[float, float, dict, dict, dict, dict]) -> Non
     print(f"{tag}  Loss={loss:.4f}  PPL={ppl:.4f}")
     for name, d in (
         ("all",          m_all),
-        ("cur-STOP",     m_st),
-        ("after-STOP",   m_af),
+        ("cur-NotBuy",     m_st),
+        ("after-NotBuy",   m_af),
         ("transition",   m_tr),
     ):
         print(f"  {name:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
@@ -394,8 +394,8 @@ def train_model(cfg):
             va, eng, dev, loss_fn, pad_id, tok_tgt, cfg["ai_rate"])
 
         print(f"Epoch {ep:02d}  ValLoss={v_loss:.4f}  PPL={v_ppl:.4f}")
-        for tag,d in (("all",v_all),("STOP_cur",v_stop),
-                      ("after_STOP",v_after),("transition",v_tr)):
+        for tag,d in (("all",v_all),("NotBuy_cur",v_stop),
+                      ("after_NotBuy",v_after),("transition",v_tr)):
             print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
                   f"AUPRC={d['auprc']:.4f}  RevMAE={d['rev_mae']:.4f}")
         
@@ -459,8 +459,8 @@ def train_model(cfg):
             te, eng, dev, loss_fn, pad_id, tok_tgt, cfg["ai_rate"])
 
         print(f"\n** TEST ** Loss={t_loss:.4f}  PPL={t_ppl:.4f}")
-        for tag,d in (("all",t_all),("STOP_cur",t_stop),
-                      ("after_STOP",t_after),("transition",t_tr)):
+        for tag,d in (("all",t_all),("NotBuy_cur",t_stop),
+                      ("after_NotBuy",t_after),("transition",t_tr)):
             print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
                   f"AUPRC={d['auprc']:.4f}   RevMAE={d['rev_mae']:.4f} ")
 

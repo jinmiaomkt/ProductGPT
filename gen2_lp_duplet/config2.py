@@ -9,12 +9,16 @@
 from __future__ import annotations  # ← add this line
 from pathlib import Path
 
+import paths as _paths
+
 # ─────────────────────────── core config ───────────────────────────
 def _raw_config():
     return {
         # ---------- data ----------
-        "filepath": "/home/ec2-user/data/clean_list_int_wide4_simple6_FeatureBasedTrain.json",
-        "test_filepath": "/home/ec2-user/data/clean_list_int_wide4_simple6.json",
+        # Resolved from PRODUCTGPT_DATA at call time (see paths.py), not
+        # hard-coded, so this same config works on this laptop and on HPCC.
+        "filepath": str(_paths.wide4_simple6_train_feature()),
+        "test_filepath": str(_paths.wide4_simple6_full()),
         "vocab_size_src": 68,
         "vocab_size_tgt": 18,
         "vocab_size_lto": 68,
@@ -57,7 +61,10 @@ def _raw_config():
         "weight": 2,
 
         # ---------- logging / paths ----------
-        "model_folder":   "/home/ec2-user/output",
+        # Checkpoints/results never go in the data dir or OneDrive (see
+        # CLAUDE.md). Defaults to <repo>/checkpoints; override with the
+        # optional PRODUCTGPT_OUTPUT env var (e.g. a scratch disk on HPCC).
+        "model_folder":   str(_paths.output_dir()),
         "model_basename": "MyProductGPT_",
         "preload": None,               # "latest" or explicit checkpoint
         "tokenizer_file": "tokenizer_{0}.json",

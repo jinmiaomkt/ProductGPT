@@ -1,8 +1,12 @@
 from pathlib import Path
 
+import paths as _paths
+
 def get_config():
     return {
-        "filepath": "/home/ubuntu/clean_list_int_wide12.json",
+        # Resolved from PRODUCTGPT_DATA at call time (see paths.py), not
+        # hard-coded, so this same config works on this laptop and on HPCC.
+        "filepath": str(_paths.wide12_full()),
         "vocab_size_src": 122,
         "vocab_size_tgt": 10,
         "vocab_size_lto": 122,

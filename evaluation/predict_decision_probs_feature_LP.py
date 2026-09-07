@@ -10,6 +10,8 @@ FullProductGPT_featurebased_performerfeatures16_dmodel32_ff32_N6_heads4_lr0.0001
 import sys, gzip, json   # json was already there
 import argparse, json, torch, deepspeed
 from pathlib import Path
+
+import paths as _paths
 from torch.utils.data import DataLoader
 from tokenizers import Tokenizer
 from typing import Any, Dict, List, Tuple, Optional
@@ -68,6 +70,10 @@ pad_id   = tok_tgt.token_to_id("[PAD]")
 # ══════════════════════════════ 1. Constants ═══════════════════════════
 PAD_ID = 0
 DECISION_IDS = list(range(1, 10))  # 1‑9
+# 1..8 = Buy1/Buy10 on Regular/FigA/FigB/Weapon; 9 = NotBuy.
+# 9 is an ordinary predicted class (revenue 0), NOT end-of-sequence:
+# sequences terminate by PAD (0). EOS_DEC_ID (11) is declared for the
+# tokenizer but never emitted. See CLAUDE.md for the full table.
 SOS_DEC_ID, EOS_DEC_ID, UNK_DEC_ID = 10, 11, 12
 FIRST_PROD_ID, LAST_PROD_ID = 13, 56
 EOS_PROD_ID, SOS_PROD_ID, UNK_PROD_ID = 57, 58, 59
@@ -82,7 +88,7 @@ SPECIAL_IDS = [
 MAX_TOKEN_ID = UNK_PROD_ID  # 59
 
 # ══════════════════════════════ 2. Data helpers ════════════════════════
-FEAT_FILE = Path("/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx")
+FEAT_FILE = _paths.product_feature_xlsx()  # resolved via PRODUCTGPT_DATA, see paths.py
 FEATURE_COLS: List[str] = [
     # stats
     "Rarity",

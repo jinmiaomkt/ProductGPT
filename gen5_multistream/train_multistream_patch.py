@@ -1,9 +1,22 @@
 """
-Patch guide for train4_mixture2_decoderonly_performer_feature_aws.py.
+SUPERSEDED (Sep 2026) -- kept only for reference.
 
-This file contains replacement functions/blocks for the final multi-stream
-state-space Transformer. It is not meant to be imported as-is; copy the
-blocks into your trainer.
+This was a patch guide: a set of blocks to copy by hand into one of the gen-4
+trainers. That is no longer necessary. gen5_multistream/train5_multistream.py
+is now a real, runnable trainer for this model:
+
+    python gen5_multistream/train5_multistream.py --profile pilot
+
+Differences worth knowing if you read the blocks below:
+  - The real trainer uses plain PyTorch, NOT DeepSpeed, so it runs on Windows
+    as well as on HPCC. The gen-4 trainers this guide targeted are DeepSpeed-only.
+  - dataset_multistream.py no longer needs LTO_ObtainedProducts /
+    LTO_PreviousDecision; it derives those streams from AggregateInput, so it
+    works on the IPT files that dropped them.
+  - projection_gate_mode is not used by MultiStreamStateSpaceTransformer; it is
+    accepted and ignored for backwards compatibility. The blocks below pass it.
+
+Do not copy from this file. Read train5_multistream.py instead.
 """
 
 # ---------------------------------------------------------------------

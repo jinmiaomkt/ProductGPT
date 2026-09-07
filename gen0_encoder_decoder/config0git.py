@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import paths as _paths
+
 def get_config():
     """
     Returns a dictionary of hyperparameters and file paths.
@@ -7,8 +9,10 @@ def get_config():
     """
     return {
         # Data
-        "filepath": "/home/ec2-user/Data/tmp/clean_list_int_wide4_simple4_IndexBasedTrain.json",
-        
+        # Resolved from PRODUCTGPT_DATA at call time (see paths.py), not
+        # hard-coded, so this same config works on this laptop and on HPCC.
+        "filepath": str(_paths.wide4_simple4_train_index()),
+
         # Model / Tokenizer Sizes
         "vocab_size_src": 48,
         "vocab_size_tgt": 12,

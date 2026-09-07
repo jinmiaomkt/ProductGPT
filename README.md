@@ -134,6 +134,14 @@ Scripts import each other by plain module name (`from config4 import get_config`
 That used to work because every file was in one folder. Now you must put the code
 folders on `PYTHONPATH` first — **once per terminal session**, from the repo root:
 
+Pick the one matching your shell. The prompt tells you which you're in:
+`C:\...>` is cmd.exe, `PS C:\...>` is PowerShell.
+
+**Windows / cmd.exe:**
+```
+env.bat
+```
+
 **Windows / PowerShell:**
 ```powershell
 . .\env.ps1
@@ -166,8 +174,47 @@ modules, but only to delete duplicated blocks and import them instead - see sect
 - The working copy path comes from the `PRODUCTGPT_DATA` environment variable.
 - Never write checkpoints, results, or logs into the data folder or OneDrive.
 
-**Known gap:** no script reads `PRODUCTGPT_DATA` yet — 62 files still hard-code
-AWS paths like `/home/ec2-user/data/...`. Centralizing this is the top follow-up item.
+### paths.py — where data paths come from
+
+`paths.py` at the repo root is the single source of truth. It resolves the data
+directory from `PRODUCTGPT_DATA` and nothing else — no path is hard-coded, so the
+same code runs on the Windows laptop and on HPCC with only the variable differing.
+
+```python
+from paths import data_file, product_feature_xlsx, output_dir
+
+train = data_file("clean_list_int_wide4_simple6_FeatureBasedTrain.json")
+feat  = product_feature_xlsx()
+```
+
+Set it once per machine:
+
+```
+setx PRODUCTGPT_DATA "C:\Users\jinmiao\ResearchData\productgpt"     (Windows, then open a NEW terminal)
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data        (HPCC — already in the .pbs)
+```
+
+`PRODUCTGPT_OUTPUT` is optional and controls where checkpoints go; it defaults to
+`<repo>/checkpoints`, which git ignores. The PBS script points it at each job's own
+output directory so concurrent runs don't collide.
+
+**Fail-fast by design:** `get_config()` now resolves and *verifies* its data files,
+so a missing file raises `ProductGPTPathError` naming the exact expected path
+instead of a confusing traceback later. A consequence worth knowing: `config0git`
+and `config12git` raise immediately on this laptop, because their data files were
+never copied to the working copy (`clean_list_int_wide4_simple4_IndexBasedTrain.json`
+is on OneDrive; `clean_list_int_wide12.json` isn't anywhere). That is correct
+behaviour — those generations genuinely can't run here until the files are copied.
+
+**Migrated so far:** the 4 configs that hard-coded `/home/ec2-user`
+(`config4`, `config2`, `config0git`, `config12git`) and the 4 `FEAT_FILE`
+constants in the `train4_*_aws.py` trainers.
+
+**Still hard-coded (known, lower priority):** roughly 20 eval/predict scripts have
+`--feat-xlsx` argparse *defaults* pointing at `/home/ec2-user/data/...`. They still
+work because you pass `--data`/`--labels` explicitly anyway; only the default is
+stale. `config0.py` and `config12.py` keep Colab-era `drive/MyDrive/...` paths —
+a different environment, deliberately left alone.
 
 ---
 

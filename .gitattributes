@@ -5,6 +5,10 @@
 *.pbs  text eol=lf
 env.sh text eol=lf
 
+# Windows batch files are the mirror case: cmd.exe wants CRLF.
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
 # Python is safe either way, but keep it consistent across machines.
 *.py   text eol=lf
 

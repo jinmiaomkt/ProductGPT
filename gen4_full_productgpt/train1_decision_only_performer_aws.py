@@ -7,7 +7,10 @@ from __future__ import annotations
 # • DeepSpeed ZeRO-1 + FusedLAMB   (all DS chatter muted)
 # • Validation metrics on three subsets:
 #     ① main        – non-transition positions
-#     ② STOP        – positions whose *current* token is 9
+#     ② NotBuy      – positions whose *current* decision is 9 (= NotBuy,
+#                     i.e. the user was shown banners and chose not to pull).
+#                     NOTE: 9 is an ordinary decision class, NOT an
+#                     end-of-sequence marker. Sequences end by PAD (0).
 #     ③ transition  – token ≠ previous token
 # • On each val-improvement we save
 #       DecisionOnly_<uid>.pt   →  s3://<bucket>/DecisionOnly/checkpoints/
@@ -279,8 +282,8 @@ def _show(tag: str, metrics: Tuple[float, float, dict, dict, dict, dict]) -> Non
     print(f"{tag}  Loss={loss:.4f}  PPL={ppl:.4f}")
     for name, d in (
         ("all",          m_all),
-        ("cur-STOP",     m_st),
-        ("after-STOP",   m_af),
+        ("cur-NotBuy",     m_st),
+        ("after-NotBuy",   m_af),
         ("transition",   m_tr),
     ):
         print(f"  {name:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
@@ -483,8 +486,8 @@ def train_model(cfg):
         print(f"Valudation Epoch {ep:02d}  ValLoss={v_loss:.4f}  PPL={v_ppl:.4f}")
         for tag, d in (
                 ("all",        v_all),
-                ("cur-STOP",   v_stop),
-                ("after-STOP", v_after),
+                ("cur-NotBuy",   v_stop),
+                ("after-NotBuy", v_after),
                 ("transition", v_tr)):
             print(f"  {tag:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
                 f"AUPRC={d['auprc']:.4f}   RevMAE={d['rev_mae']:.4f} ")
@@ -538,8 +541,8 @@ def train_model(cfg):
         print(f"Valudation Epoch {ep:02d}  ValLoss={v_loss:.4f}  PPL={v_ppl:.4f}")
         for tag, d in (
             ("all",        v_all),
-            ("cur-STOP",   t_stop),
-            ("after-STOP", t_after),
+            ("cur-NotBuy",   t_stop),
+            ("after-NotBuy", t_after),
             ("transition", v_tr)):
             print(f"  {tag:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
                 f"AUPRC={d['auprc']:.4f}   RevMAE={d['rev_mae']:.4f} ")

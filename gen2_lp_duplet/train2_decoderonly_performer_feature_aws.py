@@ -13,6 +13,8 @@ import json
 import logging
 import os
 from pathlib import Path
+
+import paths as _paths
 from typing import Any, Dict, List, Tuple
 import warnings
 import gzip
@@ -72,7 +74,7 @@ SPECIAL_IDS = [
 MAX_TOKEN_ID = UNK_PROD_ID  # 59
 
 # ══════════════════════════════ 2. Data helpers ════════════════════════
-FEAT_FILE = Path("/home/ec2-user/data/SelectedFigureWeaponEmbeddingIndex.xlsx")
+FEAT_FILE = _paths.product_feature_xlsx()  # resolved via PRODUCTGPT_DATA, see paths.py
 FEATURE_COLS: List[str] = [
     # stats
     "Rarity",
@@ -318,8 +320,8 @@ def _show(tag: str, metrics: Tuple[float, float, dict, dict, dict, dict]) -> Non
     print(f"{tag}  Loss={loss:.4f}  PPL={ppl:.4f}")
     for name, d in (
         ("all",          m_all),
-        ("cur-STOP",     m_st),
-        ("after-STOP",   m_af),
+        ("cur-NotBuy",     m_st),
+        ("after-NotBuy",   m_af),
         ("transition",   m_tr),
     ):
         print(f"  {name:<11} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
@@ -545,7 +547,7 @@ def train_model(cfg: Dict[str, Any]):
             )
 
             print(f"Epoch {ep:02d}  ValLoss={v_loss:.4f}  PPL={v_ppl:.4f}")
-            for tag, d in (("all", v_all), ("STOP_cur", v_stop), ("after_STOP", v_after), ("transition", v_tr)):
+            for tag, d in (("all", v_all), ("NotBuy_cur", v_stop), ("after_NotBuy", v_after), ("transition", v_tr)):
                 print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
                       f"AUPRC={d['auprc']:.4f}  RevMAE={d.get('rev_mae', float('nan')):.4f}")
 
@@ -612,7 +614,7 @@ def train_model(cfg: Dict[str, Any]):
         )
 
         print(f"\n** TEST ** Loss={t_loss:.4f}  PPL={t_ppl:.4f}")
-        for tag, d in (("all", t_all), ("STOP_cur", t_stop), ("after_STOP", t_after), ("transition", t_tr)):
+        for tag, d in (("all", t_all), ("NotBuy_cur", t_stop), ("after_NotBuy", t_after), ("transition", t_tr)):
             print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  "
                   f"AUPRC={d['auprc']:.4f}")
 

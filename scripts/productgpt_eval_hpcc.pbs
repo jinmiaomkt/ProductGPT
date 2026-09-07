@@ -17,6 +17,14 @@ export PYTHONUNBUFFERED=1
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export OMP_NUM_THREADS=4
+
+# Where the data lives on this cluster. config4/config2/etc. resolve every
+# data path from this variable via paths.py -- nothing is hard-coded any
+# more, so this export is REQUIRED or get_config() will raise
+# ProductGPTPathError. On the Windows laptop the equivalent is
+# `setx PRODUCTGPT_DATA "C:\Users\jinmiao\ResearchData\productgpt"`.
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+
 # Submit this job FROM THE REPO ROOT so that $PBS_O_WORKDIR is the repo root:
 #     qsub scripts/productgpt_eval_hpcc.pbs
 # env.sh puts every code folder (gen4_full_productgpt/, evaluation/, ...) on
@@ -27,6 +35,12 @@ job_tag="${PBS_JOBID%%.*}"
 log_dir=/storage/home/jinmiao/ProductGPT/logs
 output_dir="/storage/home/jinmiao/ProductGPT/evals/unified_eval_flash_gru_${job_tag}"
 mkdir -p "$log_dir" "$output_dir"
+
+# Checkpoints/results must never be written into the data dir (CLAUDE.md).
+# paths.output_dir() defaults to <repo>/checkpoints; point it at this job's
+# own output dir instead so concurrent runs don't collide. Must come after
+# $output_dir is defined above.
+export PRODUCTGPT_OUTPUT="$output_dir"
 exec >"$log_dir/unified_eval_${job_tag}.log" 2>&1
 
 echo "Start time: $(date --iso-8601=seconds)"
@@ -58,6 +72,15 @@ for required_file in "${required_files[@]}"; do
     exit 2
   fi
 done
+
+# paths.py resolves every data path from PRODUCTGPT_DATA. Fail here with a
+# clear message rather than deep inside get_config().
+if [[ ! -d "${PRODUCTGPT_DATA:-}" ]]; then
+  echo "ERROR: PRODUCTGPT_DATA is unset or not a directory: '${PRODUCTGPT_DATA:-}'" >&2
+  exit 2
+fi
+echo "PRODUCTGPT_DATA:   $PRODUCTGPT_DATA"
+echo "PRODUCTGPT_OUTPUT: $PRODUCTGPT_OUTPUT"
 
 python - <<'PY'
 import torch

@@ -442,8 +442,8 @@ def train_model(cfg):
         v_loss, v_ppl, v_all, v_stop, v_after, v_tr = _eval(
             va, eng, dev, loss_fn, cfg["ai_rate"], pad_id, tok)
         print(f"Epoch {ep:02d}  ValLoss={v_loss:.4f}  PPL={v_ppl:.4f}")
-        for tag, d in (("all", v_all), ("cur-STOP", v_stop),
-                       ("after-STOP", v_after), ("transition", v_tr)):
+        for tag, d in (("all", v_all), ("cur-NotBuy", v_stop),
+                       ("after-NotBuy", v_after), ("transition", v_tr)):
             print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  AUPRC={d['auprc']:.4f}")
 
         if best is None or v_loss < best:
@@ -467,8 +467,8 @@ def train_model(cfg):
     t_loss, t_ppl, t_all, t_st, t_af, t_tr = _eval(
         te, eng, dev, loss_fn, cfg["ai_rate"], pad_id, tok)
     print(f"\n** TEST **  Loss={t_loss:.4f}  PPL={t_ppl:.4f}")
-    for tag, d in (("all", t_all), ("cur-STOP", t_st),
-                   ("after-STOP", t_af), ("transition", t_tr)):
+    for tag, d in (("all", t_all), ("cur-NotBuy", t_st),
+                   ("after-NotBuy", t_af), ("transition", t_tr)):
         print(f"  {tag:<12} Hit={d['hit']:.4f}  F1={d['f1']:.4f}  AUPRC={d['auprc']:.4f}")
 
     # ---- save & upload TEST metrics ------------------------------------
