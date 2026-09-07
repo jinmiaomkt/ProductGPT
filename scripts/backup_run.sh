@@ -89,16 +89,25 @@ echo
 # ---------------------------------------------------------------- copy
 # "copy" not "sync": sync makes the destination mirror the source and can
 # DELETE remote files that are missing locally. copy only ever adds/updates.
-FILTERS=(--include "*.json")
-[[ $WITH_WEIGHTS -eq 1 ]] && FILTERS+=(--include "*.pt")
+#
+# --filter rather than --include/--exclude: rclone warns that mixing the
+# latter two is parsed in an indeterminate order. Filter rules are applied
+# top to bottom, so the trailing "- *" reliably drops anything not matched
+# by an earlier "+" rule.
+FILTERS=(--filter "+ *.json")
+[[ $WITH_WEIGHTS -eq 1 ]] && FILTERS+=(--filter "+ *.pt")
+FILTERS+=(--filter "- *")
 
 rclone copy $DRY_RUN "$RUN_DIR" "$DEST" \
   "${FILTERS[@]}" \
-  --exclude "*" \
   --progress \
   --transfers 4 \
   --checkers 8
 
 echo
-echo "Done. Remote contents:"
-rclone ls "$DEST" || true
+if [[ -n "$DRY_RUN" ]]; then
+  echo "Dry run - nothing was transferred and no remote directory was created."
+else
+  echo "Done. Remote contents:"
+  rclone ls "$DEST"
+fi
