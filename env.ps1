@@ -35,6 +35,9 @@ $codeDirs = @(
 )
 
 $paths = $codeDirs | ForEach-Object { Join-Path $repo $_ }
+
+# The repo root itself, so "import shared.layers" resolves.
+$paths = @($repo) + $paths
 $env:PYTHONPATH = ($paths -join ";") + $(if ($env:PYTHONPATH) { ";" + $env:PYTHONPATH } else { "" })
 
 Write-Host "PYTHONPATH set for ProductGPT ($($codeDirs.Count) folders)."

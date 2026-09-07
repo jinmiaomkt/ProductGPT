@@ -40,6 +40,10 @@ _productgpt_dirs=(
 for _d in "${_productgpt_dirs[@]}"; do
     PYTHONPATH="${_productgpt_root}/${_d}${PYTHONPATH:+:${PYTHONPATH}}"
 done
+
+# The repo root itself, so "import shared.layers" resolves.
+PYTHONPATH="${_productgpt_root}${PYTHONPATH:+:${PYTHONPATH}}"
+
 export PYTHONPATH
 
 echo "PYTHONPATH set for ProductGPT (${#_productgpt_dirs[@]} folders)."

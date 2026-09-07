@@ -57,6 +57,8 @@ gen2_lp_duplet/           config2, dataset2*, model2*, train2*
 gen4_full_productgpt/     config4, dataset4*, model4*, train4*   <-- start here
 gen5_multistream/         multistream model + dataset + patch guide
 
+shared/                   model building blocks used by the generations above
+
 baselines/                GRU / LSTM comparison models and their predictors
 evaluation/               unified_model_eval*, predict_*_and_eval, calibrators, model_specs_*.json
 tuning/                   Ray Tune drivers, hP_tuning*, Phase A/B ranking, sweep helpers
@@ -67,6 +69,55 @@ vendor/transformer_xl/    upstream Transformer-XL reference code (NOT this proje
 legacy/                   older snapshots kept for reference
 checkpoints/              local model weights (NOT tracked by git)
 ```
+
+## 2a. The shared/ package
+
+The basic Transformer blocks were copy-pasted, byte-for-byte, across eight model
+modules. They now live in one place:
+
+```
+shared/vocab.py       token-ID layout (PAD, decisions 1-9, products 13-56, ...)
+shared/features.py    FEATURE_COLS + load_feature_tensor(path)
+shared/layers.py      gelu_approx, LayerNormalization, FeedForwardBlock,
+                      InputEmbeddings, PositionalEncoding, ResidualConnection,
+                      ProjectionLayer
+shared/attention.py   CausalPerformer
+shared/decoder.py     DecoderBlock, Decoder
+shared/embeddings.py  SpecialPlusFeatureLookup
+```
+
+Use them like this:
+
+```python
+from shared.attention import CausalPerformer
+from shared.features import load_feature_tensor
+```
+
+Two things to know:
+
+1. **Numerics are unchanged.** Every class is a verbatim copy of the canonical
+   implementation. Where the mixture models had threaded an extra `gate`
+   argument through Decoder/DecoderBlock/CausalPerformer, the shared version
+   takes `gate=None` by default, which reproduces the non-mixture behaviour
+   exactly. `model4_mixture2_*` keeps its own `ProjectionLayer`, the one
+   component that genuinely differs.
+
+2. **Importing a model file no longer reads the spreadsheet.** The model modules
+   used to run `pd.read_excel("/home/ec2-user/data/...")` at import time, which
+   made them unimportable anywhere but the original EC2 box. Build the table
+   explicitly instead:
+
+   ```python
+   from shared.features import load_feature_tensor
+   feat = load_feature_tensor(path_to_xlsx)
+   model = build_transformer(..., feature_tensor=feat)
+   ```
+
+   The trainers already did exactly this, so nothing changes at runtime.
+
+Still on the old inline copies (left alone on purpose, both have genuinely
+divergent components): `model4_bigbird.py`, `model4_decoderonly_index_performer_original.py`,
+`model4_decoderonly_feature_flash.py`, `model4_mixture_flash.py`, and the `model4_per*` family.
 
 Inside each generation folder the four files always mean the same thing:
 
@@ -103,8 +154,9 @@ python evaluation\unified_model_eval_hpcc.py --config evaluation\model_specs_hpc
 
 If you get `ModuleNotFoundError: No module named 'config4'`, you forgot this step.
 
-No Python file was edited during the reorganization — the import namespace is
-identical to the old flat layout, just relocated.
+The folder move itself edited no Python file: the import namespace is identical to
+the old flat layout, just relocated. The later shared/ extraction did edit six model
+modules, but only to delete duplicated blocks and import them instead - see section 2a.
 
 ---
 
