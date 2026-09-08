@@ -79,7 +79,19 @@ def _base() -> Dict[str, Any]:
         # "user": hold out whole users. Answers a different question ("can we
         #   predict a stranger?") and makes the user embedding useless at
         #   evaluation, since unseen users all fall back to index 0.
-        "split_mode": "temporal",
+        # "both" (default): cross the two, giving three test cells --
+        #   trained_users_future  a customer we trained on, later campaigns
+        #   heldout_users_past    a customer we did not train on, same period
+        #   heldout_users_future  neither: not trained on, later campaigns
+        #   Held-out users share the index-0 unknown-user embedding, so the
+        #   cells measure "no personal parameter" rather than random noise.
+        #   NOTE these are not cold starts: a held-out user's history is still
+        #   visible to the model as input, only their labels were withheld
+        #   from training.
+        "split_mode": "both",
+        # Fraction of users withheld from training entirely, for the two
+        # heldout_* cells. Raise it if those cells look too noisy.
+        "user_holdout_frac": 0.1,
         # train_frac/val_frac apply to split_mode="user" only.
         "train_frac": 0.8,
         "val_frac": 0.1,

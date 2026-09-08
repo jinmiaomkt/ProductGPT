@@ -376,21 +376,39 @@ def build_loaders(cfg: Dict[str, Any],
         n_hold = max(1, int(cfg.get("user_holdout_frac", 0.1) * len(order)))
         held_users, seen_users = order[:n_hold], order[n_hold:]
 
+        # Held-out users must NOT keep a private embedding index. They never
+        # appear in training, so that vector would never receive a gradient
+        # and would still hold its random initialisation at test time --
+        # injecting noise rather than "no information", and unfairly
+        # penalising the embedding in exactly the cells meant to test it.
+        # Point them all at index 0, the reserved unknown-user slot.
+        # user_id is looked up at access time, so mutating the map is enough.
+        held_uids = {base._uid_cache[i] for i in held_users}
+        for u in held_uids:
+            base.uid_to_index[u] = 0
+        print(f"[split] {len(held_uids)} held-out users mapped to the shared "
+              "unknown-user embedding (index 0)")
+
         tr_view = TemporalRoleView(base, "train")
         va_view = TemporalRoleView(base, "val")
         te_view = TemporalRoleView(base, "test")
 
         train_ds = tr_view.subset(seen_users)
         val_ds = va_view.subset(seen_users)
+        # NOTE ON NAMING: these are not cold starts. TemporalRoleView masks
+        # LABELS, not inputs, so a held-out user's full history is still fed
+        # to the model as context -- the model just never trained on that
+        # user's labels. This is the realistic case of applying a model
+        # trained on a sample of customers to the rest of the base.
         tests = {
-            "forecast_seen_users": te_view.subset(seen_users),
-            "coldstart_new_users": tr_view.subset(held_users),
-            "strict_new_and_future": te_view.subset(held_users),
+            "trained_users_future": te_view.subset(seen_users),
+            "heldout_users_past": tr_view.subset(held_users),
+            "heldout_users_future": te_view.subset(held_users),
         }
-        print(f"[split] BOTH — {len(seen_users)} users seen in training, "
-              f"{len(held_users)} held out entirely")
-        print(f"[split]   train (seen x <=27)  {train_ds.scored_events():,} events")
-        print(f"[split]   val   (seen x 28)    {val_ds.scored_events():,} events")
+        print(f"[split] BOTH — {len(seen_users)} users trained on, "
+              f"{len(held_users)} held out of training")
+        print(f"[split]   train (trained x <=27)  {train_ds.scored_events():,} events")
+        print(f"[split]   val   (trained x 28)    {val_ds.scored_events():,} events")
         for k, v in tests.items():
             print(f"[split]   test  {k:<22} {v.scored_events():,} events")
 
