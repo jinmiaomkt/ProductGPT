@@ -182,6 +182,30 @@ def format_per_class(per_class: Dict[str, Dict[str, Any]]) -> str:
 
 
 @torch.no_grad()
+def set_unknown_user_to_mean(model: nn.Module, trained_idx: List[int]) -> bool:
+    """
+    Set the index-0 (unknown customer) embedding to the mean of the rows that
+    training actually updated.
+
+    This is Lu & Kannan (JMR 2025): "For out-of-sample customer predictions,
+    where head weights are unknown, we use the average head weight from the
+    training population omega-bar_h = (1/N) sum_n omega_nh". Averaging learned
+    per-customer parameters gives a real population prior; leaving index 0 at
+    its initialisation would feed the model an untrained vector for exactly
+    the customers the out-of-sample cells are meant to measure.
+
+    Call it before every evaluation, since the mean moves as training goes on.
+    Returns False if the model has no user embedding.
+    """
+    emb = getattr(model, "user_embed", None)
+    if emb is None or not trained_idx:
+        return False
+    idx = torch.tensor(trained_idx, device=emb.weight.device, dtype=torch.long)
+    emb.weight[0] = emb.weight.index_select(0, idx).mean(dim=0)
+    return True
+
+
+@torch.no_grad()
 def evaluate(model: nn.Module, loader: DataLoader, device: torch.device,
              adtype: Optional[torch.dtype]) -> Dict[str, float]:
     model.eval()
@@ -370,47 +394,55 @@ def build_loaders(cfg: Dict[str, Any],
         # Partition users. The held-out users are absent from training
         # entirely, so their embedding index is never learned -- which is the
         # point of the cold-start cells.
+        # Design follows Lu & Kannan (JMR 2025), Table 4: customers are split
+        # in two, periods are split in two, and the four cells are reported
+        # separately. Validation comes from held-out CUSTOMERS inside the
+        # calibration period -- not from a slice of time -- so the entire
+        # holdout period stays untouched by model selection.
+        flag = cfg.get("holdout_flag", "feature")
         rng_u = random.Random(cfg["seed"])
         order = list(range(len(base)))
         rng_u.shuffle(order)
-        n_hold = max(1, int(cfg.get("user_holdout_frac", 0.1) * len(order)))
-        held_users, seen_users = order[:n_hold], order[n_hold:]
 
-        # Held-out users must NOT keep a private embedding index. They never
-        # appear in training, so that vector would never receive a gradient
-        # and would still hold its random initialisation at test time --
-        # injecting noise rather than "no information", and unfairly
-        # penalising the embedding in exactly the cells meant to test it.
-        # Point them all at index 0, the reserved unknown-user slot.
-        # user_id is looked up at access time, so mutating the map is enough.
-        held_uids = {base._uid_cache[i] for i in held_users}
-        for u in held_uids:
+        n_out = max(1, int(cfg.get("user_holdout_frac", 0.5) * len(order)))
+        out_users, in_users = order[:n_out], order[n_out:]
+        n_val = max(1, int(cfg.get("val_user_frac", 0.1) * len(in_users)))
+        val_users, train_users = in_users[:n_val], in_users[n_val:]
+
+        # Only train_users ever update an embedding row. Everyone else shares
+        # index 0, which is set to the MEAN of the trained rows before each
+        # evaluation -- Lu & Kannan's omega-bar, "the average head weight from
+        # the training population". A learned average is a real prior; an
+        # untrained row is noise.
+        unknown = {base._uid_cache[i] for i in val_users + out_users}
+        for u in unknown:
             base.uid_to_index[u] = 0
-        print(f"[split] {len(held_uids)} held-out users mapped to the shared "
-              "unknown-user embedding (index 0)")
+        trained_idx = sorted({base.uid_to_index[base._uid_cache[i]]
+                              for i in train_users} - {0})
 
-        tr_view = TemporalRoleView(base, "train")
-        va_view = TemporalRoleView(base, "val")
-        te_view = TemporalRoleView(base, "test")
+        cal = TemporalRoleView(base, "calibration", holdout_flag=flag)
+        hol = TemporalRoleView(base, "holdout", holdout_flag=flag)
+        boundary = 28 if flag == "feature" else 29
 
-        train_ds = tr_view.subset(seen_users)
-        val_ds = va_view.subset(seen_users)
-        # NOTE ON NAMING: these are not cold starts. TemporalRoleView masks
-        # LABELS, not inputs, so a held-out user's full history is still fed
-        # to the model as context -- the model just never trained on that
-        # user's labels. This is the realistic case of applying a model
-        # trained on a sample of customers to the rest of the base.
+        train_ds = cal.subset(train_users)
+        val_ds = cal.subset(val_users)
+        # NOT cold starts: labels are masked, inputs are not, so an
+        # out-of-sample customer's history is still visible to the model.
         tests = {
-            "trained_users_future": te_view.subset(seen_users),
-            "heldout_users_past": tr_view.subset(held_users),
-            "heldout_users_future": te_view.subset(held_users),
+            "insample_users_holdout_period": hol.subset(train_users),
+            "outsample_users_calib_period": cal.subset(out_users),
+            "outsample_users_holdout_period": hol.subset(out_users),
         }
-        print(f"[split] BOTH — {len(seen_users)} users trained on, "
-              f"{len(held_users)} held out of training")
-        print(f"[split]   train (trained x <=27)  {train_ds.scored_events():,} events")
-        print(f"[split]   val   (trained x 28)    {val_ds.scored_events():,} events")
+        print(f"[split] BOTH (Lu & Kannan design), holdout_flag={flag}: "
+              f"calibration = campaigns < {boundary}, holdout = >= {boundary}")
+        print(f"[split]   {len(train_users)} train / {len(val_users)} val / "
+              f"{len(out_users)} out-of-sample customers")
+        print(f"[split]   {len(unknown)} customers share the unknown-user "
+              f"embedding (index 0 = mean of {len(trained_idx)} trained rows)")
+        print(f"[split]   train {train_ds.scored_events():,} events | "
+              f"val {val_ds.scored_events():,} events")
         for k, v in tests.items():
-            print(f"[split]   test  {k:<22} {v.scored_events():,} events")
+            print(f"[split]   test  {k:<31} {v.scored_events():,} events")
 
         def mk_b(ds, shuffle):
             return DataLoader(ds, batch_size=cfg["batch_size"], shuffle=shuffle,
@@ -418,6 +450,7 @@ def build_loaders(cfg: Dict[str, Any],
                               num_workers=cfg.get("num_workers", 0),
                               pin_memory=torch.cuda.is_available())
 
+        cfg["_trained_user_indices"] = trained_idx
         return (mk_b(train_ds, True), mk_b(val_ds, False),
                 {k: mk_b(v, False) for k, v in tests.items()}, base.num_users)
 
@@ -709,6 +742,9 @@ def main() -> None:
                       flush=True)
 
         tr_loss = running / max(1, nb)
+        # Validation customers are out-of-sample by design, so they use the
+        # population-mean embedding. Refresh it as the trained rows move.
+        set_unknown_user_to_mean(model, cfg.get("_trained_user_indices", []))
         v = evaluate(model, val_dl, device, adtype)
         dt = time.time() - t0
         print(f"[ep {ep:02d}] train_loss={tr_loss:.4f}  val_nll={v['nll']:.4f}  "
@@ -763,6 +799,10 @@ def main() -> None:
         print(f"[test] loaded best epoch {state['epoch']}")
     # split_mode="both" gives several test cells; the others give one loader.
     cells = test_dl if isinstance(test_dl, dict) else {"test": test_dl}
+    if set_unknown_user_to_mean(model, cfg.get("_trained_user_indices", [])):
+        print(f"[eval] unknown-customer embedding set to the mean of "
+              f"{len(cfg['_trained_user_indices']):,} trained rows "
+              "(Lu & Kannan omega-bar)")
     results: Dict[str, Any] = {}
     for name, dl in cells.items():
         m = evaluate(model, dl, device, adtype)

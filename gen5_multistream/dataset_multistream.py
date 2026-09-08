@@ -434,11 +434,25 @@ class TemporalRoleView(Dataset):
     cached dataset also avoids holding three copies of ~600 MB of tensors.
     """
 
-    ROLES = ("train", "val", "test")
+    # Three-way roles use both flags. The two-way roles follow Lu & Kannan
+    # (JMR 2025), who split periods once into a calibration block and a
+    # holdout block and take validation from held-out CUSTOMERS inside
+    # calibration rather than from a slice of time.
+    ROLES = ("train", "val", "test", "calibration", "holdout")
 
-    def __init__(self, base: TransformerDataset, role: str):
+    def __init__(self, base: TransformerDataset, role: str,
+                 holdout_flag: str = "feature"):
         if role not in self.ROLES:
             raise ValueError(f"role must be one of {self.ROLES}, got {role!r}")
+        if holdout_flag not in ("feature", "index"):
+            raise ValueError("holdout_flag must be 'feature' or 'index'")
+        # Which boundary the two-way roles use. The R generator defines a
+        # different one per model family:
+        #   FeatureBasedHoldout = CampaignID >= 28   (feature models)
+        #   IndexBasedHoldout   = CampaignID >= 29   (index models)
+        # Gen 5 consumes the product feature table, so "feature" is correct
+        # for it and campaign 28 belongs to the holdout, not to validation.
+        self.holdout_flag = holdout_flag
         if not base.has_holdout:
             raise ValueError(
                 "This data file has no FeatureBasedHoldout / IndexBasedHoldout "
@@ -459,17 +473,23 @@ class TemporalRoleView(Dataset):
         hf = item.pop("holdout_feature")
         hi = item.pop("holdout_index")
 
-        if self.role == "train":
-            keep = hf == 0
-        elif self.role == "val":
-            keep = (hf == 1) & (hi == 0)
-        else:
-            keep = hi == 1
+        keep = self._keep_mask(hf, hi)
 
         lab = item["label"].clone()
         lab[~keep] = self.base.pad_id
         item["label"] = lab
         return item
+
+    def _keep_mask(self, hf: torch.Tensor, hi: torch.Tensor) -> torch.Tensor:
+        """Which events this role scores."""
+        if self.role == "train":
+            return hf == 0
+        if self.role == "val":
+            return (hf == 1) & (hi == 0)
+        if self.role == "test":
+            return hi == 1
+        flag = hf if self.holdout_flag == "feature" else hi
+        return flag == 0 if self.role == "calibration" else flag == 1
 
     def subset(self, indices: List[int]) -> "IndexSubset":
         """Restrict this temporal role to a subset of users."""
@@ -482,12 +502,7 @@ class TemporalRoleView(Dataset):
             it = self.base[i]
             hf, hi = it["holdout_feature"], it["holdout_index"]
             lab = it["label"]
-            if self.role == "train":
-                keep = hf == 0
-            elif self.role == "val":
-                keep = (hf == 1) & (hi == 0)
-            else:
-                keep = hi == 1
+            keep = self._keep_mask(hf, hi)
             n += int((keep & (lab >= 1) & (lab <= 9)).sum())
         return n
 

@@ -89,9 +89,20 @@ def _base() -> Dict[str, Any]:
         #   visible to the model as input, only their labels were withheld
         #   from training.
         "split_mode": "both",
-        # Fraction of users withheld from training entirely, for the two
-        # heldout_* cells. Raise it if those cells look too noisy.
-        "user_holdout_frac": 0.1,
+        # Which campaign boundary separates calibration from holdout. The R
+        # generator defines one per model family:
+        #   "feature" -> FeatureBasedHoldout, campaigns >= 28
+        #   "index"   -> IndexBasedHoldout,   campaigns >= 29
+        # Gen 5 uses the product feature table, so "feature" is the matching
+        # choice and campaign 28 belongs to the holdout period.
+        "holdout_flag": "feature",
+        # Out-of-sample customers, withheld from training entirely.
+        # Lu & Kannan (JMR 2025) hold out 50%.
+        "user_holdout_frac": 0.5,
+        # Validation customers, taken from WITHIN the in-sample half and
+        # scored on the calibration period only. Model selection therefore
+        # never touches the holdout period.
+        "val_user_frac": 0.1,
         # train_frac/val_frac apply to split_mode="user" only.
         "train_frac": 0.8,
         "val_frac": 0.1,
