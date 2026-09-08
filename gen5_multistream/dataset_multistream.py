@@ -165,6 +165,7 @@ class TransformerDataset(Dataset):
         max_events: Optional[int] = None,
         uid_to_index: Optional[Dict[str, int]] = None,
         shift_obtained: bool = True,
+        truncate: str = "head",
         **kwargs,
     ):
         """
@@ -215,6 +216,14 @@ class TransformerDataset(Dataset):
         self.pad_id = int(pad_token)
         self.max_events = int(max_events) if max_events else None
         self.shift_obtained = bool(shift_obtained)
+        if truncate not in ("head", "tail"):
+            raise ValueError(f"truncate must be 'head' or 'tail', got {truncate!r}")
+        # "head" keeps a user's FIRST max_events, "tail" their LAST.
+        # Under a temporal split, head truncation deletes exactly the late
+        # campaigns that form validation and test -- measured on 200 users at
+        # max_events=256 it left train with 49,195 scored events against 948
+        # for val and 488 for test. Temporal runs must use "tail".
+        self.truncate = truncate
 
         self.augment_permute_obtained = bool(augment_permute_obtained)
         self.base_seed = int(base_seed)
@@ -245,9 +254,12 @@ class TransformerDataset(Dataset):
         self._label: List[torch.Tensor] = []
         self._ipt: List[Optional[torch.Tensor]] = []
         self._ins: List[Optional[torch.Tensor]] = []
+        self._hf: List[Optional[torch.Tensor]] = []   # FeatureBasedHoldout
+        self._hi: List[Optional[torch.Tensor]] = []   # IndexBasedHoldout
 
         self.has_ipt = False
         self.has_is_inserted = False
+        self.has_holdout = False
 
         for rec in self.data:
             uid = self._uid(rec)
@@ -255,18 +267,26 @@ class TransformerDataset(Dataset):
             ai = parse_token_ids(rec["AggregateInput"])
             dec = parse_token_ids(rec.get("Decision", []))
 
-            S = len(ai) // self.ai_rate
+            n_full = len(ai) // self.ai_rate
+            if dec:
+                n_full = min(n_full, len(dec))
+            S = n_full
             if self.max_events is not None:
                 S = min(S, self.max_events)
-            S = min(S, len(dec)) if dec else S
             if S <= 0:
                 # keep the record but make it entirely padding, so indices stay aligned
-                S = 1
+                S = n_full = 1
                 ai = [self.pad_id] * self.ai_rate
                 dec = [self.pad_id]
 
+            # Which S of the user's n_full events to keep. "tail" is required
+            # for a temporal split, where the held-out campaigns are at the end.
+            start = n_full - S if self.truncate == "tail" else 0
+            self._event_offset = start          # used by the holdout slices below
+
             blocks = torch.tensor(
-                ai[: S * self.ai_rate], dtype=torch.long
+                ai[start * self.ai_rate: (start + S) * self.ai_rate],
+                dtype=torch.long,
             ).view(S, self.ai_rate)
 
             a = self.lto_len
@@ -287,11 +307,11 @@ class TransformerDataset(Dataset):
             self._lto.append(blocks[:, :a].contiguous())
             self._obt.append(obtained)
             self._prev.append(blocks[:, b].contiguous())
-            self._label.append(torch.tensor(dec[:S], dtype=torch.long))
+            self._label.append(torch.tensor(dec[start:start + S], dtype=torch.long))
             self._uid_cache.append(uid)
 
             if "IPT" in rec:
-                v = parse_floats(rec["IPT"])[:S]
+                v = parse_floats(rec["IPT"])[start:start + S]
                 v = v + [0.0] * (S - len(v))
                 self._ipt.append(torch.tensor(v, dtype=torch.float32))
                 self.has_ipt = True
@@ -299,12 +319,29 @@ class TransformerDataset(Dataset):
                 self._ipt.append(None)
 
             if "IsInserted" in rec:
-                v = parse_token_ids(rec["IsInserted"])[:S]
+                v = parse_token_ids(rec["IsInserted"])[start:start + S]
                 v = v + [0] * (S - len(v))
                 self._ins.append(torch.tensor(v, dtype=torch.long))
                 self.has_is_inserted = True
             else:
                 self._ins.append(None)
+
+            # Per-event temporal holdout flags, written by the R generator as
+            #   FeatureBasedHoldout = CampaignID >= 28
+            #   IndexBasedHoldout   = CampaignID >= 29
+            # Together they define a three-way TEMPORAL split, which is the
+            # holdout the dataset was actually designed for.
+            if "FeatureBasedHoldout" in rec and "IndexBasedHoldout" in rec:
+                hf = parse_token_ids(rec["FeatureBasedHoldout"])[start:start + S]
+                hi = parse_token_ids(rec["IndexBasedHoldout"])[start:start + S]
+                hf = hf + [0] * (S - len(hf))
+                hi = hi + [0] * (S - len(hi))
+                self._hf.append(torch.tensor(hf, dtype=torch.long))
+                self._hi.append(torch.tensor(hi, dtype=torch.long))
+                self.has_holdout = True
+            else:
+                self._hf.append(None)
+                self._hi.append(None)
 
     # ---------------------------------------------------------------- utils
     @staticmethod
@@ -367,7 +404,88 @@ class TransformerDataset(Dataset):
             item["ipt"] = self._ipt[idx]
         if self._ins[idx] is not None:
             item["is_inserted"] = self._ins[idx]
+        if self._hf[idx] is not None:
+            item["holdout_feature"] = self._hf[idx]
+            item["holdout_index"] = self._hi[idx]
         return item
+
+
+class TemporalRoleView(Dataset):
+    """
+    A temporal-split view over one TransformerDataset.
+
+    The R generator marks each EVENT, not each user:
+        FeatureBasedHoldout = CampaignID >= 28
+        IndexBasedHoldout   = CampaignID >= 29
+    which gives a three-way split in time:
+        train : FeatureBasedHoldout == 0                    (campaigns <= 27)
+        val   : FeatureBasedHoldout == 1 and Index... == 0  (campaign 28)
+        test  : IndexBasedHoldout == 1                      (campaigns >= 29)
+
+    Every user appears in every role, at different points in their own
+    history. That is the intended design: predict a user's FUTURE behaviour,
+    not a stranger's. It also means the per-user embedding is meaningful
+    here, unlike under a user-disjoint split.
+
+    Implemented by masking labels to PAD outside the role rather than by
+    slicing sequences. The model still sees the full history leading up to
+    each scored event, which is what makes it a forecast rather than a
+    truncation, and the loss and metrics already ignore PAD. Wrapping one
+    cached dataset also avoids holding three copies of ~600 MB of tensors.
+    """
+
+    ROLES = ("train", "val", "test")
+
+    def __init__(self, base: TransformerDataset, role: str):
+        if role not in self.ROLES:
+            raise ValueError(f"role must be one of {self.ROLES}, got {role!r}")
+        if not base.has_holdout:
+            raise ValueError(
+                "This data file has no FeatureBasedHoldout / IndexBasedHoldout "
+                "fields, so a temporal split is not possible. Use the "
+                "user-disjoint split instead."
+            )
+        self.base = base
+        self.role = role
+
+    def __len__(self) -> int:
+        return len(self.base)
+
+    def set_epoch(self, epoch: int) -> None:
+        self.base.set_epoch(epoch)
+
+    def __getitem__(self, idx: int, sample_index: Optional[int] = None):
+        item = dict(self.base.__getitem__(idx, sample_index=sample_index))
+        hf = item.pop("holdout_feature")
+        hi = item.pop("holdout_index")
+
+        if self.role == "train":
+            keep = hf == 0
+        elif self.role == "val":
+            keep = (hf == 1) & (hi == 0)
+        else:
+            keep = hi == 1
+
+        lab = item["label"].clone()
+        lab[~keep] = self.base.pad_id
+        item["label"] = lab
+        return item
+
+    def scored_events(self) -> int:
+        """How many events this role actually scores (for a sanity check)."""
+        n = 0
+        for i in range(len(self.base)):
+            it = self.base[i]
+            hf, hi = it["holdout_feature"], it["holdout_index"]
+            lab = it["label"]
+            if self.role == "train":
+                keep = hf == 0
+            elif self.role == "val":
+                keep = (hf == 1) & (hi == 0)
+            else:
+                keep = hi == 1
+            n += int((keep & (lab >= 1) & (lab <= 9)).sum())
+        return n
 
 
 # ─────────────────────────────── collate ───────────────────────────────

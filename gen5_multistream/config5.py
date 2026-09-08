@@ -71,6 +71,16 @@ def _base() -> Dict[str, Any]:
         "seed": 33,
 
         # ---------- splits ----------
+        # "temporal": hold out later campaigns for every user, using the
+        #   FeatureBasedHoldout / IndexBasedHoldout flags the R generator
+        #   writes (train <= 27, val = 28, test >= 29). This is the holdout
+        #   the dataset was designed for, and it is what makes the per-user
+        #   embedding meaningful -- every user is seen during training.
+        # "user": hold out whole users. Answers a different question ("can we
+        #   predict a stranger?") and makes the user embedding useless at
+        #   evaluation, since unseen users all fall back to index 0.
+        "split_mode": "temporal",
+        # train_frac/val_frac apply to split_mode="user" only.
         "train_frac": 0.8,
         "val_frac": 0.1,
 

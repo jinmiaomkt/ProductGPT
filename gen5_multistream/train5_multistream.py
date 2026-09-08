@@ -35,6 +35,7 @@ from torch.utils.data import DataLoader, Subset
 
 import config5
 from dataset_multistream import (
+    TemporalRoleView,
     TransformerDataset,
     collate_multistream,
     load_json_dataset,
@@ -350,6 +351,43 @@ def build_loaders(cfg: Dict[str, Any],
     def subset(ii: List[int]) -> List[Dict[str, Any]]:
         return [raw[i] for i in ii]
 
+    # ---- temporal split: every user in every role, split by campaign ------
+    if cfg.get("split_mode", "user") == "temporal":
+        shift_t = bool(cfg.get("shift_obtained", True))
+        common_t = dict(
+            ai_rate=cfg["ai_rate"], lto_len=cfg["lto_len"],
+            obtained_len=cfg["obtained_len"], prev_dec_len=cfg["prev_dec_len"],
+            max_events=cfg["max_events"], base_seed=cfg["seed"],
+            shift_obtained=shift_t,
+            # Keep each user's LAST max_events. Head truncation would delete
+            # the late campaigns that define val and test.
+            truncate="tail",
+        )
+        keep = raw if not cfg.get("max_users") else [raw[i] for i in idx]
+        base = TransformerDataset(
+            keep, augment_permute_obtained=cfg["augment_permute_obtained"],
+            **common_t)
+        if not base.has_holdout:
+            raise SystemExit(
+                "split_mode=temporal needs FeatureBasedHoldout and "
+                "IndexBasedHoldout in the data file; this one has neither.")
+        views = {r: TemporalRoleView(base, r) for r in ("train", "val", "test")}
+        print(f"[split] TEMPORAL — all {len(base)} users appear in every role; "
+              "split is by campaign")
+        print("[split] train: campaigns <= 27 | val: campaign 28 | "
+              "test: campaigns >= 29")
+        for r, v in views.items():
+            print(f"[split]   {r:<5} scores {v.scored_events():,} events")
+
+        def mk_t(ds, shuffle):
+            return DataLoader(ds, batch_size=cfg["batch_size"], shuffle=shuffle,
+                              collate_fn=collate_multistream,
+                              num_workers=cfg.get("num_workers", 0),
+                              pin_memory=torch.cuda.is_available())
+
+        return (mk_t(views["train"], True), mk_t(views["val"], False),
+                mk_t(views["test"], False), base.num_users)
+
     shift = bool(cfg.get("shift_obtained", True))
     if not shift:
         print("[data] WARNING: shift_obtained=False -- the obtained stream "
@@ -415,6 +453,14 @@ def main() -> None:
                          "sequence.")
     ap.add_argument("--dropout", type=float, default=None)
     ap.add_argument("--patience", type=int, default=None)
+    ap.add_argument("--split-mode", choices=["user", "temporal"], default=None,
+                    help="user: hold out whole users (disjoint by uid). "
+                         "temporal: hold out later campaigns for every user, "
+                         "using the FeatureBasedHoldout / IndexBasedHoldout "
+                         "flags the R generator writes. Temporal is what the "
+                         "dataset was designed for and answers 'can we "
+                         "predict this user's future?' rather than 'can we "
+                         "predict a stranger?'")
     ap.add_argument("--no-shift-obtained", action="store_true",
                     help="Reproduce the pre-fix behaviour where the obtained "
                          "stream carries o_t. This LEAKS the label: an "
@@ -446,6 +492,8 @@ def main() -> None:
 
     if args.no_shift_obtained:
         cfg["shift_obtained"] = False
+    if args.split_mode is not None:
+        cfg["split_mode"] = args.split_mode
     if args.no_user_embedding:
         cfg["use_user_embedding"] = False
     if args.augment:
@@ -454,7 +502,8 @@ def main() -> None:
         cfg["dropout"] = args.dropout
     if args.patience is not None:
         cfg["patience"] = args.patience
-    print(f"[cfg] user_embedding={cfg['use_user_embedding']} "
+    print(f"[cfg] split_mode={cfg.get('split_mode', 'user')} "
+          f"user_embedding={cfg['use_user_embedding']} "
           f"augment={cfg['augment_permute_obtained']} "
           f"dropout={cfg['dropout']} patience={cfg['patience']} "
           f"shift_obtained={cfg['shift_obtained']}")
