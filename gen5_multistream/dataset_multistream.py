@@ -471,6 +471,10 @@ class TemporalRoleView(Dataset):
         item["label"] = lab
         return item
 
+    def subset(self, indices: List[int]) -> "IndexSubset":
+        """Restrict this temporal role to a subset of users."""
+        return IndexSubset(self, indices)
+
     def scored_events(self) -> int:
         """How many events this role actually scores (for a sanity check)."""
         n = 0
@@ -485,6 +489,50 @@ class TemporalRoleView(Dataset):
             else:
                 keep = hi == 1
             n += int((keep & (lab >= 1) & (lab <= 9)).sum())
+        return n
+
+
+class IndexSubset(Dataset):
+    """
+    torch's Subset, but forwarding set_epoch and the sample_index kwarg that
+    RepeatWithPermutation-style augmentation relies on.
+
+    Used to cross a temporal role with a set of users, giving the 2x2:
+
+                        users seen in training | users never seen
+        campaigns <= 27   TRAIN                | cold-start test
+        campaigns >= 29   forecasting test     | strict test
+
+    Each cell isolates a different kind of generalisation. The forecasting
+    cell asks whether we can predict a KNOWN customer's future; the
+    cold-start cell whether we can predict a stranger during a period we
+    trained on; the strict cell both at once, which is the hardest and the
+    closest to deploying on a newly acquired customer.
+    """
+
+    def __init__(self, base: Dataset, indices: List[int]):
+        self.base = base
+        self.indices = list(indices)
+
+    def __len__(self) -> int:
+        return len(self.indices)
+
+    def set_epoch(self, epoch: int) -> None:
+        if hasattr(self.base, "set_epoch"):
+            self.base.set_epoch(epoch)
+
+    def __getitem__(self, i: int, sample_index: Optional[int] = None):
+        j = self.indices[i]
+        try:
+            return self.base.__getitem__(j, sample_index=sample_index)
+        except TypeError:
+            return self.base[j]
+
+    def scored_events(self) -> int:
+        n = 0
+        for i in range(len(self)):
+            lab = self[i]["label"]
+            n += int(((lab >= 1) & (lab <= 9)).sum())
         return n
 
 

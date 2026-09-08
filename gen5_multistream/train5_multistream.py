@@ -351,6 +351,58 @@ def build_loaders(cfg: Dict[str, Any],
     def subset(ii: List[int]) -> List[Dict[str, Any]]:
         return [raw[i] for i in ii]
 
+    # ---- both: cross a user holdout with the temporal one -----------------
+    if cfg.get("split_mode", "user") == "both":
+        shift_b = bool(cfg.get("shift_obtained", True))
+        common_b = dict(
+            ai_rate=cfg["ai_rate"], lto_len=cfg["lto_len"],
+            obtained_len=cfg["obtained_len"], prev_dec_len=cfg["prev_dec_len"],
+            max_events=cfg["max_events"], base_seed=cfg["seed"],
+            shift_obtained=shift_b, truncate="tail",
+        )
+        keep = raw if not cfg.get("max_users") else [raw[i] for i in idx]
+        base = TransformerDataset(
+            keep, augment_permute_obtained=cfg["augment_permute_obtained"],
+            **common_b)
+        if not base.has_holdout:
+            raise SystemExit("split_mode=both needs the holdout flags in the data.")
+
+        # Partition users. The held-out users are absent from training
+        # entirely, so their embedding index is never learned -- which is the
+        # point of the cold-start cells.
+        rng_u = random.Random(cfg["seed"])
+        order = list(range(len(base)))
+        rng_u.shuffle(order)
+        n_hold = max(1, int(cfg.get("user_holdout_frac", 0.1) * len(order)))
+        held_users, seen_users = order[:n_hold], order[n_hold:]
+
+        tr_view = TemporalRoleView(base, "train")
+        va_view = TemporalRoleView(base, "val")
+        te_view = TemporalRoleView(base, "test")
+
+        train_ds = tr_view.subset(seen_users)
+        val_ds = va_view.subset(seen_users)
+        tests = {
+            "forecast_seen_users": te_view.subset(seen_users),
+            "coldstart_new_users": tr_view.subset(held_users),
+            "strict_new_and_future": te_view.subset(held_users),
+        }
+        print(f"[split] BOTH — {len(seen_users)} users seen in training, "
+              f"{len(held_users)} held out entirely")
+        print(f"[split]   train (seen x <=27)  {train_ds.scored_events():,} events")
+        print(f"[split]   val   (seen x 28)    {val_ds.scored_events():,} events")
+        for k, v in tests.items():
+            print(f"[split]   test  {k:<22} {v.scored_events():,} events")
+
+        def mk_b(ds, shuffle):
+            return DataLoader(ds, batch_size=cfg["batch_size"], shuffle=shuffle,
+                              collate_fn=collate_multistream,
+                              num_workers=cfg.get("num_workers", 0),
+                              pin_memory=torch.cuda.is_available())
+
+        return (mk_b(train_ds, True), mk_b(val_ds, False),
+                {k: mk_b(v, False) for k, v in tests.items()}, base.num_users)
+
     # ---- temporal split: every user in every role, split by campaign ------
     if cfg.get("split_mode", "user") == "temporal":
         shift_t = bool(cfg.get("shift_obtained", True))
@@ -453,7 +505,7 @@ def main() -> None:
                          "sequence.")
     ap.add_argument("--dropout", type=float, default=None)
     ap.add_argument("--patience", type=int, default=None)
-    ap.add_argument("--split-mode", choices=["user", "temporal"], default=None,
+    ap.add_argument("--split-mode", choices=["user", "temporal", "both"], default=None,
                     help="user: hold out whole users (disjoint by uid). "
                          "temporal: hold out later campaigns for every user, "
                          "using the FeatureBasedHoldout / IndexBasedHoldout "
@@ -691,15 +743,31 @@ def main() -> None:
         state = torch.load(ckpt_path, map_location=device, weights_only=False)
         model.load_state_dict(state["model_state_dict"])
         print(f"[test] loaded best epoch {state['epoch']}")
-    t = evaluate(model, test_dl, device, adtype)
-    if "per_class" in t:
-        print("\n** TEST: per-class breakdown **")
-        print(format_per_class(t["per_class"]))
-    print(f"\n** TEST ** nll={t['nll']:.4f} hit={t['hit']:.4f} f1={t['f1_macro']:.4f} "
-          f"auprc={t['auprc_macro']:.4f} revMAE={t['rev_mae']:.3f} n={int(t['n'])}")
+    # split_mode="both" gives several test cells; the others give one loader.
+    cells = test_dl if isinstance(test_dl, dict) else {"test": test_dl}
+    results: Dict[str, Any] = {}
+    for name, dl in cells.items():
+        m = evaluate(model, dl, device, adtype)
+        results[name] = m
+        if "per_class" in m:
+            print(f"\n** {name}: per-class breakdown **")
+            print(format_per_class(m["per_class"]))
+        print(f"\n** {name} ** nll={m['nll']:.4f} hit={m['hit']:.4f} "
+              f"f1={m['f1_macro']:.4f} auprc={m['auprc_macro']:.4f} "
+              f"revMAE={m['rev_mae']:.3f} n={int(m['n'])}")
 
+    if len(results) > 1:
+        print("\n** TEST CELLS **")
+        print(f"  {'cell':<24}{'n':>10}{'nll':>9}{'hit':>8}{'F1':>8}{'AUPRC':>8}")
+        print("  " + "-" * 65)
+        for name, m in results.items():
+            print(f"  {name:<24}{int(m['n']):>10,}{m['nll']:>9.4f}"
+                  f"{m['hit']:>8.4f}{m['f1_macro']:>8.4f}{m['auprc_macro']:>8.4f}")
+
+    t = results.get("test") or next(iter(results.values()))
     (out_dir / "final.json").write_text(json.dumps(
-        {"best_val_nll": best_nll, "best_epoch": best_epoch, "test": t,
+        {"best_val_nll": best_nll, "best_epoch": best_epoch,
+         "test": t, "test_cells": results,
          "cfg": cfg, "params": n_par,
          "stopped_for_time_budget": stopped_early_for_time,
          "epochs_completed": len(history)}, indent=2))
