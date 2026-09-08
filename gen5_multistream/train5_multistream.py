@@ -350,10 +350,16 @@ def build_loaders(cfg: Dict[str, Any],
     def subset(ii: List[int]) -> List[Dict[str, Any]]:
         return [raw[i] for i in ii]
 
+    shift = bool(cfg.get("shift_obtained", True))
+    if not shift:
+        print("[data] WARNING: shift_obtained=False -- the obtained stream "
+              "carries o_t, which determines y_t==9 exactly. NotBuy metrics "
+              "from this run are leakage, not prediction.")
     common = dict(
         ai_rate=cfg["ai_rate"], lto_len=cfg["lto_len"],
         obtained_len=cfg["obtained_len"], prev_dec_len=cfg["prev_dec_len"],
         max_events=cfg["max_events"], base_seed=cfg["seed"],
+        shift_obtained=shift,
     )
     train_ds = TransformerDataset(
         subset(tr_i), augment_permute_obtained=cfg["augment_permute_obtained"], **common)
@@ -395,6 +401,11 @@ def main() -> None:
                     help="Stop cleanly after this many minutes and save "
                          "last.pt, so the run ends before PBS kills it. "
                          "Set it a little under the job's walltime.")
+    ap.add_argument("--no-shift-obtained", action="store_true",
+                    help="Reproduce the pre-fix behaviour where the obtained "
+                         "stream carries o_t. This LEAKS the label: an "
+                         "all-zero block determines y_t==9 exactly. For "
+                         "before/after comparison only.")
     ap.add_argument("--uids-dir", default=None,
                     help="Directory holding uids_train/val/test.txt from "
                          "scripts/export_gen5_split.py. Use this for any run "
@@ -419,6 +430,8 @@ def main() -> None:
         print(f"[env] gpu={torch.cuda.get_device_name(0)} "
               f"total={human(torch.cuda.get_device_properties(0).total_memory)}")
 
+    if args.no_shift_obtained:
+        cfg["shift_obtained"] = False
     uids_dir = Path(args.uids_dir) if args.uids_dir else None
     cfg["uids_dir"] = str(uids_dir) if uids_dir else None
     train_dl, val_dl, test_dl, num_users = build_loaders(cfg, uids_dir=uids_dir)

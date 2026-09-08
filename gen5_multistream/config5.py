@@ -74,6 +74,13 @@ def _base() -> Dict[str, Any]:
         "train_frac": 0.8,
         "val_frac": 0.1,
 
+        # ---------- correctness ----------
+        # Roll the obtained stream so event t sees o_{t-1} rather than o_t.
+        # Without this the all-zero obtained block on inserted no-buy rows
+        # determines y_t == 9 exactly, and the model reads the label off its
+        # own input. Only set False to reproduce a pre-fix run.
+        "shift_obtained": True,
+
         # ---------- augmentation ----------
         "augment_permute_obtained": False,
 

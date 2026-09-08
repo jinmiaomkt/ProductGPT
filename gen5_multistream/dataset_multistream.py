@@ -164,9 +164,38 @@ class TransformerDataset(Dataset):
         keep_zeros_tail: bool = True,
         max_events: Optional[int] = None,
         uid_to_index: Optional[Dict[str, int]] = None,
+        shift_obtained: bool = True,
         **kwargs,
     ):
         """
+        shift_obtained
+            LABEL LEAKAGE FIX (Sep 2026). Leave this True unless you are
+            deliberately reproducing a pre-fix run.
+
+            AggregateInput's ObtainedProducts block at event t records what the
+            user obtained AT t, not at t-1 -- despite this class's original
+            docstring claiming otherwise. Because InsertNotBuy_GenerateJSON_IPT.R
+            writes "0 0 0 0 0 0 0 0 0 0" into inserted no-buy rows, an all-zero
+            block is a perfect tell for y_t == 9 (NotBuy).
+
+            Measured on 239,716 events of clean_list_int_wide4_simple6_IPT.json:
+                P(y_t = 9 | obtained block all zero) = 1.0000  (83,664 events,
+                                                                no exceptions)
+                P(obtained block all zero | y_t = 9) = 0.9955
+            i.e. the model could read the label off its own input. The first
+            gen-5 run scored precision = recall = F1 = AUPRC = 1.000 on NotBuy
+            for exactly this reason.
+
+            With this True the stream is rolled forward one event, so row t
+            carries o_{t-1} and the first event sees padding. That is what the
+            architecture was designed for: the model should infer the decision
+            from the offer, the inventory it held BEFORE deciding, and its
+            previous decision.
+
+            The other two streams need no shift: lto is x_t, the offer shown
+            before the decision, and prev_decision is already y_{t-1} by
+            construction in the R generator.
+
         max_events
             Truncate every user to their first N decision events. This is the
             memory knob for gen 5: the offer-inventory cross-attention builds a
@@ -185,6 +214,7 @@ class TransformerDataset(Dataset):
         self.prev_dec_len = int(prev_dec_len)
         self.pad_id = int(pad_token)
         self.max_events = int(max_events) if max_events else None
+        self.shift_obtained = bool(shift_obtained)
 
         self.augment_permute_obtained = bool(augment_permute_obtained)
         self.base_seed = int(base_seed)
@@ -241,8 +271,21 @@ class TransformerDataset(Dataset):
 
             a = self.lto_len
             b = self.lto_len + self.obtained_len
+            obtained = blocks[:, a:b].contiguous()
+
+            if self.shift_obtained:
+                # Row t must describe o_{t-1}, not o_t -- see the shift_obtained
+                # note in __init__. Roll forward one event; the first event has
+                # no predecessor, so it gets padding.
+                obtained = torch.cat(
+                    [torch.full((1, obtained.size(1)), self.pad_id,
+                                dtype=obtained.dtype),
+                     obtained[:-1]],
+                    dim=0,
+                )
+
             self._lto.append(blocks[:, :a].contiguous())
-            self._obt.append(blocks[:, a:b].contiguous())
+            self._obt.append(obtained)
             self._prev.append(blocks[:, b].contiguous())
             self._label.append(torch.tensor(dec[:S], dtype=torch.long))
             self._uid_cache.append(uid)
