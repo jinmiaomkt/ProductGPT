@@ -5,6 +5,7 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 PAD_ID = 0
@@ -252,6 +253,96 @@ class CausalEventTransformer(nn.Module):
         return self.norm(self.encoder(r, mask=causal_mask))
 
 
+class UserMixtureOutputHead(nn.Module):
+    """
+    H output projections combined by per-customer mixture weights.
+
+    This is Lu & Kannan's (JMR 2025) heterogeneous-mixture mechanism, ported
+    from gen 4's model4_mixture2_*. Instead of one shared projection, the head
+    holds H of them and each customer n gets weights
+
+        alpha_n = softmax(user_mix_logits[n])        sum_h alpha_nh = 1
+
+    so their output is a convex combination sum_h alpha_nh * logits_h. The
+    weights are a soft membership over H behavioural patterns -- a continuous
+    latent segmentation learned end to end, rather than the arbitrary latent
+    vector a plain per-user embedding gives you. That is what makes it
+    interpretable: alpha_n says WHICH pattern describes a customer, and the
+    H projections say what each pattern predicts.
+
+    OUT-OF-SAMPLE CUSTOMERS. Customers the model never trained on carry index
+    0 and have no estimated alpha. They receive the population mean
+
+        alpha_bar_h = (1/N) sum_n alpha_nh
+
+    taken over the customers training actually updated -- the paper's "average
+    head weight from the training population", and an empirical-Bayes prior
+    mean. Note this averages the SOFTMAXED weights, not the logits; averaging
+    logits and then softmaxing is a different (and wrong) quantity.
+
+    Resolution is per sample rather than by a global mode, so a batch mixing
+    in-sample and out-of-sample customers is handled correctly.
+
+    Mixing happens in LOGIT space: the output stays logits, which is what the
+    cross-entropy loss expects. Mixing in probability space would return a
+    distribution and silently break the loss.
+    """
+
+    def __init__(self, d_model: int, vocab_size: int, num_users: int,
+                 num_mix_heads: int):
+        super().__init__()
+        self.d_model = int(d_model)
+        self.vocab_size = int(vocab_size)
+        self.num_mix_heads = int(num_mix_heads)
+
+        self.proj_weight = nn.Parameter(
+            torch.empty(self.num_mix_heads, d_model, vocab_size))
+        self.proj_bias = nn.Parameter(torch.zeros(self.num_mix_heads, vocab_size))
+        for h in range(self.num_mix_heads):
+            nn.init.xavier_uniform_(self.proj_weight[h])
+
+        # Zero init => softmax is uniform at the start, so every customer
+        # begins as an average customer and heterogeneity has to be earned.
+        self.user_mix_logits = nn.Embedding(num_users, self.num_mix_heads)
+        nn.init.zeros_(self.user_mix_logits.weight)
+
+        self.register_buffer("mean_alpha", torch.full((self.num_mix_heads,),
+                                                      1.0 / self.num_mix_heads))
+
+    @torch.no_grad()
+    def refresh_mean_alpha(self, trained_user_indices) -> torch.Tensor:
+        """Cache alpha_bar over the customers training actually updated."""
+        if not len(trained_user_indices):
+            return self.mean_alpha
+        idx = torch.as_tensor(list(trained_user_indices), dtype=torch.long,
+                              device=self.user_mix_logits.weight.device)
+        alpha = F.softmax(self.user_mix_logits(idx), dim=-1)   # (N,H)
+        self.mean_alpha.copy_(alpha.mean(dim=0).detach())
+        return self.mean_alpha
+
+    def alpha_for(self, user_idx: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+        if user_idx.dim() > 1:
+            user_idx = user_idx.squeeze(-1)
+        alpha = F.softmax(self.user_mix_logits(user_idx.long()), dim=-1).to(dtype)
+        unknown = (user_idx == 0).unsqueeze(-1)                # (B,1)
+        mean = self.mean_alpha.to(dtype).unsqueeze(0).expand_as(alpha)
+        return torch.where(unknown, mean, alpha)
+
+    def forward(self, x: torch.Tensor, user_idx: Optional[torch.Tensor] = None,
+                return_alpha: bool = False):
+        B = x.size(0)
+        head_logits = torch.einsum("btd,hdv->bthv", x, self.proj_weight)
+        head_logits = head_logits + self.proj_bias[None, None]     # (B,T,H,V)
+
+        if user_idx is None:
+            alpha = self.mean_alpha.to(x.dtype).unsqueeze(0).expand(B, -1)
+        else:
+            alpha = self.alpha_for(user_idx, x.dtype)              # (B,H)
+
+        out = torch.sum(alpha[:, None, :, None] * head_logits, dim=2)  # (B,T,V)
+        return (out, alpha) if return_alpha else out
+
+
 class MultiStreamStateSpaceTransformer(nn.Module):
     """
     Final agreed architecture.
@@ -285,6 +376,7 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         prev_dec_len: int = 1,
         num_users: Optional[int] = None,
         use_user_embedding: bool = True,
+        num_mix_heads: int = 0,
         return_attention_default: bool = False,
     ):
         super().__init__()
@@ -358,13 +450,25 @@ class MultiStreamStateSpaceTransformer(nn.Module):
             dropout=dropout,
         )
 
-        self.output_head = nn.Sequential(
+        # num_mix_heads > 0 swaps the final projection for Lu & Kannan's
+        # per-customer mixture over H projections. The pre-head MLP is kept
+        # either way so the two differ only in how the last layer is formed.
+        self.num_mix_heads = int(num_mix_heads or 0)
+        self.head_trunk = nn.Sequential(
             nn.LayerNorm(d_model),
             nn.Linear(d_model, d_model),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(d_model, vocab_size_tgt),
         )
+        if self.num_mix_heads > 0:
+            if num_users is None:
+                raise ValueError("num_mix_heads requires num_users")
+            self.mixture_head = UserMixtureOutputHead(
+                d_model, vocab_size_tgt, num_users, self.num_mix_heads)
+            self.output_head = None
+        else:
+            self.mixture_head = None
+            self.output_head = nn.Linear(d_model, vocab_size_tgt)
 
         self.reset_parameters()
 
@@ -474,7 +578,11 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         s = self.event_model(r)                                    # (B,S,D)
 
         # 7. Decision logits.
-        logits = self.output_head(s)                               # (B,S,V)
+        h = self.head_trunk(s)
+        if self.mixture_head is not None:
+            logits = self.mixture_head(h, user_idx)                # (B,S,V)
+        else:
+            logits = self.output_head(h)                           # (B,S,V)
 
         if return_hidden and return_attention:
             return logits, s, sat_attn
@@ -525,5 +633,6 @@ def build_transformer(
         prev_dec_len=kwargs.get("prev_dec_len", 1),
         num_users=num_users,
         use_user_embedding=kwargs.get("use_user_embedding", True),
+        num_mix_heads=kwargs.get("num_mix_heads", 0),
         return_attention_default=kwargs.get("return_attention_default", False),
     )

@@ -197,12 +197,24 @@ def set_unknown_user_to_mean(model: nn.Module, trained_idx: List[int]) -> bool:
     Call it before every evaluation, since the mean moves as training goes on.
     Returns False if the model has no user embedding.
     """
-    emb = getattr(model, "user_embed", None)
-    if emb is None or not trained_idx:
+    if not trained_idx:
         return False
-    idx = torch.tensor(trained_idx, device=emb.weight.device, dtype=torch.long)
-    emb.weight[0] = emb.weight.index_select(0, idx).mean(dim=0)
-    return True
+    done = False
+
+    # Mixture head: average the SOFTMAXED weights, which is the quantity the
+    # paper defines. Averaging logits and softmaxing is a different thing.
+    head = getattr(model, "mixture_head", None)
+    if head is not None:
+        head.refresh_mean_alpha(trained_idx)
+        done = True
+
+    # Plain embedding: the analogous population mean in vector space.
+    emb = getattr(model, "user_embed", None)
+    if emb is not None:
+        idx = torch.tensor(trained_idx, device=emb.weight.device, dtype=torch.long)
+        emb.weight[0] = emb.weight.index_select(0, idx).mean(dim=0)
+        done = True
+    return done
 
 
 @torch.no_grad()
@@ -550,6 +562,13 @@ def main() -> None:
                          "at evaluation it is a constant carrying no "
                          "information while accounting for ~29%% of "
                          "parameters. Pure memorisation capacity.")
+    ap.add_argument("--mix-heads", type=int, default=None,
+                    help="H for Lu & Kannan's per-customer mixture over H "
+                         "output projections. 0 = single shared projection. "
+                         "Out-of-sample customers get the population mean "
+                         "alpha-bar. More interpretable than a plain user "
+                         "embedding: alpha_n is a soft membership over H "
+                         "behavioural patterns.")
     ap.add_argument("--augment", action="store_true",
                     help="Permute the obtained-product slots within each event. "
                          "Encodes the prior that inventory is a set, not a "
@@ -599,6 +618,8 @@ def main() -> None:
         cfg["split_mode"] = args.split_mode
     if args.no_user_embedding:
         cfg["use_user_embedding"] = False
+    if args.mix_heads is not None:
+        cfg["num_mix_heads"] = args.mix_heads
     if args.augment:
         cfg["augment_permute_obtained"] = True
     if args.dropout is not None:
@@ -609,6 +630,7 @@ def main() -> None:
           f"user_embedding={cfg['use_user_embedding']} "
           f"augment={cfg['augment_permute_obtained']} "
           f"dropout={cfg['dropout']} patience={cfg['patience']} "
+          f"mix_heads={cfg.get('num_mix_heads', 0)} "
           f"shift_obtained={cfg['shift_obtained']}")
     uids_dir = Path(args.uids_dir) if args.uids_dir else None
     cfg["uids_dir"] = str(uids_dir) if uids_dir else None
@@ -631,6 +653,7 @@ def main() -> None:
         obtained_len=cfg["obtained_len"],
         prev_dec_len=cfg["prev_dec_len"],
         use_user_embedding=cfg["use_user_embedding"],
+        num_mix_heads=cfg.get("num_mix_heads", 0),
     ).to(device)
 
     n_par = sum(p.numel() for p in model.parameters())

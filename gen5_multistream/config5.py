@@ -119,6 +119,14 @@ def _base() -> Dict[str, Any]:
 
         # ---------- model ----------
         "use_user_embedding": True,
+        # Lu & Kannan's heterogeneous mixture: H output projections combined
+        # by per-customer weights alpha_n = softmax(user_mix_logits[n]).
+        # 0 disables it and uses a single shared projection. Their application
+        # uses a small H; start around 4-8. Out-of-sample customers receive
+        # alpha_bar, the mean over trained customers.
+        # Unlike a plain embedding, alpha_n is interpretable: it is a soft
+        # membership over H behavioural patterns.
+        "num_mix_heads": 0,
         "dropout": 0.1,
 
         # ---------- output ----------
