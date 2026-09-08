@@ -401,6 +401,20 @@ def main() -> None:
                     help="Stop cleanly after this many minutes and save "
                          "last.pt, so the run ends before PBS kills it. "
                          "Set it a little under the job's walltime.")
+    # --- knobs for the regularisation sweep ---------------------------------
+    ap.add_argument("--no-user-embedding", action="store_true",
+                    help="Drop the per-user embedding. It is a lookup over "
+                         "TRAINING users only; because splits are disjoint by "
+                         "user, every val/test user falls back to index 0, so "
+                         "at evaluation it is a constant carrying no "
+                         "information while accounting for ~29%% of "
+                         "parameters. Pure memorisation capacity.")
+    ap.add_argument("--augment", action="store_true",
+                    help="Permute the obtained-product slots within each event. "
+                         "Encodes the prior that inventory is a set, not a "
+                         "sequence.")
+    ap.add_argument("--dropout", type=float, default=None)
+    ap.add_argument("--patience", type=int, default=None)
     ap.add_argument("--no-shift-obtained", action="store_true",
                     help="Reproduce the pre-fix behaviour where the obtained "
                          "stream carries o_t. This LEAKS the label: an "
@@ -432,6 +446,18 @@ def main() -> None:
 
     if args.no_shift_obtained:
         cfg["shift_obtained"] = False
+    if args.no_user_embedding:
+        cfg["use_user_embedding"] = False
+    if args.augment:
+        cfg["augment_permute_obtained"] = True
+    if args.dropout is not None:
+        cfg["dropout"] = args.dropout
+    if args.patience is not None:
+        cfg["patience"] = args.patience
+    print(f"[cfg] user_embedding={cfg['use_user_embedding']} "
+          f"augment={cfg['augment_permute_obtained']} "
+          f"dropout={cfg['dropout']} patience={cfg['patience']} "
+          f"shift_obtained={cfg['shift_obtained']}")
     uids_dir = Path(args.uids_dir) if args.uids_dir else None
     cfg["uids_dir"] = str(uids_dir) if uids_dir else None
     train_dl, val_dl, test_dl, num_users = build_loaders(cfg, uids_dir=uids_dir)

@@ -69,6 +69,20 @@ MAX_USERS="${MAX_USERS:-}"          # empty = all users
 DATA_FILE="${DATA_FILE:-}"          # empty = whatever config5 defaults to
 RESUME="${RESUME:-0}"
 
+# Regularisation sweep knobs. Empty/0 means "leave the config default".
+#   USER_EMB=0   drop the per-user embedding (memorisation capacity that is
+#                a constant at eval time, since val/test users are unseen)
+#   AUGMENT=1    permute obtained-product slots within each event
+#   DROPOUT=0.25 override dropout
+#   PATIENCE=10  override early-stopping patience
+#   TAG=noemb    suffix for the run directory, so variants do not overwrite
+#                each other's checkpoints
+USER_EMB="${USER_EMB:-}"
+AUGMENT="${AUGMENT:-}"
+DROPOUT="${DROPOUT:-}"
+PATIENCE="${PATIENCE:-}"
+TAG="${TAG:-}"
+
 # Stop cleanly ~30 min before the 24h walltime so last.pt is written and the
 # job can be resubmitted with RESUME=1 instead of losing the run.
 TIME_BUDGET_MIN="${TIME_BUDGET_MIN:-1410}"
@@ -79,7 +93,7 @@ mkdir -p "$log_dir"
 
 # Checkpoints must NOT go in the data dir. Keep a STABLE directory per
 # configuration (not per job id) so a resubmitted job finds its own last.pt.
-run_id="gen5_${PROFILE}_S${MAX_EVENTS}_b${BATCH_SIZE}"
+run_id="gen5_${PROFILE}_S${MAX_EVENTS}_b${BATCH_SIZE}${TAG:+_$TAG}"
 output_dir="/storage/home/jinmiao/ProductGPT/runs/${run_id}"
 mkdir -p "$output_dir"
 export PRODUCTGPT_OUTPUT="$output_dir"
@@ -143,6 +157,10 @@ args=(
 [[ -n "$MAX_USERS" ]] && args+=(--max-users "$MAX_USERS")
 [[ -n "$DATA_FILE" ]] && args+=(--data-file "$DATA_FILE")
 [[ "$RESUME" == "1" ]] && args+=(--resume)
+[[ "$USER_EMB" == "0" ]] && args+=(--no-user-embedding)
+[[ "$AUGMENT" == "1" ]] && args+=(--augment)
+[[ -n "$DROPOUT" ]] && args+=(--dropout "$DROPOUT")
+[[ -n "$PATIENCE" ]] && args+=(--patience "$PATIENCE")
 
 echo "Command: python gen5_multistream/train5_multistream.py ${args[*]}"
 echo
