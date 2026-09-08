@@ -82,6 +82,11 @@ AUGMENT="${AUGMENT:-}"
 DROPOUT="${DROPOUT:-}"
 PATIENCE="${PATIENCE:-}"
 TAG="${TAG:-}"
+#   MIX_HEADS=8  per-customer mixture over H output projections
+#                (Lu & Kannan). 0 = single shared projection.
+#   SPLIT=both   user | temporal | both. Default comes from config5.
+MIX_HEADS="${MIX_HEADS:-}"
+SPLIT="${SPLIT:-}"
 
 # Stop cleanly ~30 min before the 24h walltime so last.pt is written and the
 # job can be resubmitted with RESUME=1 instead of losing the run.
@@ -161,6 +166,8 @@ args=(
 [[ "$AUGMENT" == "1" ]] && args+=(--augment)
 [[ -n "$DROPOUT" ]] && args+=(--dropout "$DROPOUT")
 [[ -n "$PATIENCE" ]] && args+=(--patience "$PATIENCE")
+[[ -n "$MIX_HEADS" ]] && args+=(--mix-heads "$MIX_HEADS")
+[[ -n "$SPLIT" ]] && args+=(--split-mode "$SPLIT")
 
 echo "Command: python gen5_multistream/train5_multistream.py ${args[*]}"
 echo
