@@ -225,6 +225,40 @@ def main() -> int:
     print(f"\n  n = {len(runs)} runs. Treat these as directional only: rank")
     print("  correlation on this few points is noisy, and the runs are not")
     print("  independent draws -- they share an architecture and a seed.")
+
+    # ---- 3. is it really the metric, or just training length? -----------
+    print("\n" + "=" * 78)
+    print("3. CONFOUND CHECK: HOW LONG DID EACH RUN TRAIN?")
+    print("=" * 78)
+    print("""
+  Every validation metric being anti-predictive at once is suspicious. A
+  simpler explanation: the runs differ in how many epochs they trained, and
+  training longer fits the CALIBRATION period better while generalising worse
+  to the HOLDOUT period. Validation lives in the calibration period, so it
+  cannot see that happening -- it rewards exactly the overfitting that hurts.
+
+  If epochs correlate with holdout outcome as strongly as the metrics do, the
+  problem is not which metric we select on. It is that validation shares a
+  time regime with training.
+""")
+    print(f"  {'run':<34}{'sel ep':>8}{'total':>8}{'HO nll':>10}{'HO f1':>9}")
+    for r in sorted(runs, key=lambda x: (x["best_epoch"] if x["best_epoch"]
+                                         is not None else -1)):
+        tot = len(r["history"]) if r["history"] else 0
+        print(f"  {r['tag'][:33]:<34}{r['best_epoch']:>8}{tot:>8}"
+              f"{r['holdout']['nll']:>10.4f}{r['holdout']['f1_macro']:>9.4f}")
+
+    eps = [r["best_epoch"] for r in runs if r["best_epoch"] is not None]
+    for k in ("nll", "f1_macro"):
+        ys = [r["holdout"][k] for r in runs if r["best_epoch"] is not None]
+        print(f"\n  Spearman(selected epoch, holdout {k}) = "
+              f"{spearman(eps, ys):+.2f}")
+    print("""
+  A strong POSITIVE correlation with holdout NLL means: the longer a run
+  trained, the worse it did on the holdout period. If that is what we see, the
+  fix is not a different validation metric -- it is a validation set that is
+  temporally shifted from training, so early stopping can detect drift.
+""")
     return 0
 
 
