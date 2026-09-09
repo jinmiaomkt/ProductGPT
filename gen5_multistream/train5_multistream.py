@@ -575,6 +575,11 @@ def main() -> None:
                          "sequence.")
     ap.add_argument("--dropout", type=float, default=None)
     ap.add_argument("--patience", type=int, default=None)
+    ap.add_argument("--track-holdout", action="store_true",
+                    help="DIAGNOSTIC: score the holdout cells every epoch and "
+                         "record them in history.json under a ho_ prefix. Never "
+                         "used for selection or early stopping. Slows each "
+                         "epoch by roughly the holdout evaluation cost.")
     ap.add_argument("--split-mode", choices=["user", "temporal", "both"], default=None,
                     help="user: hold out whole users (disjoint by uid). "
                          "temporal: hold out later campaigns for every user, "
@@ -626,6 +631,10 @@ def main() -> None:
         cfg["dropout"] = args.dropout
     if args.patience is not None:
         cfg["patience"] = args.patience
+    cfg["track_holdout"] = bool(args.track_holdout)
+    if cfg["track_holdout"]:
+        print("[cfg] --track-holdout: holdout cells scored EVERY epoch as a "
+              "diagnostic. These never drive selection or early stopping.")
     print(f"[cfg] split_mode={cfg.get('split_mode', 'user')} "
           f"user_embedding={cfg['use_user_embedding']} "
           f"augment={cfg['augment_permute_obtained']} "
@@ -775,8 +784,29 @@ def main() -> None:
               f"revMAE={v['rev_mae']:.3f}  ({dt:.0f}s)")
         # Keep history.json a readable learning curve: the per-class block goes
         # only into final.json, where it describes the selected model.
-        history.append({"epoch": ep, "train_loss": tr_loss, "secs": dt,
-                        **{k: val for k, val in v.items() if k != "per_class"}})
+        rec = {"epoch": ep, "train_loss": tr_loss, "secs": dt,
+               **{k: val for k, val in v.items() if k != "per_class"}}
+
+        # DIAGNOSTIC ONLY (--track-holdout). Scores the holdout cells every
+        # epoch so we can see whether holdout performance degrades as training
+        # continues -- the question of whether validation, which lives in the
+        # CALIBRATION period, can detect temporal overfitting at all.
+        #
+        # These numbers must NEVER drive checkpoint selection or early
+        # stopping; that would be selecting on the test set. They are written
+        # under a "ho_" prefix so they cannot be mistaken for validation
+        # metrics, and selection below still reads v["nll"] only.
+        if cfg.get("track_holdout") and isinstance(test_dl, dict):
+            for cell_name, cell_dl in test_dl.items():
+                hm = evaluate(model, cell_dl, device, adtype)
+                for k2 in ("nll", "hit", "f1_macro", "auprc_macro", "rev_mae"):
+                    rec[f"ho_{cell_name}_{k2}"] = hm[k2]
+            print(f"         [diagnostic] holdout nll="
+                  f"{rec.get('ho_outsample_users_holdout_period_nll', float('nan')):.4f}"
+                  f"  f1={rec.get('ho_outsample_users_holdout_period_f1_macro', float('nan')):.4f}",
+                  flush=True)
+
+        history.append(rec)
         hist_path.write_text(json.dumps(history, indent=2))
 
         improved = v["nll"] < best_nll
