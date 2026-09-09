@@ -26,4 +26,4 @@ REM ===========================================================================
 
 cd /d "%~dp0.."
 
-"C:\Program Files\Git\bin\bash.exe" -lc "mkdir -p logs && { printf '%%s heartbeat\n' \"$(date +'%%Y-%%m-%%dT%%H:%%M')\" >> logs/hpcc_heartbeat.log; bash scripts/hpcc_status.sh --once >> logs/hpcc_status.log 2>&1; }"
+"C:\Program Files\Git\bin\bash.exe" -lc "mkdir -p logs; printf '%%s heartbeat\n' \"$(date +'%%Y-%%m-%%dT%%H:%%M')\" >> logs/hpcc_heartbeat.log; out=$(bash scripts/hpcc_status.sh --once 2>&1); if [ -n \"$out\" ]; then printf '%%s\n' \"$out\" >> logs/hpcc_status.log; bash scripts/notify.sh \"$out\"; fi"

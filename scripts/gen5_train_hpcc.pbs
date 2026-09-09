@@ -112,7 +112,31 @@ output_dir="/storage/home/jinmiao/ProductGPT/runs/${run_id}"
 mkdir -p "$output_dir"
 export PRODUCTGPT_OUTPUT="$output_dir"
 
-exec >"$log_dir/gen5_train_${job_tag}.log" 2>&1
+job_log="$log_dir/gen5_train_${job_tag}.log"
+exec >"$job_log" 2>&1
+
+# ---------------------------------------------------------------- notify
+# Telegram push on exit, success or failure. Set up ~/.telegram_env on OMEGA
+# to enable it; without that file this is a silent no-op and the job is
+# unaffected. This fires even when `set -e` aborts the script, which plain
+# trailing echoes do not.
+#
+# NOTE: outbound HTTPS is confirmed working from the LOGIN node. Compute nodes
+# may sit behind a stricter policy -- the first job to run will tell us, and a
+# blocked request costs nothing because notify.sh never fails its caller.
+on_exit() {
+  rc=$?
+  local last
+  last="$(grep -aE 'val_nll|epoch|Traceback|Error|OOM|Killed' "$job_log" 2>/dev/null | tail -n 1)"
+  if [[ $rc -eq 0 ]]; then
+    bash "$PBS_O_WORKDIR/scripts/notify.sh" \
+      "OK  ${run_id} (job ${job_tag}) finished. ${last}" || true
+  else
+    bash "$PBS_O_WORKDIR/scripts/notify.sh" \
+      "FAIL ${run_id} (job ${job_tag}) exit=${rc}. ${last}" || true
+  fi
+}
+trap on_exit EXIT
 
 # ---------------------------------------------------------------- banner
 echo "Start time:  $(date --iso-8601=seconds)"
