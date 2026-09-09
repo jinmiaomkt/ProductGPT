@@ -26,18 +26,21 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| 40755 | `v2_emb` | 2026-09-09 | Baseline **with** the user embedding, under the R5 design | R |
-| 40756 | `v2_noemb` | 2026-09-09 | Does dropping the embedding still help once the split is fixed? | Q |
-| 40757 | `v2_noemb_aug` | 2026-09-09 | **Augmentation alone** — the arm that never produced output | Q |
-| 40758 | `v2_noemb_aug_do25` | 2026-09-09 | Augmentation + dropout 0.25, to de-confound against 40757 | Q |
+| 40760 | `S1024_b4_v2_emb` | 2026-09-09 | Baseline **with** the user embedding, under the R5 design | R |
+| 40761 | `S1024_b4_v2_noemb` | 2026-09-09 | Does dropping the embedding still help once the split is fixed? | Q |
+| 40762 | `S1024_b4_v2_noemb_aug` | 2026-09-09 | **Augmentation alone** | Q |
+| 40763 | `S1024_b4_v2_noemb_aug_do25` | 2026-09-09 | Augmentation + dropout 0.25, to de-confound against 40762 | Q |
 
-All four at S=1024 / batch 4, deliberately matching `jmr_flat` and `jmr_mix8`
-so the whole table becomes comparable. **S was NOT raised at the same time** —
-changing the representation and the regularisation together would confound
-both. Tags carry a `v2_` prefix so the pre-redesign run directories, which are
-the historical record for R6, are not overwritten.
+All four at S=1024 / batch 4, matching `jmr_flat` and `jmr_mix8` so the table
+becomes comparable. S is deliberately **not** raised at the same time —
+changing representation and regularisation together would confound both.
 
-Only two GPUs run per user at once, so 40756–40758 queue behind 40755.
+> Jobs 40755–40758 were the same four arms submitted without `MAX_EVENTS`, so
+> they silently took the PBS default of **512**. They completed anyway and are
+> recorded as R11; the run ids embed S, so nothing was overwritten. Lesson:
+> always pass `MAX_EVENTS` explicitly — the default is 512, not 1024.
+
+Only two GPUs run per user at once, so 40761–40763 queue behind 40760.
 
 Check with `bash scripts/hpcc_status.sh --once --force`. Note that `qstat`
 is NOT on the PATH of a non-interactive SSH session — it lives in
@@ -59,6 +62,7 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R2 | Sep 2026 | Post-fix re-measure | Fixing the leak should collapse NotBuy metrics | NotBuy F1 1.000 → ~0.67 | All pre-fix numbers void |
 | R3 | Sep 2026 | Truncation direction | Head vs tail truncation is cosmetic | **Wrong** — head truncation deleted the holdout | `truncate="tail"` |
 | R4 | Sep 2026 | Memory probe | Find the largest feasible `max_events` | S=1024 fits HPCC at batch 4; S=1536 OOMs **at batch 4** | Superseded — see R10 |
+| R11 | Sep 9 2026 | Four arms at S=512 (submitted without `MAX_EVENTS` by mistake) | Re-run R6 under the R5 design | **R6 reverses.** The user embedding is the *best* holdout model; augmentation alone does nothing; the gain in the old aug+do25 arm was dropout | Re-run at S=1024 (40760–63) before concluding |
 | R10 | Sep 9 2026 | Cap sweep + memory arithmetic | S=1024 is a hardware ceiling | **Wrong** — it is a batching artefact. Memory ∝ B·S², so S=1536 at batch 1 needs ~11 GB, half of what S=1024 at batch 4 already uses | Build a token-budget sampler; do **not** request more GPU memory |
 | R5 | Sep 2026 | Split redesign | Four holdout conventions existed; none matched the benchmark | Adopted Lu & Kannan's 2×2 | `split_mode="both"` default |
 | R6 | Sep 8 2026 | Regularisation sweep | Dropping the user embedding hurts; augmentation is a free win | **Both wrong.** Dropping the embedding *helped* (val NLL 1.013 → 0.951); aug+dropout was worse (0.957) | Keep `use_user_embedding=False`; re-run augmentation alone |
@@ -297,3 +301,44 @@ run must clear. NotBuy F1 ≈ 0.65 here, consistent with the post-leak-fix value
    gap plus a softmax over the 8 marks.
 5. **Hyperparameter tuning** — deliberately last. Tuning before baselines exist
    optimises a number nobody can interpret.
+
+### R11 — the S=512 arms (accidental, but decisive)
+
+Submitted without `MAX_EVENTS`, so all four took the PBS default of 512 rather
+than the intended 1024. They ran to completion in ~30 min each. Not comparable
+to the S=1024 rows, but internally consistent, and they settle two questions
+R6 could not.
+
+| Run tag (all `gen5_hpcc_S512_b4_`) | user emb | aug | dropout | epochs (best) | **val NLL** | **holdout NLL** | **holdout F1** |
+|---|---|---|---|---|---|---|---|
+| `v2_emb` | **yes** | no | 0.10 | 14 (8) | 1.0326 | **1.0918** | **0.5605** |
+| `v2_noemb` | no | no | 0.10 | 36 (30) | **0.9894** | 1.2037 | 0.4745 |
+| `v2_noemb_aug` | no | **yes** | 0.10 | 36 (30) | 0.9893 | 1.2016 | 0.4740 |
+| `v2_noemb_aug_do25` | no | yes | **0.25** | 41 (35) | 0.9932 | 1.1350 | 0.5284 |
+
+Three findings.
+
+1. **R6 reverses.** The user embedding gives the *best* holdout performance
+   (NLL 1.0918, F1 0.5605) while having the *worst* validation NLL (1.0326).
+   R6 concluded the opposite, but it ranked on validation NLL alone, before the
+   R5 redesign. Selecting on validation NLL would discard the best model here.
+2. **Augmentation alone does nothing.** `v2_noemb` vs `v2_noemb_aug` differ in
+   the fourth decimal on every metric (1.2037 vs 1.2016 holdout NLL). This is
+   the comparison the original sweep never got, because that arm produced no
+   output.
+3. **The gain in the old aug+do25 arm was dropout, not augmentation.** Holding
+   augmentation on and raising dropout 0.10 → 0.25 moves holdout NLL 1.2016 →
+   1.1350 and F1 0.4740 → 0.5284. Worth a dedicated dropout sweep.
+
+**The heterogeneity pattern holds, and strengthens.** Out-of-sample customers
+beat in-sample ones in all four arms — including `v2_emb`, which *has* a fitted
+per-customer embedding (1.0590 out vs 1.0918 in). A model given real
+per-customer parameters still does better on customers it has never seen,
+where those parameters are replaced by the population mean ω̄. That is harder
+to explain as cohort composition than the R7 result was. Still to be
+re-checked after hyperparameter tuning.
+
+**Memory model confirmed.** Peak GPU was 5.1 GB at S=512/batch 4. Scaling by
+B·S² predicts 20.4 GB at S=1024/batch 4 against 20.23 GB measured — so the R10
+projections, including S=1536 at batch 1 needing ~11 GB, rest on a validated
+relationship rather than a single point.
