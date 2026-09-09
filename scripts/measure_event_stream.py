@@ -78,6 +78,35 @@ GAP_BUCKETS = [             # hours; upper bound of each bucket
 PCTS = [1, 5, 25, 50, 75, 90, 95, 99]
 
 
+def cap_sweep(lt: np.ndarray, lr: np.ndarray, caps: List[int]) -> Dict[str, Any]:
+    """
+    For each candidate max_events: what fraction of users is truncated, how
+    many events are lost, and how much of the padded tensor is real.
+
+    The last column is the one that matters for memory. Every sequence is
+    padded to the global max_events, so with a mean length well below the cap,
+    a large share of the attention compute is spent on PAD. That waste is
+    recoverable by length-bucketed batching without touching the model.
+    """
+    out: Dict[str, Any] = {}
+    for cap in caps:
+        row = {}
+        for name, a in (("discrete", lt), ("continuous", lr)):
+            if a.size == 0:
+                continue
+            lost = np.clip(a - cap, 0, None)
+            kept = np.minimum(a, cap)
+            row[name] = {
+                "users_truncated": int((a > cap).sum()),
+                "share_users_truncated": round(float((a > cap).mean()), 4),
+                "events_lost": int(lost.sum()),
+                "share_events_lost": round(float(lost.sum() / a.sum()), 4),
+                "padding_utilisation": round(float(kept.mean() / cap), 4),
+            }
+        out[str(cap)] = row
+    return out
+
+
 def resolution(a: np.ndarray) -> Dict[str, Any]:
     """
     Infer the recording resolution of a gap field.
@@ -141,7 +170,8 @@ def coverage(lengths: np.ndarray, fracs=(0.50, 0.90, 0.95, 0.99, 1.00)) -> Dict[
             for f in fracs}
 
 
-def analyse(records: List[Dict[str, Any]], holdout_from: int) -> Dict[str, Any]:
+def analyse(records: List[Dict[str, Any]], holdout_from: int,
+            caps: List[int]) -> Dict[str, Any]:
     have_ins = have_ipt = have_camp = False
 
     # cross-tab: IsInserted x decision, as plain counts
@@ -323,6 +353,7 @@ def analyse(records: List[Dict[str, Any]], holdout_from: int) -> Dict[str, Any]:
             "events_lost_discrete": int(np.clip(lt - CURRENT_CAP, 0, None).sum()),
             "events_lost_continuous": int(np.clip(lr - CURRENT_CAP, 0, None).sum()),
         },
+        "cap_sweep": cap_sweep(lt, lr, caps),
         "gap_hours_as_stored": pct_summary(graw),
         "gap_hours_true_real_to_real": pct_summary(gtrue),
         "gap_buckets_as_stored": bucket(graw),
@@ -399,6 +430,23 @@ def report(st: Dict[str, Any]) -> None:
     w(f"  at the current cap of {t['cap']:,}: "
       f"{t['users_truncated_discrete']:,} users truncated (discrete), "
       f"{t['users_truncated_continuous']:,} (continuous)\n")
+
+    cs = st.get("cap_sweep") or {}
+    if cs:
+        hdr = f"  {'cap':>6}{'users cut':>11}{'events lost':>13}{'real vs padded':>17}\n"
+        for rep, title in (("discrete", "discrete representation"),
+                           ("continuous", "continuous representation")):
+            w(f"\n=== cost of each max_events choice ({title}) ===\n")
+            w(hdr)
+            for cap, row in cs.items():
+                r = row.get(rep)
+                if r:
+                    w(f"  {cap:>6}{r['share_users_truncated']:>10.1%}"
+                      f"{r['share_events_lost']:>13.2%}"
+                      f"{r['padding_utilisation']:>16.1%}\n")
+        w("\n  'real vs padded' is the share of the padded tensor that is a real\n"
+          "  event. The remainder is attention spent on PAD, and it is recoverable\n"
+          "  by length-bucketed batching without changing the model.\n")
 
     gi = st["gap_hours_on_inserted_rows"]
     if gi:
@@ -487,6 +535,8 @@ def main() -> int:
                     help="0 = all users; a small number gives a fast smoke pass")
     ap.add_argument("--holdout-from", type=int, default=28,
                     help="first holdout campaign (28 = FeatureBasedHoldout)")
+    ap.add_argument("--caps", default="512,768,1024,1280,1536,2048",
+                    help="comma-separated max_events values to evaluate")
     ap.add_argument("--out", default="",
                     help="JSON output path (default: <output_dir>/event_stream_stats.json)")
     a = ap.parse_args()
@@ -503,7 +553,8 @@ def main() -> int:
         records = records[:a.max_users]
     print(f"loaded {len(records):,} records", flush=True)
 
-    stats = analyse(records, a.holdout_from)
+    caps = [int(x) for x in a.caps.split(',') if x.strip()]
+    stats = analyse(records, a.holdout_from, caps)
     stats["source_file"] = path.name
     stats["max_users"] = a.max_users or None
     report(stats)
