@@ -32,6 +32,15 @@
 #PBS -l walltime=24:00:00
 #PBS -j oe
 
+# Mail on Abort and End (not Begin -- a queued job starting is not news).
+# This is push, not poll: it does not depend on a laptop being awake, on the
+# VPN, or on any session being open, so it is the one status channel that
+# keeps working overnight.
+#PBS -m ae
+# Without -M, PBS mails the local account on the cluster, which usually goes
+# nowhere useful. UNCOMMENT and set your real address:
+##PBS -M your.address@smu.edu.sg
+
 set -eo pipefail
 
 # ---------------------------------------------------------------- modules

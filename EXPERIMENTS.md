@@ -26,7 +26,13 @@ It is deliberately empty rather than stale — a wrong job id is worse than none
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| _(fill from qstat)_ | | | | |
+| — | — | — | — | **Queue empty as of 2026-09-09 15:04** |
+
+Check it with `bash scripts/hpcc_status.sh --once --force`. Note that `qstat`
+is NOT on the PATH of a non-interactive SSH session — it lives in
+`/opt/pbs/bin`, and a bare `qstat` over `ssh` fails with "command not found",
+which looks exactly like an empty queue. The script handles this and reports
+being blind rather than reporting silence as good news.
 
 Site facts worth remembering (verified from `qstat -Q -f GPU`, Sep 2026):
 the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
@@ -43,8 +49,8 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R3 | Sep 2026 | Truncation direction | Head vs tail truncation is cosmetic | **Wrong** — head truncation deleted the holdout | `truncate="tail"` |
 | R4 | Sep 2026 | Memory probe | Find the largest feasible `max_events` | S=1024 fits HPCC; S=1536 OOMs | Cap HPCC runs at S ≤ 1024 |
 | R5 | Sep 2026 | Split redesign | Four holdout conventions existed; none matched the benchmark | Adopted Lu & Kannan's 2×2 | `split_mode="both"` default |
-| R6 | Sep 2026 | Regularisation sweep | Augmentation is a free win | **Wrong** — slightly worse, and confounded with dropout | Re-run cleanly, one factor at a time |
-| R7 | Sep 2026 | Mixture-head port | Per-customer mixture beats a plain user embedding | Submitted; **not recorded** | Pending |
+| R6 | Sep 8 2026 | Regularisation sweep | Dropping the user embedding hurts; augmentation is a free win | **Both wrong.** Dropping the embedding *helped* (val NLL 1.013 → 0.951); aug+dropout was worse (0.957) | Keep `use_user_embedding=False`; re-run augmentation alone |
+| R7 | Sep 8 2026 | Mixture-head port | Per-customer mixture beats a flat head | Better on the holdout period (NLL 1.121 vs 1.247, macro F1 0.484 vs 0.447), slightly worse on validation NLL and revenue MAE | Keep mix8; but see the heterogeneity finding below |
 | R8 | Sep 2026 | Laptop pilot | Smoke-test the full gen-5 path end to end | Runs; collapses to 2 classes | Baseline to beat |
 | R9 | Sep 8 2026 | Event-stream measurement | Is a continuous-time formulation feasible? | Yes, with two data caveats | Proceed to a scoring harness |
 
@@ -105,10 +111,28 @@ Commits `0c549c2`, `1ad79d1`, `652c687`, `e55a2ab`.
 ### R6 — Regularisation sweep
 
 Flags added in `ff452ae`: `USER_EMB=0`, `AUGMENT=1`, `DROPOUT`, `PATIENCE`,
-each with its own `TAG` so run directories do not collide. Augmentation came
-out slightly *worse*, not better; one variant confounded augmentation with a
-dropout change, so that arm is uninterpretable. **Exact metrics not recorded.**
-Re-run one factor at a time before drawing any conclusion.
+each with its own `TAG` so run directories do not collide. All at S=1024,
+batch 4, d_model=128, N=4, full cohort.
+
+| Run tag | user emb | augment | dropout | epochs (best) | best val NLL |
+|---|---|---|---|---|---|
+| `gen5_hpcc_S1024_b4` | **yes** | no | 0.10 | 11 (5) | 1.0130 |
+| `gen5_hpcc_S1024_b4_noemb` | no | no | 0.10 | 52 (41) | **0.9510** |
+| `gen5_hpcc_S1024_b4_noemb_aug_do25` | no | yes | 0.25 | 60 (49) | 0.9567 |
+
+Two results. **Dropping the per-customer embedding helped** — 1.0130 → 0.9510,
+and the embedded model early-stopped at epoch 11 having peaked at epoch 5,
+which is the signature of memorisation rather than learning. **Augmentation did
+not help**, but that arm changed dropout at the same time, so it does not
+isolate augmentation.
+
+The reason the confound was never resolved: `gen5_hpcc_S1024_b4_noemb_aug` —
+the augmentation-only arm — **produced no output at all**. Its run directory is
+empty, so the clean comparison was never available. Re-run that arm alone.
+
+> These three predate the R5 evaluation redesign, so their validation NLL is
+> computed on a *different* validation set from the R7 runs below. Comparable
+> within this table, **not** across to R7.
 
 ### R7 — Mixture head (Lu & Kannan mechanism)
 
@@ -117,9 +141,46 @@ Re-run one factor at a time before drawing any conclusion.
 H parameters per customer instead of a 128-dim embedding — roughly 32× less
 memorisation capacity, and interpretable as soft segment membership.
 
-Two arms were submitted, `jmr_flat` (no mixture) and `jmr_mix8`
-(`MIX_HEADS=8`). **Outcomes not recorded here.** Read `final.json` in each run
-directory and fill in the table above.
+Two arms, both under the R5 2×2 design, both at S=1024 / batch 4 /
+d_model=128 / N=4 / `use_user_embedding=False`, full cohort.
+
+| | `jmr_flat` | `jmr_mix8` |
+|---|---|---|
+| mix heads | 0 | 8 |
+| params | 1,215,382 | 1,271,676 |
+| epochs (best) | 45 (35) | 40 (29) |
+| best val NLL | **0.9908** | 0.9947 |
+| in-sample × holdout — NLL | 1.2473 | **1.1205** |
+| in-sample × holdout — hit | 0.5841 | **0.5919** |
+| in-sample × holdout — macro F1 | 0.4469 | **0.4844** |
+| in-sample × holdout — macro AUPRC | 0.4933 | **0.5120** |
+| in-sample × holdout — rev MAE | **1.074** | 1.175 |
+| out-sample × holdout — NLL | 1.2330 | **1.1109** |
+| out-sample × calibration — NLL | **0.9858** | 0.9895 |
+
+Both now predict **all 9 classes**, unlike the R8 pilot's 2 of 9. NotBuy F1
+sits at 0.66–0.71 across cells, consistent with the post-leak-fix level.
+
+Three things worth carrying forward:
+
+1. **Validation NLL mis-ranks the two models.** `jmr_flat` wins on validation
+   (0.9908 vs 0.9947) but loses clearly on the holdout period (1.2473 vs
+   1.1205, macro F1 0.4469 vs 0.4844). This is direct evidence for the open
+   "NLL or AUPRC as the selection metric?" question — here they disagree, and
+   validation NLL picks the worse model.
+2. **The metrics disagree with each other.** `jmr_mix8` wins on NLL, hit rate,
+   macro F1 and AUPRC; `jmr_flat` wins on revenue MAE (1.074 vs 1.175). If
+   revenue is the managerial target, the ranking flips. Do not report a single
+   winner without saying by which metric.
+3. **Customer heterogeneity buys nothing out of sample — this is the big one.**
+   In *both* models, customers the model never trained on score slightly
+   *better* than customers it did (flat: 1.2330 vs 1.2473; mix8: 1.1109 vs
+   1.1205). The in-sample/out-of-sample gap that the Lu & Kannan design exists
+   to measure is not merely small here, it runs the wrong way. Whatever the
+   mixture head is buying, it is not customer-specific knowledge that
+   generalises. This bears directly on the open "does the paper need user
+   heterogeneity?" question and deserves its own diagnostic before the deck
+   claims otherwise.
 
 Commits `e406d05`, `fa045e2`.
 
