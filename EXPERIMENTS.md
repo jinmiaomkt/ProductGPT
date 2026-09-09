@@ -68,6 +68,7 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R8 | Sep 2026 | Laptop pilot | Smoke-test the full gen-5 path end to end | Runs; collapses to 2 classes | Baseline to beat |
 | R9 | Sep 8 2026 | Event-stream measurement | Is a continuous-time formulation feasible? | Yes, with two data caveats | Proceed to a scoring harness |
 | R10 | Sep 9 2026 | Cap sweep + memory arithmetic | S=1024 is a hardware ceiling | **Wrong** — it is a batching artefact. Memory ∝ B·S², so S=1536 at batch 1 needs ~11 GB, half of what S=1024 at batch 4 already uses | Build a token-budget sampler; do **not** request more GPU memory |
+| R12 | Sep 9 2026 | Selection-metric study (7 runs, no GPU time) | Validation NLL mis-ranks models; another metric will do better | **Worse than expected.** ALL FIVE validation metrics are anti-correlated with holdout performance. Spearman(selected epoch, holdout NLL) = +0.83 | Diagnostic runs 40764/40765 submitted to separate training length from architecture |
 | R11 | Sep 9 2026 | Four arms at S=512 (submitted without `MAX_EVENTS` by mistake) | Re-run R6 under the R5 design | **R6 reverses.** The user embedding is the *best* holdout model; augmentation alone does nothing; the gain in the old aug+do25 arm was dropout | Re-run at S=1024 (40760–63) before concluding |
 
 ---
@@ -342,3 +343,56 @@ re-checked after hyperparameter tuning.
 B·S² predicts 20.4 GB at S=1024/batch 4 against 20.23 GB measured — so the R10
 projections, including S=1536 at batch 1 needing ~11 GB, rest on a validated
 relationship rather than a single point.
+
+### R12 — every validation metric points the wrong way
+
+`scripts/selection_metric_study.py`, over the 7 runs carrying `test_cells`.
+No GPU time: it reads `history.json` and `final.json`.
+
+Runs sorted by holdout NLL, best first:
+
+| run | val NLL | val F1 | val AUPRC | **HO NLL** | **HO F1** |
+|---|---|---|---|---|---|
+| `S512_v2_emb` | 1.0326 | 0.5720 | 0.5605 | **1.0590** | 0.5753 |
+| `S1024_v2_emb` | 1.0351 | 0.5765 | 0.5618 | 1.0636 | 0.5763 |
+| `S1024_jmr_mix8` | 0.9947 | 0.5843 | 0.5899 | 1.1109 | 0.4849 |
+| `S512_v2_noemb_aug_do25` | 0.9932 | 0.5808 | 0.5877 | 1.1111 | 0.5325 |
+| `S512_v2_noemb_aug` | 0.9893 | 0.5833 | 0.5877 | 1.1782 | 0.4859 |
+| `S512_v2_noemb` | 0.9894 | 0.5839 | 0.5875 | 1.1810 | 0.4856 |
+| `S1024_jmr_flat` | 0.9908 | 0.5851 | **0.5959** | **1.2330** | 0.4449 |
+
+The ordering is close to exactly inverted. The best holdout model has the
+*worst* validation NLL; the worst holdout model has the *best* validation F1
+and AUPRC. Spearman, validation vs holdout:
+
+| val metric | HO NLL | HO F1 |
+|---|---|---|
+| nll | −0.82 | +0.57 |
+| f1_macro | +0.79 | **−0.96** |
+| auprc_macro | +0.64 | −0.82 |
+| hit | +0.75 | −0.46 |
+| rev_mae | +0.64 | −0.64 |
+
+Signs should be the opposite of this throughout. So the answer is not "select
+on AUPRC instead of NLL" — no available metric selects correctly.
+
+**Likely cause, and the confound.** Validation is held-out *customers* scored
+on the *calibration period* — the same time regime as training. It therefore
+cannot detect overfitting to that regime, and rewards it. Consistent with
+that, Spearman(selected epoch, holdout NLL) = **+0.83**: the longer a run
+trained, the worse it did on the holdout period.
+
+But at n=7 training length is perfectly confounded with architecture — both
+8-epoch runs are the ones with a user embedding. Jobs **40764** (`diag_noemb`)
+and **40765** (`diag_emb`) run with `--track-holdout` and `PATIENCE=99`, which
+scores the holdout every epoch as a diagnostic and lets the full curve appear.
+
+- If holdout degrades *within* a run as epochs accumulate → validation is in
+  the wrong time regime. The fix is a temporally shifted validation set, not
+  a different metric.
+- If holdout stays flat within a run → training length is not the cause and
+  the user embedding is genuinely the better architecture.
+
+Either way, **hyperparameter tuning stays blocked until this resolves.** Tuning
+maximises whatever it is given; every metric currently available points the
+wrong way.
