@@ -26,7 +26,24 @@ It is deliberately empty rather than stale — a wrong job id is worse than none
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| — | — | — | — | **Queue empty as of 2026-09-09 15:04** |
+| 40755 | `v2_emb` | 2026-09-09 | Baseline **with** the user embedding, under the R5 design | R |
+| 40756 | `v2_noemb` | 2026-09-09 | Does dropping the embedding still help once the split is fixed? | Q |
+| 40757 | `v2_noemb_aug` | 2026-09-09 | **Augmentation alone** — the arm that never produced output | Q |
+| 40758 | `v2_noemb_aug_do25` | 2026-09-09 | Augmentation + dropout 0.25, to de-confound against 40757 | Q |
+
+All four at S=1024 / batch 4, deliberately matching `jmr_flat` and `jmr_mix8`
+so the whole table becomes comparable. **S was NOT raised at the same time** —
+changing the representation and the regularisation together would confound
+both. Tags carry a `v2_` prefix so the pre-redesign run directories, which are
+the historical record for R6, are not overwritten.
+
+Only two GPUs run per user at once, so 40756–40758 queue behind 40755.
+
+Check with `bash scripts/hpcc_status.sh --once --force`. Note that `qstat`
+is NOT on the PATH of a non-interactive SSH session — it lives in
+`/opt/pbs/bin`, and a bare `qstat` over `ssh` fails with "command not found",
+which looks exactly like an empty queue. The script handles this and reports
+being blind rather than reporting silence as good news.
 
 Check it with `bash scripts/hpcc_status.sh --once --force`. Note that `qstat`
 is NOT on the PATH of a non-interactive SSH session — it lives in
@@ -50,7 +67,7 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R4 | Sep 2026 | Memory probe | Find the largest feasible `max_events` | S=1024 fits HPCC; S=1536 OOMs | Cap HPCC runs at S ≤ 1024 |
 | R5 | Sep 2026 | Split redesign | Four holdout conventions existed; none matched the benchmark | Adopted Lu & Kannan's 2×2 | `split_mode="both"` default |
 | R6 | Sep 8 2026 | Regularisation sweep | Dropping the user embedding hurts; augmentation is a free win | **Both wrong.** Dropping the embedding *helped* (val NLL 1.013 → 0.951); aug+dropout was worse (0.957) | Keep `use_user_embedding=False`; re-run augmentation alone |
-| R7 | Sep 8 2026 | Mixture-head port | Per-customer mixture beats a flat head | Better on the holdout period (NLL 1.121 vs 1.247, macro F1 0.484 vs 0.447), slightly worse on validation NLL and revenue MAE | Keep mix8; but see the heterogeneity finding below |
+| R7 | Sep 8 2026 | Mixture-head port | Per-customer mixture beats a flat head | Better on the holdout period (NLL 1.121 vs 1.247, macro F1 0.484 vs 0.447), slightly worse on validation NLL and revenue MAE | Keep mix8; heterogeneity reading pending HP tuning |
 | R8 | Sep 2026 | Laptop pilot | Smoke-test the full gen-5 path end to end | Runs; collapses to 2 classes | Baseline to beat |
 | R9 | Sep 8 2026 | Event-stream measurement | Is a continuous-time formulation feasible? | Yes, with two data caveats | Proceed to a scoring harness |
 
