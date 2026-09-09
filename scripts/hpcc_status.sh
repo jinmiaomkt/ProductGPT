@@ -68,7 +68,14 @@ PBS_BIN="${HPCC_PBS_BIN:-/opt/pbs/bin}"
 # One line per job: "<jobid> <name> <state> <elapsed>".
 # PBS Pro's `qstat -u` table puts state in field 10 and elapsed in field 11.
 poll() {
-  ssh_omega "export PATH=\$PATH:${PBS_BIN}; qstat -u ${USER_NAME} 2>/dev/null | awk 'NF>=10 && \$1 ~ /^[0-9]/ {split(\$1,a,\".\"); print a[1], \$4, \$10, \$11}'"
+  ssh_omega "export PATH=\$PATH:${PBS_BIN}; qstat -u ${USER_NAME} 2>/dev/null \
+    | awk 'NF>=10 && \$1 ~ /^[0-9]/ {split(\$1,a,\".\"); print a[1], \$4, \$10, \$11}' \
+    | while read -r jid name st el; do
+        prog=\$(grep -aE '\\[ep [0-9]+\\]|Traceback|Error|OOM|Killed' \
+               ${LOG_DIR}/gen5_train_\${jid}.log 2>/dev/null \
+               | tail -n 1 | tr -s ' ' | cut -c1-140)
+        echo \"\$jid \$name \$st \$el | \${prog:-no progress line yet}\"
+      done"
 }
 
 # Distinguish "queue empty" from "qstat missing": if this fails, the poller is
@@ -83,6 +90,16 @@ log_tail() {
   ssh_omega "tail -n 400 ${LOG_DIR}/gen5_train_${jid}.log 2>/dev/null \
              | grep -Ea 'epoch|val_nll|Traceback|Error|FAILED|OOM|Killed|Finish time' \
              | tail -n 1"
+}
+
+# "<jid> <name> <state> <elapsed> | <progress>"  ->  "<jid> <name> <state> |<progress>"
+# Drops elapsed, which changes on every poll and is not a real event.
+sig_of() {
+  local l="${1:-}" head prog a b c d
+  [[ -z "$l" ]] && { echo ""; return; }
+  head="${l%%|*}"; prog="${l#*|}"
+  read -r a b c d <<<"$head"
+  echo "$a $b $c |$prog"
 }
 
 emit_once() {
@@ -123,25 +140,37 @@ emit_once() {
 
   # Jobs that were in the previous poll but are gone now: terminal states.
   if [[ -n "$prev" && "$prev" != "__UNREACHABLE__" && "$prev" != "__NO_QSTAT__" ]]; then
-    while read -r jid name state elapsed; do
+    while IFS= read -r line; do
+      [[ -z "${line:-}" ]] && continue
+      local jid name state elapsed why
+      read -r jid name state elapsed <<<"${line%%|*}"
       [[ -z "${jid:-}" ]] && continue
       if ! grep -q "^${jid} " <<<"$cur"; then
-        local why
         why="$(log_tail "$jid")"
         echo "[$now] $jid $name LEFT THE QUEUE (was $state, ran $elapsed) | ${why:-no log line found}"
       fi
     done <<<"$prev"
   fi
 
-  # Current jobs whose state changed, or that are new.
+  # Current jobs whose state OR training progress changed, or that are new.
+  # Including progress in the comparison is what turns this from a state
+  # watcher into a training-progress feed: each new epoch line is a change,
+  # so an hourly poll delivers one update per hour per running job.
   if [[ -n "$cur" ]]; then
-    while read -r jid name state elapsed; do
+    while IFS= read -r line; do
+      [[ -z "${line:-}" ]] && continue
+      local head prog jid name state elapsed before
+      head="${line%%|*}"
+      prog="${line#*|}"
+      read -r jid name state elapsed <<<"$head"
       [[ -z "${jid:-}" ]] && continue
-      local before
-      before="$(grep "^${jid} " <<<"$prev" | awk '{print $3}')"
-      if [[ "$before" != "$state" ]]; then
+      # Compare on job + state + progress, deliberately EXCLUDING elapsed
+      # time. Elapsed ticks on every poll, so including it would make every
+      # poll a "change" and defeat the whole change-only design.
+      before="$(sig_of "$(grep "^${jid} " <<<"$prev")")"
+      if [[ "$before" != "$(sig_of "$line")" ]]; then
         if [[ "$state" == "R" ]]; then
-          echo "[$now] $jid $name RUNNING (elapsed $elapsed) | $(log_tail "$jid")"
+          echo "[$now] $jid $name RUNNING ${elapsed} |${prog}"
         else
           echo "[$now] $jid $name state=$state (elapsed $elapsed)"
         fi
