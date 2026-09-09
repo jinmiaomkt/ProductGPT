@@ -37,9 +37,9 @@
 # VPN, or on any session being open, so it is the one status channel that
 # keeps working overnight.
 #PBS -m ae
-# Without -M, PBS mails the local account on the cluster, which usually goes
-# nowhere useful. UNCOMMENT and set your real address:
-##PBS -M your.address@smu.edu.sg
+# Without -M, PBS mails the local account on the cluster, which goes nowhere
+# useful.
+#PBS -M jinmiao@smu.edu.sg
 
 set -eo pipefail
 
