@@ -21,8 +21,8 @@ result.
 
 ## Live queue
 
-Fill this from an actual `qstat -u $USER` at the start of each HPCC session.
-It is deliberately empty rather than stale — a wrong job id is worse than none.
+Refresh this from an actual `qstat -u $USER` at the start of each HPCC
+session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
@@ -45,12 +45,6 @@ is NOT on the PATH of a non-interactive SSH session — it lives in
 which looks exactly like an empty queue. The script handles this and reports
 being blind rather than reporting silence as good news.
 
-Check it with `bash scripts/hpcc_status.sh --once --force`. Note that `qstat`
-is NOT on the PATH of a non-interactive SSH session — it lives in
-`/opt/pbs/bin`, and a bare `qstat` over `ssh` fails with "command not found",
-which looks exactly like an empty queue. The script handles this and reports
-being blind rather than reporting silence as good news.
-
 Site facts worth remembering (verified from `qstat -Q -f GPU`, Sep 2026):
 the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 2 per user — a third job queues. Plan sweeps in batches of two.
@@ -64,7 +58,8 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R1 | Sep 2026 | Label-leak diagnostic | The `obtained` stream carries o_t, not o_(t-1), making the label readable | **Confirmed** on the IPT file; simple6 files clean | `shift_obtained=True` by default |
 | R2 | Sep 2026 | Post-fix re-measure | Fixing the leak should collapse NotBuy metrics | NotBuy F1 1.000 → ~0.67 | All pre-fix numbers void |
 | R3 | Sep 2026 | Truncation direction | Head vs tail truncation is cosmetic | **Wrong** — head truncation deleted the holdout | `truncate="tail"` |
-| R4 | Sep 2026 | Memory probe | Find the largest feasible `max_events` | S=1024 fits HPCC; S=1536 OOMs | Cap HPCC runs at S ≤ 1024 |
+| R4 | Sep 2026 | Memory probe | Find the largest feasible `max_events` | S=1024 fits HPCC at batch 4; S=1536 OOMs **at batch 4** | Superseded — see R10 |
+| R10 | Sep 9 2026 | Cap sweep + memory arithmetic | S=1024 is a hardware ceiling | **Wrong** — it is a batching artefact. Memory ∝ B·S², so S=1536 at batch 1 needs ~11 GB, half of what S=1024 at batch 4 already uses | Build a token-budget sampler; do **not** request more GPU memory |
 | R5 | Sep 2026 | Split redesign | Four holdout conventions existed; none matched the benchmark | Adopted Lu & Kannan's 2×2 | `split_mode="both"` default |
 | R6 | Sep 8 2026 | Regularisation sweep | Dropping the user embedding hurts; augmentation is a free win | **Both wrong.** Dropping the embedding *helped* (val NLL 1.013 → 0.951); aug+dropout was worse (0.957) | Keep `use_user_embedding=False`; re-run augmentation alone |
 | R7 | Sep 8 2026 | Mixture-head port | Per-customer mixture beats a flat head | Better on the holdout period (NLL 1.121 vs 1.247, macro F1 0.484 vs 0.447), slightly worse on validation NLL and revenue MAE | Keep mix8; heterogeneity reading pending HP tuning |
@@ -112,6 +107,51 @@ tensor, so cost grows as S².
 | 2048 | — | ~81 GB projected |
 
 Use `scripts/probe_memory.py` before raising `max_events`.
+
+### R10 — S=1024 is a batching artefact, not a hardware ceiling
+
+Cost of each candidate `max_events`, measured over the full cohort by
+`scripts/measure_event_stream.py --caps ...`:
+
+| cap | users truncated | events lost |
+|---|---|---|
+| 1024 | **9.1%** | 2.09% |
+| 1280 | 1.7% | 0.17% |
+| **1536** | **0.0%** | **0.00%** |
+
+The longest user is 1,512 events, so 1536 covers everyone and there is no
+reason to go to 1600 or 2048. The 2% of lost events is not spread evenly — it
+falls entirely on the 9% *longest* users, i.e. the heaviest spenders, which is
+the worst place to lose data.
+
+Memory scales as B·S², since the cross-attention builds `(B,H,S,4,S*10)`.
+Anchoring on the measured 1024@b4 = 20.23 GB:
+
+| config | B·S² | projected |
+|---|---|---|
+| 1024 @ b4 | 4.19e6 | 20.2 GB (measured) |
+| 1536 @ b4 | 9.44e6 | ~45.5 GB → OOM, matching what was observed |
+| 1536 @ b2 | 4.72e6 | ~22.8 GB |
+| **1536 @ b1** | 2.36e6 | **~11.4 GB** |
+| 2048 @ b1 | 4.19e6 | ~20.2 GB |
+
+So the fix is a **token-budget sampler**: bucket users by length and set batch
+size to `floor(budget / S²)` with the budget pinned at the current 4.2e6.
+Median length is 556, so most batches get 13–16 users and average batch size
+*rises*; only the few longest users drop to batch 1.
+
+Note `collate_multistream` already pads to the batch max, not a global max, so
+the waste comes from random batch composition — one long user setting the
+length for three short ones — not from global padding.
+
+Two caveats before implementing. With variable batch sizes the loss must be
+normalised by **valid token count**, not by batch, or gradients skew toward
+long-sequence batches. And the projections above are a linear extrapolation
+from a single measured point; verify (1536, b1) and (2048, b1) with
+`probe_memory.py` first.
+
+**Do not request more GPU memory from IITS on account of this.** The ceiling
+is a batching choice, and ~44.5 GB is ample once the sampler exists.
 
 ### R5 — Evaluation design
 
