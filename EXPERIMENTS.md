@@ -68,6 +68,7 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R8 | Sep 2026 | Laptop pilot | Smoke-test the full gen-5 path end to end | Runs; collapses to 2 classes | Baseline to beat |
 | R9 | Sep 8 2026 | Event-stream measurement | Is a continuous-time formulation feasible? | Yes, with two data caveats | Proceed to a scoring harness |
 | R10 | Sep 9 2026 | Cap sweep + memory arithmetic | S=1024 is a hardware ceiling | **Wrong** — it is a batching artefact. Memory ∝ B·S², so S=1536 at batch 1 needs ~11 GB, half of what S=1024 at batch 4 already uses | Build a token-budget sampler; do **not** request more GPU memory |
+| R13 | Sep 10 2026 | Per-epoch holdout tracking, both architectures | Separate training length from architecture | **Training length. Decisively.** Holdout peaks at epoch 3-4 in BOTH models while validation improves to epoch 10 and 34. Both architectures reach the SAME holdout optimum (1.0194 vs 1.0158) | Validation must be temporally shifted. R6/R7/R11 rankings are void |
 | R12 | Sep 9 2026 | Selection-metric study (7 runs, no GPU time) | Validation NLL mis-ranks models; another metric will do better | **Worse than expected.** ALL FIVE validation metrics are anti-correlated with holdout performance. Spearman(selected epoch, holdout NLL) = +0.83 | Diagnostic runs 40764/40765 submitted to separate training length from architecture |
 | R11 | Sep 9 2026 | Four arms at S=512 (submitted without `MAX_EVENTS` by mistake) | Re-run R6 under the R5 design | **R6 reverses.** The user embedding is the *best* holdout model; augmentation alone does nothing; the gain in the old aug+do25 arm was dropout | Re-run at S=1024 (40760–63) before concluding |
 
@@ -396,3 +397,49 @@ scores the holdout every epoch as a diagnostic and lets the full curve appear.
 Either way, **hyperparameter tuning stays blocked until this resolves.** Tuning
 maximises whatever it is given; every metric currently available points the
 wrong way.
+
+### R13 — validation cannot see temporal overfitting
+
+Jobs 40764 / 40765, `--track-holdout` with `PATIENCE=99` so the full curve is
+visible. Same S=1024, same design, differing only in the user embedding.
+
+| | val NLL best | **holdout NLL best** | HO NLL at the epoch validation picks | cost of selecting on validation |
+|---|---|---|---|---|
+| `diag_emb` | epoch 10 (1.0333) | **epoch 3 (1.0194)** | 1.0721 | **+0.053 nats** |
+| `diag_noemb` | epoch 34 (0.9946) | **epoch 4 (1.0158)** | 1.1704 | **+0.155 nats** |
+
+Three conclusions, in increasing order of how much they cost us.
+
+**1. The confound is resolved: it is training length, not architecture.**
+Within a single run, holding architecture fixed, holdout performance peaks at
+epoch 3-4 and then degrades monotonically. In `diag_noemb`, validation NLL
+*improves* for 34 consecutive epochs while holdout NLL rises 1.0158 → 1.1704.
+Validation never signals to stop, because it sits in the calibration period
+and the damage is to a later period it cannot observe.
+
+**2. The two architectures are equivalent.** At their own optima they are
+within noise of each other — 1.0194 (emb, ep 3) against 1.0158 (noemb, ep 4),
+with the *no-embedding* model marginally ahead. The apparent superiority of
+the embedding in R11 and R13's predecessors was entirely an artefact of it
+early-stopping at epoch 8 rather than 23, which happened to land nearer the
+holdout optimum. It was luck about when patience ran out, not a better model.
+
+**3. Every ranking we have drawn is void.** Selected epochs across the runs in
+R6, R7 and R11 range from 8 to 35, and holdout quality is monotone decreasing
+in that range. Those comparisons measured which run stopped earliest, not
+which configuration is better. That includes the R7 mixture-head result and
+the heterogeneity reading, both of which need re-deriving at matched epochs.
+
+**Interpretation, with a caveat.** The leading explanation is genuine
+distribution shift between the calibration and holdout periods: the model
+learns calibration-period structure that does not transfer. An alternative is
+that an epoch-3 model is simply under-trained and sits near the marginal class
+frequencies, which happen to suit the holdout period better. These are
+distinguishable — compare the epoch-3 and epoch-34 predicted class
+distributions against each period's empirical distribution — and that check
+should be run before the finding goes in a paper.
+
+**The fix is not a different metric.** Validation must be temporally shifted
+from training: drawn from the *late* calibration campaigns rather than spread
+across the whole period, so early stopping can see drift. Then re-run the
+architecture comparison at matched, honestly-selected epochs.
