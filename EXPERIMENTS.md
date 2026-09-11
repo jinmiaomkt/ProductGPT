@@ -26,10 +26,7 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| 40760 | `S1024_b4_v2_emb` | 2026-09-09 | Baseline **with** the user embedding, under the R5 design | R |
-| 40761 | `S1024_b4_v2_noemb` | 2026-09-09 | Does dropping the embedding still help once the split is fixed? | Q |
-| 40762 | `S1024_b4_v2_noemb_aug` | 2026-09-09 | **Augmentation alone** | Q |
-| 40763 | `S1024_b4_v2_noemb_aug_do25` | 2026-09-09 | Augmentation + dropout 0.25, to de-confound against 40762 | Q |
+| — | — | — | — | **Queue empty as of 2026-09-11.** All jobs through 40765 finished. |
 
 All four at S=1024 / batch 4, matching `jmr_flat` and `jmr_mix8` so the table
 becomes comparable. S is deliberately **not** raised at the same time —
@@ -68,7 +65,9 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R8 | Sep 2026 | Laptop pilot | Smoke-test the full gen-5 path end to end | Runs; collapses to 2 classes | Baseline to beat |
 | R9 | Sep 8 2026 | Event-stream measurement | Is a continuous-time formulation feasible? | Yes, with two data caveats | Proceed to a scoring harness |
 | R10 | Sep 9 2026 | Cap sweep + memory arithmetic | S=1024 is a hardware ceiling | **Wrong** — it is a batching artefact. Memory ∝ B·S², so S=1536 at batch 1 needs ~11 GB, half of what S=1024 at batch 4 already uses | Build a token-budget sampler; do **not** request more GPU memory |
-| R13 | Sep 10 2026 | Per-epoch holdout tracking, both architectures | Separate training length from architecture | **Training length. Decisively.** Holdout peaks at epoch 3-4 in BOTH models while validation improves to epoch 10 and 34. Both architectures reach the SAME holdout optimum (1.0194 vs 1.0158) | Validation must be temporally shifted. R6/R7/R11 rankings are void |
+| R13 | Sep 10 2026 | Per-epoch holdout tracking, both architectures | Separate training length from architecture | **Training length. Decisively.** Holdout peaks at epoch 3-4 in BOTH models while validation improves to epoch 10 and 34. Both architectures reach the SAME holdout optimum (1.0194 vs 1.0158) | Validation must be temporally shifted. Cross-run rankings at different epochs are void (see R14 for what survives) |
+| R14 | Sep 11 2026 | v2 arms at S=1024 (40760-63), and which conclusions survive R13 | Separate matched-epoch comparisons from confounded ones | Augmentation no-op and dropout 0.25 gain both hold at matched epochs; S=512 ≈ S=1024 holds | Dropout sweep is justified; architecture comparisons wait for temporal validation |
+| R15 | Sep 11 2026 | In/out-sample gap across epochs, both diag runs | Does knowing a customer help at the honest epoch? | **No.** At the holdout optimum the embedding's gap equals the no-embedding model's pure cohort gap. Late-epoch sign flip is an over-training artefact | Heterogeneity finding stands, now controlled |
 | R12 | Sep 9 2026 | Selection-metric study (7 runs, no GPU time) | Validation NLL mis-ranks models; another metric will do better | **Worse than expected.** ALL FIVE validation metrics are anti-correlated with holdout performance. Spearman(selected epoch, holdout NLL) = +0.83 | Diagnostic runs 40764/40765 submitted to separate training length from architecture |
 | R11 | Sep 9 2026 | Four arms at S=512 (submitted without `MAX_EVENTS` by mistake) | Re-run R6 under the R5 design | **R6 reverses.** The user embedding is the *best* holdout model; augmentation alone does nothing; the gain in the old aug+do25 arm was dropout | Re-run at S=1024 (40760–63) before concluding |
 
@@ -427,8 +426,12 @@ holdout optimum. It was luck about when patience ran out, not a better model.
 **3. Every ranking we have drawn is void.** Selected epochs across the runs in
 R6, R7 and R11 range from 8 to 35, and holdout quality is monotone decreasing
 in that range. Those comparisons measured which run stopped earliest, not
-which configuration is better. That includes the R7 mixture-head result and
-the heterogeneity reading, both of which need re-deriving at matched epochs.
+which configuration is better. That includes the R7 mixture-head result.
+
+> **Correction (Sep 11).** This paragraph originally also voided the
+> heterogeneity reading. That was wrong: the in-sample vs out-of-sample
+> comparison is made *within* a single checkpoint, so stopping epoch is held
+> fixed by construction. It survives, and R15 now controls it properly.
 
 **Interpretation, with a caveat.** The leading explanation is genuine
 distribution shift between the calibration and holdout periods: the model
@@ -443,3 +446,61 @@ should be run before the finding goes in a paper.
 from training: drawn from the *late* calibration campaigns rather than spread
 across the whole period, so early stopping can see drift. Then re-run the
 architecture comparison at matched, honestly-selected epochs.
+
+### R14 — the S=1024 arms, and what survives R13
+
+| Run (S=1024, all `v2_`) | emb | aug | dropout | sel. epoch | val NLL | HO NLL | HO F1 |
+|---|---|---|---|---|---|---|---|
+| `emb` | Y | n | 0.10 | 8 | 1.0351 | 1.0636 | 0.576 |
+| `noemb` | n | n | 0.10 | 23 | 0.9976 | 1.1575 | 0.497 |
+| `noemb_aug` | n | **Y** | 0.10 | 23 | 0.9974 | 1.1602 | 0.496 |
+| `noemb_aug_do25` | n | Y | **0.25** | 23 | 1.0070 | **1.0813** | **0.552** |
+
+R13 showed holdout quality falls monotonically after epoch 3–4. So a
+comparison between two runs is valid only if they stopped at the same epoch.
+The three `noemb` arms all stopped at epoch 23, which makes them a clean
+comparison by accident.
+
+**Survives (matched epochs):**
+- **Augmentation is a no-op.** 1.1575 vs 1.1602 at S=1024 (both ep 23);
+  1.1810 vs 1.1782 at S=512 (both ep 30). Two matched pairs.
+- **Dropout 0.25 helps.** 1.1602 → 1.0813 at matched epoch 23. Caveat: some of
+  this may be dropout slowing the overfitting R13 exposed, i.e. the same
+  mechanism as stopping earlier, rather than a separate benefit.
+- **Context length barely matters.** `v2_emb` at S=512 and S=1024 both stopped
+  at epoch 8: 1.0590 vs 1.0636.
+
+**Void (different stopping epochs):**
+- Embedding vs no embedding (8 vs 23). At honest optima they tie (R13).
+- Mixture heads vs flat (29 vs 35).
+- Anything pre-redesign vs anything after (different validation set).
+
+### R15 — does knowing a customer help at the honest epoch?
+
+Both diagnostic runs scored every holdout cell every epoch, so the in/out gap
+can be traced through training. Gap = in-sample NLL − out-of-sample NLL;
+negative would mean known customers are predicted better.
+
+| epoch | `diag_noemb` gap | `diag_emb` gap |
+|---|---|---|
+| 3 (≈ holdout optimum) | +0.0144 | +0.0161 |
+| 10 | +0.0084 | +0.0289 |
+| 20 | +0.0103 | −0.0007 |
+| 30 | +0.0123 | −0.1005 |
+| 39 | +0.0121 | −0.1381 |
+
+**`diag_noemb` is the control.** It has no customer-specific parameters, so it
+treats both cohorts identically; its steady +0.01 to +0.02 gap is pure cohort
+composition — the out-of-sample group is simply slightly easier to predict.
+
+**At the holdout optimum the embedding adds nothing.** At epoch 3 the embedded
+model's gap (+0.0161) matches the control's (+0.0144). Knowing a customer buys
+no measurable advantage beyond the population mean ω̄.
+
+**The late sign flip is not heterogeneity helping.** From epoch 17 the embedded
+model's gap turns negative, but not because known customers improve — both
+cells degrade, and the out-of-sample one degrades faster (1.0194 → 1.4590
+against 1.0354 → 1.3209). Out-of-sample customers receive ω̄, the mean of the
+trained embeddings; as those over-specialise, their mean becomes a poor stand-in
+for anyone. That is an over-training artefact, and it is also why an
+over-trained embedded model can *appear* to show heterogeneity when it does not.
