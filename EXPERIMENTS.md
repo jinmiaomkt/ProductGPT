@@ -28,16 +28,8 @@ session. Never write a job id from memory — a wrong id is worse than none.
 |---|---|---|---|---|
 | — | — | — | — | **Queue empty as of 2026-09-11.** All jobs through 40765 finished. |
 
-All four at S=1024 / batch 4, matching `jmr_flat` and `jmr_mix8` so the table
-becomes comparable. S is deliberately **not** raised at the same time —
-changing representation and regularisation together would confound both.
-
-> Jobs 40755–40758 were the same four arms submitted without `MAX_EVENTS`, so
-> they silently took the PBS default of **512**. They completed anyway and are
-> recorded as R11; the run ids embed S, so nothing was overwritten. Lesson:
-> always pass `MAX_EVENTS` explicitly — the default is 512, not 1024.
-
-Only two GPUs run per user at once, so 40761–40763 queue behind 40760.
+> **Always pass `MAX_EVENTS` explicitly — the PBS default is 512, not 1024.**
+> Jobs 40755–40758 omitted it and silently ran at 512 (recorded as R11).
 
 Check with `bash scripts/hpcc_status.sh --once --force`. Note that `qstat`
 is NOT on the PATH of a non-interactive SSH session — it lives in
@@ -65,11 +57,11 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R8 | Sep 2026 | Laptop pilot | Smoke-test the full gen-5 path end to end | Runs; collapses to 2 classes | Baseline to beat |
 | R9 | Sep 8 2026 | Event-stream measurement | Is a continuous-time formulation feasible? | Yes, with two data caveats | Proceed to a scoring harness |
 | R10 | Sep 9 2026 | Cap sweep + memory arithmetic | S=1024 is a hardware ceiling | **Wrong** — it is a batching artefact. Memory ∝ B·S², so S=1536 at batch 1 needs ~11 GB, half of what S=1024 at batch 4 already uses | Build a token-budget sampler; do **not** request more GPU memory |
+| R11 | Sep 9 2026 | Four arms at S=512 (submitted without `MAX_EVENTS` by mistake) | Re-run R6 under the R5 design | **R6 reverses.** The user embedding is the *best* holdout model; augmentation alone does nothing; the gain in the old aug+do25 arm was dropout | Re-run at S=1024 (40760–63) before concluding |
+| R12 | Sep 9 2026 | Selection-metric study (7 runs, no GPU time) | Validation NLL mis-ranks models; another metric will do better | **Worse than expected.** ALL FIVE validation metrics are anti-correlated with holdout performance. Spearman(selected epoch, holdout NLL) = +0.83 | Diagnostic runs 40764/40765 submitted to separate training length from architecture |
 | R13 | Sep 10 2026 | Per-epoch holdout tracking, both architectures | Separate training length from architecture | **Training length. Decisively.** Holdout peaks at epoch 3-4 in BOTH models while validation improves to epoch 10 and 34. Both architectures reach the SAME holdout optimum (1.0194 vs 1.0158) | Validation must be temporally shifted. Cross-run rankings at different epochs are void (see R14 for what survives) |
 | R14 | Sep 11 2026 | v2 arms at S=1024 (40760-63), and which conclusions survive R13 | Separate matched-epoch comparisons from confounded ones | Augmentation no-op and dropout 0.25 gain both hold at matched epochs; S=512 ≈ S=1024 holds | Dropout sweep is justified; architecture comparisons wait for temporal validation |
 | R15 | Sep 11 2026 | In/out-sample gap across epochs, both diag runs | Does knowing a customer help at the honest epoch? | **No.** At the holdout optimum the embedding's gap equals the no-embedding model's pure cohort gap. Late-epoch sign flip is an over-training artefact | Heterogeneity finding stands, now controlled |
-| R12 | Sep 9 2026 | Selection-metric study (7 runs, no GPU time) | Validation NLL mis-ranks models; another metric will do better | **Worse than expected.** ALL FIVE validation metrics are anti-correlated with holdout performance. Spearman(selected epoch, holdout NLL) = +0.83 | Diagnostic runs 40764/40765 submitted to separate training length from architecture |
-| R11 | Sep 9 2026 | Four arms at S=512 (submitted without `MAX_EVENTS` by mistake) | Re-run R6 under the R5 design | **R6 reverses.** The user embedding is the *best* holdout model; augmentation alone does nothing; the gain in the old aug+do25 arm was dropout | Re-run at S=1024 (40760–63) before concluding |
 
 ---
 
