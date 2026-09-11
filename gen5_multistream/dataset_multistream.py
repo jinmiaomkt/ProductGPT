@@ -256,10 +256,15 @@ class TransformerDataset(Dataset):
         self._ins: List[Optional[torch.Tensor]] = []
         self._hf: List[Optional[torch.Tensor]] = []   # FeatureBasedHoldout
         self._hi: List[Optional[torch.Tensor]] = []   # IndexBasedHoldout
+        # Per-event campaign id. Needed for a TEMPORALLY shifted validation
+        # block (e.g. campaign 27 only), which the two holdout flags cannot
+        # express -- they only encode the >=28 and >=29 boundaries.
+        self._camp: List[Optional[torch.Tensor]] = []
 
         self.has_ipt = False
         self.has_is_inserted = False
         self.has_holdout = False
+        self.has_campaign = False
 
         for rec in self.data:
             uid = self._uid(rec)
@@ -343,6 +348,14 @@ class TransformerDataset(Dataset):
                 self._hf.append(None)
                 self._hi.append(None)
 
+            if "CampaignID" in rec:
+                cp = parse_token_ids(rec["CampaignID"])[start:start + S]
+                cp = cp + [0] * (S - len(cp))
+                self._camp.append(torch.tensor(cp, dtype=torch.long))
+                self.has_campaign = True
+            else:
+                self._camp.append(None)
+
     # ---------------------------------------------------------------- utils
     @staticmethod
     def _uid(rec: Dict[str, Any]) -> str:
@@ -407,6 +420,8 @@ class TransformerDataset(Dataset):
         if self._hf[idx] is not None:
             item["holdout_feature"] = self._hf[idx]
             item["holdout_index"] = self._hi[idx]
+        if self._camp[idx] is not None:
+            item["campaign"] = self._camp[idx]
         return item
 
 
@@ -438,10 +453,17 @@ class TemporalRoleView(Dataset):
     # (JMR 2025), who split periods once into a calibration block and a
     # holdout block and take validation from held-out CUSTOMERS inside
     # calibration rather than from a slice of time.
-    ROLES = ("train", "val", "test", "calibration", "holdout")
+    ROLES = ("train", "val", "test", "calibration", "holdout",
+             "calibration_early", "calibration_late")
+    # calibration_early / calibration_late split the calibration period at
+    # campaign `val_from`. They exist because validation drawn from the SAME
+    # period as training cannot detect temporal overfitting (EXPERIMENTS.md
+    # R13): holdout NLL degraded for 30 epochs while that validation improved.
+    # A late-calibration block sits immediately before the holdout in time,
+    # so early stopping on it can see drift.
 
     def __init__(self, base: TransformerDataset, role: str,
-                 holdout_flag: str = "feature"):
+                 holdout_flag: str = "feature", val_from: Optional[int] = None):
         if role not in self.ROLES:
             raise ValueError(f"role must be one of {self.ROLES}, got {role!r}")
         if holdout_flag not in ("feature", "index"):
@@ -461,6 +483,14 @@ class TemporalRoleView(Dataset):
             )
         self.base = base
         self.role = role
+        self.val_from = val_from
+        if role in ("calibration_early", "calibration_late"):
+            if val_from is None:
+                raise ValueError(f"role {role!r} needs val_from")
+            if not base.has_campaign:
+                raise ValueError(
+                    f"role {role!r} needs a CampaignID field, which this data "
+                    "file does not have.")
 
     def __len__(self) -> int:
         return len(self.base)
@@ -472,16 +502,23 @@ class TemporalRoleView(Dataset):
         item = dict(self.base.__getitem__(idx, sample_index=sample_index))
         hf = item.pop("holdout_feature")
         hi = item.pop("holdout_index")
+        cp = item.pop("campaign", None)
 
-        keep = self._keep_mask(hf, hi)
+        keep = self._keep_mask(hf, hi, cp)
 
         lab = item["label"].clone()
         lab[~keep] = self.base.pad_id
         item["label"] = lab
         return item
 
-    def _keep_mask(self, hf: torch.Tensor, hi: torch.Tensor) -> torch.Tensor:
+    def _keep_mask(self, hf: torch.Tensor, hi: torch.Tensor,
+                   cp: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Which events this role scores."""
+        if self.role in ("calibration_early", "calibration_late"):
+            flag = hf if self.holdout_flag == "feature" else hi
+            in_cal = flag == 0
+            late = cp >= self.val_from
+            return in_cal & (late if self.role == "calibration_late" else ~late)
         if self.role == "train":
             return hf == 0
         if self.role == "val":
@@ -502,7 +539,7 @@ class TemporalRoleView(Dataset):
             it = self.base[i]
             hf, hi = it["holdout_feature"], it["holdout_index"]
             lab = it["label"]
-            keep = self._keep_mask(hf, hi)
+            keep = self._keep_mask(hf, hi, it.get("campaign"))
             n += int((keep & (lab >= 1) & (lab <= 9)).sum())
         return n
 

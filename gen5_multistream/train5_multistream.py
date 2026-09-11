@@ -296,8 +296,38 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device,
             "auprc": aps[k],
         }
 
+    # ---- drift diagnostics (EXPERIMENTS.md R13) ----------------------------
+    # Separates "the model is merely under-trained and sits near the class
+    # frequencies" from "the model learned calibration-period structure that
+    # does not transfer". Computed from arrays already held for AUPRC, so the
+    # extra cost is negligible.
+    true_dist = np.bincount(y_all - 1, minlength=N_CLASSES).astype(np.float64)
+    true_dist /= true_dist.sum()
+    pred_dist = p_all.astype(np.float64).mean(axis=0)
+    # Oracle prior-matched NLL: rescale class probabilities so their average
+    # equals this cell's empirical class frequencies (one Saerens-style step).
+    # If this recovers most of a late epoch's lost NLL, the degradation was a
+    # shift in class FREQUENCIES; if not, it is a shift in P(y | history).
+    # "Oracle" because it uses this cell's own labels -- a diagnostic, never a
+    # reportable number.
+    ratio = true_dist / np.clip(pred_dist, 1e-12, None)
+    p_adj = p_all.astype(np.float64) * ratio
+    p_adj /= p_adj.sum(axis=1, keepdims=True)
+    nll_pm = float(-np.log(np.clip(
+        p_adj[np.arange(len(y_all)), y_all - 1], 1e-12, None)).mean())
+    # The best CONSTANT predictor is the cell's own class frequencies; its NLL
+    # is their entropy. A model near this number has learned almost nothing
+    # beyond "how common is each decision".
+    nz = true_dist[true_dist > 0]
+    marginal_entropy = float(-(nz * np.log(nz)).sum())
+
     return {
         "nll": nll_sum / total,
+        "nll_prior_matched": nll_pm,
+        "marginal_entropy": marginal_entropy,
+        "tv_pred_true": float(0.5 * np.abs(pred_dist - true_dist).sum()),
+        "true_dist": [round(float(x), 6) for x in true_dist],
+        "pred_dist": [round(float(x), 6) for x in pred_dist],
         "hit": correct / total,
         "f1_macro": macro_f1(tp, pred_cnt, true_cnt),
         "auprc_macro": float(np.mean([v for v in aps if not math.isnan(v)]))
@@ -412,14 +442,24 @@ def build_loaders(cfg: Dict[str, Any],
         # calibration period -- not from a slice of time -- so the entire
         # holdout period stays untouched by model selection.
         flag = cfg.get("holdout_flag", "feature")
-        rng_u = random.Random(cfg["seed"])
+        # The customer partition uses split_seed, NOT the training seed, so
+        # multi-seed runs share one partition and their differences reflect
+        # training noise rather than which customers landed in which cell.
+        rng_u = random.Random(cfg.get("split_seed", cfg["seed"]))
         order = list(range(len(base)))
         rng_u.shuffle(order)
 
         n_out = max(1, int(cfg.get("user_holdout_frac", 0.5) * len(order)))
         out_users, in_users = order[:n_out], order[n_out:]
-        n_val = max(1, int(cfg.get("val_user_frac", 0.1) * len(in_users)))
-        val_users, train_users = in_users[:n_val], in_users[n_val:]
+        val_mode = cfg.get("val_mode", "customers")
+        if val_mode == "late":
+            # No validation customers are carved out: every in-sample customer
+            # trains on the early calibration campaigns and is validated on the
+            # late ones, mirroring the in-sample x holdout cell one step back.
+            val_users, train_users = [], list(in_users)
+        else:
+            n_val = max(1, int(cfg.get("val_user_frac", 0.1) * len(in_users)))
+            val_users, train_users = in_users[:n_val], in_users[n_val:]
 
         # Only train_users ever update an embedding row. Everyone else shares
         # index 0, which is set to the MEAN of the trained rows before each
@@ -436,8 +476,23 @@ def build_loaders(cfg: Dict[str, Any],
         hol = TemporalRoleView(base, "holdout", holdout_flag=flag)
         boundary = 28 if flag == "feature" else 29
 
-        train_ds = cal.subset(train_users)
-        val_ds = cal.subset(val_users)
+        if val_mode == "late":
+            vf = int(cfg.get("val_from", 27))
+            if not vf < boundary:
+                raise SystemExit(f"val_from={vf} must be < holdout boundary {boundary}")
+            early = TemporalRoleView(base, "calibration_early",
+                                     holdout_flag=flag, val_from=vf)
+            late = TemporalRoleView(base, "calibration_late",
+                                    holdout_flag=flag, val_from=vf)
+            train_ds = early.subset(train_users)
+            val_ds = late.subset(train_users)
+            print(f"[split] VALIDATION = LATE CALIBRATION: in-sample customers "
+                  f"train on campaigns < {vf} and validate on {vf}..{boundary - 1}. "
+                  "Sits immediately before the holdout, so early stopping can "
+                  "see temporal drift (EXPERIMENTS.md R13).")
+        else:
+            train_ds = cal.subset(train_users)
+            val_ds = cal.subset(val_users)
         # NOT cold starts: labels are masked, inputs are not, so an
         # out-of-sample customer's history is still visible to the model.
         tests = {
@@ -575,6 +630,24 @@ def main() -> None:
                          "sequence.")
     ap.add_argument("--dropout", type=float, default=None)
     ap.add_argument("--patience", type=int, default=None)
+    ap.add_argument("--seed", type=int, default=None,
+                    help="Training seed: initialisation and data order. The "
+                         "customer partition uses split_seed instead, so runs "
+                         "differing only in --seed share one partition.")
+    ap.add_argument("--val-mode", choices=["customers", "late"], default=None,
+                    help="customers: held-out customers scored on the whole "
+                         "calibration period (Lu & Kannan). late: in-sample "
+                         "customers scored on the LAST calibration campaigns, "
+                         "so early stopping can see temporal drift. R13 showed "
+                         "'customers' cannot detect it.")
+    ap.add_argument("--val-from", type=int, default=None,
+                    help="First campaign of the late validation block "
+                         "(val-mode=late). Default 27: one campaign, about the "
+                         "size of the whole holdout block.")
+    ap.add_argument("--arch", choices=["transformer", "gru", "lstm"], default=None,
+                    help="Sequence encoder. gru/lstm share the transformer's "
+                         "feature lookup and within-event pooling and differ "
+                         "only in how events combine over time.")
     ap.add_argument("--track-holdout", action="store_true",
                     help="DIAGNOSTIC: score the holdout cells every epoch and "
                          "record them in history.json under a ho_ prefix. Never "
@@ -605,7 +678,7 @@ def main() -> None:
     cfg = config5.get_config(args.profile)
     for k, v in (("num_epochs", args.epochs), ("max_events", args.max_events),
                  ("batch_size", args.batch_size), ("max_users", args.max_users),
-                 ("data_file", args.data_file)):
+                 ("data_file", args.data_file), ("seed", args.seed)):
         if v is not None:
             cfg[k] = v
 
@@ -631,6 +704,12 @@ def main() -> None:
         cfg["dropout"] = args.dropout
     if args.patience is not None:
         cfg["patience"] = args.patience
+    if args.val_mode is not None:
+        cfg["val_mode"] = args.val_mode
+    if args.val_from is not None:
+        cfg["val_from"] = args.val_from
+    if args.arch is not None:
+        cfg["arch"] = args.arch
     cfg["track_holdout"] = bool(args.track_holdout)
     if cfg["track_holdout"]:
         print("[cfg] --track-holdout: holdout cells scored EVERY epoch as a "
@@ -646,24 +725,42 @@ def main() -> None:
     train_dl, val_dl, test_dl, num_users = build_loaders(cfg, uids_dir=uids_dir)
 
     feat = load_feature_tensor(config5.feature_path())
-    model = build_transformer(
-        vocab_size_src=cfg["vocab_size_src"],
-        vocab_size_tgt=cfg["vocab_size_tgt"],
-        max_seq_len=cfg["max_events"],
-        d_model=cfg["d_model"],
-        n_layers=cfg["N"],
-        n_heads=cfg["num_heads"],
-        d_ff=cfg["d_ff"],
-        dropout=cfg["dropout"],
-        feature_tensor=feat,
-        ai_rate=cfg["ai_rate"],
-        num_users=num_users,
-        lto_len=cfg["lto_len"],
-        obtained_len=cfg["obtained_len"],
-        prev_dec_len=cfg["prev_dec_len"],
-        use_user_embedding=cfg["use_user_embedding"],
-        num_mix_heads=cfg.get("num_mix_heads", 0),
-    ).to(device)
+    arch = cfg.get("arch", "transformer")
+    if arch != "transformer":
+        if cfg.get("num_mix_heads", 0):
+            raise SystemExit("--mix-heads is transformer-only; drop it for gru/lstm")
+        from model_recurrent_baseline import build_recurrent_baseline
+        model = build_recurrent_baseline(
+            cell=arch,
+            vocab_size_src=cfg["vocab_size_src"],
+            vocab_size_tgt=cfg["vocab_size_tgt"],
+            d_model=cfg["d_model"],
+            n_layers=cfg["N"],
+            d_ff=cfg["d_ff"],
+            dropout=cfg["dropout"],
+            feature_tensor=feat,
+            num_users=num_users,
+            use_user_embedding=cfg["use_user_embedding"],
+        ).to(device)
+    else:
+        model = build_transformer(
+            vocab_size_src=cfg["vocab_size_src"],
+            vocab_size_tgt=cfg["vocab_size_tgt"],
+            max_seq_len=cfg["max_events"],
+            d_model=cfg["d_model"],
+            n_layers=cfg["N"],
+            n_heads=cfg["num_heads"],
+            d_ff=cfg["d_ff"],
+            dropout=cfg["dropout"],
+            feature_tensor=feat,
+            ai_rate=cfg["ai_rate"],
+            num_users=num_users,
+            lto_len=cfg["lto_len"],
+            obtained_len=cfg["obtained_len"],
+            prev_dec_len=cfg["prev_dec_len"],
+            use_user_embedding=cfg["use_user_embedding"],
+            num_mix_heads=cfg.get("num_mix_heads", 0),
+        ).to(device)
 
     n_par = sum(p.numel() for p in model.parameters())
     print(f"[model] {n_par:,} parameters | d_model={cfg['d_model']} N={cfg['N']} "
@@ -798,8 +895,15 @@ def main() -> None:
         # metrics, and selection below still reads v["nll"] only.
         if cfg.get("track_holdout") and isinstance(test_dl, dict):
             for cell_name, cell_dl in test_dl.items():
+                # The out-of-sample x calibration cell is ~1.26M events -- about
+                # three times the two holdout cells together -- and says nothing
+                # about temporal drift, so it is skipped unless asked for.
+                if "holdout_period" not in cell_name and not cfg.get("track_all_cells"):
+                    continue
                 hm = evaluate(model, cell_dl, device, adtype)
-                for k2 in ("nll", "hit", "f1_macro", "auprc_macro", "rev_mae"):
+                for k2 in ("nll", "hit", "f1_macro", "auprc_macro", "rev_mae",
+                           "nll_prior_matched", "marginal_entropy",
+                           "tv_pred_true", "true_dist", "pred_dist"):
                     rec[f"ho_{cell_name}_{k2}"] = hm[k2]
             print(f"         [diagnostic] holdout nll="
                   f"{rec.get('ho_outsample_users_holdout_period_nll', float('nan')):.4f}"

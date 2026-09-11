@@ -103,6 +103,23 @@ def _base() -> Dict[str, Any]:
         # scored on the calibration period only. Model selection therefore
         # never touches the holdout period.
         "val_user_frac": 0.1,
+        # How validation is drawn (EXPERIMENTS.md R13).
+        #   "customers": held-out customers x whole calibration period. The
+        #                Lu & Kannan design -- but it shares a time regime with
+        #                training, so it CANNOT see temporal overfitting: in R13
+        #                it improved for 34 epochs while holdout NLL worsened.
+        #   "late":      in-sample customers x the last calibration campaigns
+        #                (>= val_from). Sits just before the holdout in time.
+        # Default stays "customers" until the late mode is shown to track the
+        # holdout; flip it once that is confirmed.
+        "val_mode": "customers",
+        # Campaign 27 alone is ~378k rows, about the size of the entire
+        # holdout block (28-30, ~440k). Campaigns 25-27 would be 32% of ALL
+        # rows and strip the most recent third of calibration from training.
+        "val_from": 27,
+        # Seeds the customer partition only. Kept separate from "seed" so
+        # multi-seed runs share one partition.
+        "split_seed": 33,
         # train_frac/val_frac apply to split_mode="user" only.
         "train_frac": 0.8,
         "val_frac": 0.1,
@@ -128,6 +145,9 @@ def _base() -> Dict[str, Any]:
         # membership over H behavioural patterns.
         "num_mix_heads": 0,
         "dropout": 0.1,
+        # "transformer" (the gen-5 model), or "gru" / "lstm" baselines that
+        # share its feature pipeline and differ only in the sequence encoder.
+        "arch": "transformer",
 
         # ---------- output ----------
         "run_name": "gen5_multistream",

@@ -71,7 +71,7 @@ source "$PBS_O_WORKDIR/env.sh"
 # ---------------------------------------------------------------- knobs
 # Defaults here; override any of them at submit time with -v NAME=value.
 PROFILE="${PROFILE:-hpcc}"
-MAX_EVENTS="${MAX_EVENTS:-512}"
+MAX_EVENTS="${MAX_EVENTS:-1024}"   # was 512; that default silently shrank 40755-58 (R11)
 EPOCHS="${EPOCHS:-60}"
 BATCH_SIZE="${BATCH_SIZE:-4}"
 MAX_USERS="${MAX_USERS:-}"          # empty = all users
@@ -101,6 +101,15 @@ SPLIT="${SPLIT:-}"
 #                    Pair it with a large PATIENCE so the full curve is
 #                    visible instead of stopping at the validation optimum.
 TRACK_HOLDOUT="${TRACK_HOLDOUT:-}"
+#   SEED=1          training seed (init + data order); the customer partition
+#                   is fixed by split_seed, so seeds share one partition
+#   VAL_MODE=late   validate on the late calibration campaigns (see R13)
+#   VAL_FROM=27     first campaign of that late block
+#   ARCH=gru        transformer | gru | lstm
+SEED="${SEED:-}"
+VAL_MODE="${VAL_MODE:-}"
+VAL_FROM="${VAL_FROM:-}"
+ARCH="${ARCH:-}"
 
 # Stop cleanly ~30 min before the 24h walltime so last.pt is written and the
 # job can be resubmitted with RESUME=1 instead of losing the run.
@@ -207,6 +216,10 @@ args=(
 [[ -n "$MIX_HEADS" ]] && args+=(--mix-heads "$MIX_HEADS")
 [[ -n "$SPLIT" ]] && args+=(--split-mode "$SPLIT")
 [[ "$TRACK_HOLDOUT" == "1" ]] && args+=(--track-holdout)
+[[ -n "$SEED" ]] && args+=(--seed "$SEED")
+[[ -n "$VAL_MODE" ]] && args+=(--val-mode "$VAL_MODE")
+[[ -n "$VAL_FROM" ]] && args+=(--val-from "$VAL_FROM")
+[[ -n "$ARCH" ]] && args+=(--arch "$ARCH")
 
 echo "Command: python gen5_multistream/train5_multistream.py ${args[*]}"
 echo
