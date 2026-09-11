@@ -26,7 +26,15 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| — | — | — | — | **Queue empty as of 2026-09-11.** All jobs through 40765 finished. |
+| 40852 | `diag2_late_noemb` | 2026-09-11 | **Step 2 gate:** does late-calibration validation pick an epoch near the holdout optimum? | R |
+| 40853 | `diag2_late_emb` | 2026-09-11 | Same, for the embedded model | Q |
+| 40854 | `diag2_cust_noemb` | 2026-09-11 | **Step 1:** under-training or drift? Old validation, run to epoch 35; also replicates R13 | Q |
+| 40855 | `diag2_late_gru` | 2026-09-11 | Step 2 for the GRU baseline, so baselines are selected honestly too | Q |
+
+All four: S=1024, `TRACK_HOLDOUT=1`, `PATIENCE=99` so the full curve is
+visible. Read them with `python3 scripts/drift_diagnostic.py ~/ProductGPT/runs/*diag2*`.
+**Batch 2 (seeded comparisons, baselines, dropout sweep) is gated on 40852/40853:**
+it selects on late validation, so it only runs if late validation tracks the holdout.
 
 > **Always pass `MAX_EVENTS` explicitly — the PBS default is 512, not 1024.**
 > Jobs 40755–40758 omitted it and silently ran at 512 (recorded as R11).
