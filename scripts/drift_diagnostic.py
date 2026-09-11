@@ -70,8 +70,15 @@ def analyse(hist_path: str) -> Optional[Dict[str, Any]]:
         return None
 
     cfg_path = os.path.join(os.path.dirname(hist_path), "final.json")
-    cfg = json.load(open(cfg_path)).get("cfg", {}) if os.path.exists(cfg_path) else {}
-    val_mode = cfg.get("val_mode", "customers")
+    if os.path.exists(cfg_path):
+        cfg = json.load(open(cfg_path)).get("cfg", {})
+        val_mode = cfg.get("val_mode", "customers")
+    else:
+        # final.json is written only when a run ENDS. Guessing the default here
+        # would silently mislabel an in-progress late-mode run as "customers".
+        cfg, val_mode = {}, "unknown"
+        print("  (run in progress: final.json not written yet, so val_mode is "
+              "unknown -- check the job log's [split] line)")
 
     ep_val = min(h, key=lambda e: e["nll"])["epoch"]
     ep_ho = min(tracked, key=lambda e: e[f"{CELL}_nll"])["epoch"]
@@ -79,9 +86,9 @@ def analyse(hist_path: str) -> Optional[Dict[str, Any]]:
     k = CELL
 
     # ---- per-epoch table ------------------------------------------------
-    print(f"  val_mode={val_mode}"
-          + (f" (validation = campaign >= {cfg.get('val_from')})" if val_mode == "late" else
-             " (validation = held-out customers x calibration period)"))
+    desc = {"late": f" (validation = campaign >= {cfg.get('val_from')})",
+            "customers": " (validation = held-out customers x calibration period)"}
+    print(f"  val_mode={val_mode}{desc.get(val_mode, '')}")
     print(f"\n  {'ep':>3} | {'val NLL':>8} | {'HO NLL':>8} {'HO prior-m':>11} "
           f"{'HO H(y)':>8} {'gain':>7} {'TV':>6}")
     for e in tracked:
