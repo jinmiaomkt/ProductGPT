@@ -68,6 +68,7 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R15 | Sep 11 2026 | In/out-sample gap across epochs, both diag runs | Does knowing a customer help at the honest epoch? | **No.** At the holdout optimum the embedding's gap equals the no-embedding model's pure cohort gap. Late-epoch sign flip is an over-training artefact | Heterogeneity finding stands, now controlled |
 | R16 | Sep 12 2026 | Gate: does late-calibration validation track the holdout? | Validation shifted in time can detect temporal drift | **Passes.** Selection cost 0.0000 / 0.0000 / 0.0006 nats (transformer no-emb / emb / GRU) against +0.211 for the old validation | `val_mode="late"` is now the default; batch 2 launched |
 | R17 | Sep 12 2026 | GRU baseline vs transformer, matched pipeline | The transformer beats a recurrent baseline | **Wrong, and not close.** GRU holdout NLL 0.8818 vs 1.0062 for the best transformer, F1 0.605 vs 0.590, with 45% fewer parameters | Baselines become a headline result, not a formality |
+| R18 | Sep 12 2026 | Component ablation + recency bias + features-only products (batch 3, 6 screening runs) | The transformer's early holdout peak is campaign memorisation via product identity in the offer stream; attention lacks recency; the cross-attention may or may not earn its cost | _pending_ | _pending_ |
 
 ---
 
@@ -551,3 +552,35 @@ And neither architecture has been tuned; both use the same learning rate and
 dropout, which need not suit both equally.
 
 Batch 2 (24 runs, three seeds) tests whether it survives replication.
+
+### R18 — why does the transformer peak at epoch 1–3? (hypothesis, pre-registered)
+
+**Observation.** The transformer's holdout optimum is at epoch 1–3 and degrades
+after; the GRU's is at 24+ and still improving; the GRU wins by 0.12–0.15 nats
+on the same feature pipeline (R17). S=512 ≈ S=1024; dropout helps a lot;
+the customer embedding adds nothing out of sample (R15).
+
+**Hypothesis (H2).** Every product token is `id_embed(t) + γ·feat_proj(features)`.
+The identity road is a lookup — fast to learn and a better fit to the
+calibration data, because campaign-specific quirks live there. The LTO stream
+is a campaign fingerprint (which products are on offer identifies the
+campaign), so identity-conditioned patterns are campaign memorisation. Holdout
+campaigns 28–30 have banners never seen in training; identity knowledge is
+worthless there. Attention over the full history picks this shortcut up
+easily; a GRU's 128-d recurrent bottleneck cannot carry campaign identity as
+easily and is pushed toward the attribute road, which transfers.
+
+**Predictions, stated before the runs.**
+1. `tf_noid` (products by attributes only): the holdout optimum moves to a
+   LATER epoch and improves. If it does not move, H2 is wrong.
+2. `gru_noid`: a smaller gain than for the transformer, or none.
+3. `tf_alibi` (recency bias): later optimum, some improvement — a remedy for
+   the same problem by a different route.
+4. `gru_cross` vs `gru_nocross` and `b2_tf_noemb` vs `tf_nocross`: whether the
+   O(S²) offer-inventory cross-attention earns its cost on either encoder.
+
+**Design.** Six screening runs, seed 1, S=1024, no customer embedding, late
+validation, holdout tracked every epoch (`TRACK_HOLDOUT=1`) so the position of
+the optimum is observed, not inferred. `scripts/submit_batch3.sh`. Winners get
+three seeds. Together with batch 2's `tf_noemb` and `gru` arms these complete
+the 2×2 {encoder: attention, GRU} × {cross-attention: on, off}.

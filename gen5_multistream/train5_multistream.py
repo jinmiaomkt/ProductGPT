@@ -644,6 +644,18 @@ def main() -> None:
                     help="First campaign of the late validation block "
                          "(val-mode=late). Default 27: one campaign, about the "
                          "size of the whole holdout block.")
+    ap.add_argument("--encoder", choices=["transformer", "gru"], default=None,
+                    help="Sequence encoder INSIDE the gen-5 model. Unlike "
+                         "--arch gru, this keeps the inventory GRU and the "
+                         "offer-inventory cross-attention.")
+    ap.add_argument("--no-cross-attn", action="store_true",
+                    help="Drop the offer-inventory cross-attention (z_sat).")
+    ap.add_argument("--alibi", action="store_true",
+                    help="ALiBi recency bias in the attention stack.")
+    ap.add_argument("--no-product-id", action="store_true",
+                    help="Represent products by attributes only (no identity "
+                         "embedding). Tests campaign memorisation via the "
+                         "offer stream.")
     ap.add_argument("--arch", choices=["transformer", "gru", "lstm"], default=None,
                     help="Sequence encoder. gru/lstm share the transformer's "
                          "feature lookup and within-event pooling and differ "
@@ -710,6 +722,17 @@ def main() -> None:
         cfg["val_from"] = args.val_from
     if args.arch is not None:
         cfg["arch"] = args.arch
+    if args.encoder is not None:
+        cfg["encoder"] = args.encoder
+    if args.no_cross_attn:
+        cfg["use_offer_inventory_attn"] = False
+    if args.alibi:
+        cfg["attn_recency_bias"] = True
+    if args.no_product_id:
+        cfg["product_id_embed"] = False
+    print(f"[cfg] arch={cfg.get('arch')} encoder={cfg.get('encoder')} "
+          f"cross_attn={cfg.get('use_offer_inventory_attn')} "
+          f"alibi={cfg.get('attn_recency_bias')} product_id={cfg.get('product_id_embed')}")
     cfg["track_holdout"] = bool(args.track_holdout)
     if cfg["track_holdout"]:
         print("[cfg] --track-holdout: holdout cells scored EVERY epoch as a "
@@ -741,6 +764,7 @@ def main() -> None:
             feature_tensor=feat,
             num_users=num_users,
             use_user_embedding=cfg["use_user_embedding"],
+            product_id_embed=cfg.get("product_id_embed", True),
         ).to(device)
     else:
         model = build_transformer(
@@ -760,6 +784,10 @@ def main() -> None:
             prev_dec_len=cfg["prev_dec_len"],
             use_user_embedding=cfg["use_user_embedding"],
             num_mix_heads=cfg.get("num_mix_heads", 0),
+            encoder=cfg.get("encoder", "transformer"),
+            use_offer_inventory_attn=cfg.get("use_offer_inventory_attn", True),
+            attn_recency_bias=cfg.get("attn_recency_bias", False),
+            product_id_embed=cfg.get("product_id_embed", True),
         ).to(device)
 
     n_par = sum(p.numel() for p in model.parameters())

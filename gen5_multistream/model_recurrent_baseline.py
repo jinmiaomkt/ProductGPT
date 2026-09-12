@@ -67,6 +67,7 @@ class RecurrentBaseline(nn.Module):
         feature_tensor: torch.Tensor,
         num_users: Optional[int] = None,
         use_user_embedding: bool = False,
+        product_id_embed: bool = True,
     ):
         super().__init__()
         cell = cell.lower()
@@ -77,7 +78,8 @@ class RecurrentBaseline(nn.Module):
         product_ids = list(range(FIRST_PROD_ID, LAST_PROD_ID + 1)) + [UNK_PROD_ID]
         self.product_embed = SpecialPlusFeatureLookup(
             d_model=d_model, feature_tensor=feature_tensor,
-            product_ids=product_ids, vocab_size_src=vocab_size_src)
+            product_ids=product_ids, vocab_size_src=vocab_size_src,
+            product_id_embed=product_id_embed)
         self.decision_embed = nn.Embedding(vocab_size_src, d_model)
         self.offer_pool = AttentionPool(d_model, dropout)
         self.outcome_pool = AttentionPool(d_model, dropout)
@@ -155,9 +157,11 @@ def build_recurrent_baseline(cell: str, vocab_size_src: int, vocab_size_tgt: int
                              dropout: float, feature_tensor: torch.Tensor,
                              num_users: Optional[int] = None,
                              use_user_embedding: bool = False,
+                             product_id_embed: bool = True,
                              **_ignored) -> RecurrentBaseline:
     return RecurrentBaseline(
         cell=cell, vocab_size_src=vocab_size_src, vocab_size_tgt=vocab_size_tgt,
         d_model=d_model, n_layers=n_layers, d_ff=d_ff, dropout=dropout,
         feature_tensor=feature_tensor, num_users=num_users,
-        use_user_embedding=use_user_embedding)
+        use_user_embedding=use_user_embedding,
+        product_id_embed=product_id_embed)

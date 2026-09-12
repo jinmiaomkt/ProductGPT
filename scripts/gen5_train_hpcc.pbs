@@ -110,6 +110,14 @@ SEED="${SEED:-}"
 VAL_MODE="${VAL_MODE:-}"
 VAL_FROM="${VAL_FROM:-}"
 ARCH="${ARCH:-}"
+#   ENCODER=gru     sequence encoder inside gen-5 (keeps cross-attn + inventory GRU)
+#   CROSS_ATTN=0    drop the offer-inventory cross-attention
+#   ALIBI=1         recency bias in the attention stack
+#   PROD_ID=0       products by attributes only, no identity embedding
+ENCODER="${ENCODER:-}"
+CROSS_ATTN="${CROSS_ATTN:-}"
+ALIBI="${ALIBI:-}"
+PROD_ID="${PROD_ID:-}"
 
 # Stop cleanly ~30 min before the 24h walltime so last.pt is written and the
 # job can be resubmitted with RESUME=1 instead of losing the run.
@@ -220,6 +228,10 @@ args=(
 [[ -n "$VAL_MODE" ]] && args+=(--val-mode "$VAL_MODE")
 [[ -n "$VAL_FROM" ]] && args+=(--val-from "$VAL_FROM")
 [[ -n "$ARCH" ]] && args+=(--arch "$ARCH")
+[[ -n "$ENCODER" ]] && args+=(--encoder "$ENCODER")
+[[ "$CROSS_ATTN" == "0" ]] && args+=(--no-cross-attn)
+[[ "$ALIBI" == "1" ]] && args+=(--alibi)
+[[ "$PROD_ID" == "0" ]] && args+=(--no-product-id)
 
 echo "Command: python gen5_multistream/train5_multistream.py ${args[*]}"
 echo

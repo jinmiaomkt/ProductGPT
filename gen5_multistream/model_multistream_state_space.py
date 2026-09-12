@@ -31,10 +31,18 @@ class SpecialPlusFeatureLookup(nn.Module):
         feature_tensor: torch.Tensor,
         product_ids: list[int],
         vocab_size_src: int,
+        product_id_embed: bool = True,
     ):
         super().__init__()
         self.d_model = int(d_model)
         self.feature_dim = int(feature_tensor.size(1))
+        # product_id_embed=False removes the identity road for PRODUCT tokens:
+        # they are represented by their attributes only, so two products with
+        # the same features are indistinguishable. Special tokens (PAD, SOS,
+        # decisions) have no features and keep their id embedding. This tests
+        # whether the transformer's early holdout peak comes from memorising
+        # campaign identity through the offer stream (EXPERIMENTS.md R18).
+        self.product_id_embed = bool(product_id_embed)
 
         self.id_embed = nn.Embedding(vocab_size_src, d_model)
         self.feat_proj = nn.Linear(self.feature_dim, d_model, bias=False)
@@ -65,6 +73,8 @@ class SpecialPlusFeatureLookup(nn.Module):
 
         keep = self.prod_mask[ids]
         feat_vec = feat_vec * keep.unsqueeze(-1)
+        if not self.product_id_embed:
+            id_vec = id_vec * (~keep).unsqueeze(-1)
 
         return id_vec + self.gamma * feat_vec
 
@@ -226,8 +236,21 @@ class CausalEventTransformer(nn.Module):
         n_heads: int,
         d_ff: int,
         dropout: float,
+        recency_bias: bool = False,
     ):
         super().__init__()
+        # ALiBi (Press et al. 2022): subtract slope_h * (i - j) from the
+        # attention logit of query i on key j, with a fixed geometric slope per
+        # head. No parameters. It gives attention a preference for RECENT
+        # events that it otherwise lacks entirely -- this stack has no
+        # positional encoding, so without it "one event ago" and "fifty events
+        # ago" are indistinguishable except through the causal mask. A GRU has
+        # recency built in; this is the cheapest way to hand it to attention.
+        self.recency_bias = bool(recency_bias)
+        self.n_heads = int(n_heads)
+        if self.recency_bias:
+            self.register_buffer("alibi_slopes", self._alibi_slopes(n_heads),
+                                 persistent=False)
         layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=n_heads,
@@ -240,17 +263,39 @@ class CausalEventTransformer(nn.Module):
         self.encoder = nn.TransformerEncoder(layer, num_layers=n_layers)
         self.norm = nn.LayerNorm(d_model)
 
+    @staticmethod
+    def _alibi_slopes(n_heads: int) -> torch.Tensor:
+        """Geometric slopes 2^(-8/H), 2^(-16/H), ... as in the ALiBi paper."""
+        def pow2(n):
+            start = 2 ** (-(2 ** -(math.log2(n) - 3)))
+            return [start * (start ** i) for i in range(n)]
+        if math.log2(n_heads).is_integer():
+            return torch.tensor(pow2(n_heads))
+        closest = 2 ** math.floor(math.log2(n_heads))
+        extra = pow2(2 * closest)[0::2][: n_heads - closest]
+        return torch.tensor(pow2(closest) + extra)
+
     def forward(self, r: torch.Tensor) -> torch.Tensor:
         """
         r: (B,S,D)
         returns: (B,S,D)
         """
-        S = r.size(1)
-        causal_mask = torch.triu(
-            torch.ones(S, S, device=r.device, dtype=torch.bool),
-            diagonal=1,
-        )
-        return self.norm(self.encoder(r, mask=causal_mask))
+        B, S = r.size(0), r.size(1)
+        if not self.recency_bias:
+            causal_mask = torch.triu(
+                torch.ones(S, S, device=r.device, dtype=torch.bool),
+                diagonal=1,
+            )
+            return self.norm(self.encoder(r, mask=causal_mask))
+
+        # Additive float mask, one per (batch, head), batch-major as
+        # nn.MultiheadAttention expects: index = b * n_heads + h.
+        pos = torch.arange(S, device=r.device)
+        dist = (pos[:, None] - pos[None, :]).clamp_min(0).to(r.dtype)   # (S,S)
+        bias = -self.alibi_slopes.to(r.dtype)[:, None, None] * dist    # (H,S,S)
+        bias = bias.masked_fill(pos[None, :] > pos[:, None], float("-inf"))
+        mask = bias.unsqueeze(0).expand(B, -1, -1, -1).reshape(B * self.n_heads, S, S)
+        return self.norm(self.encoder(r, mask=mask))
 
 
 class UserMixtureOutputHead(nn.Module):
@@ -378,8 +423,22 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         use_user_embedding: bool = True,
         num_mix_heads: int = 0,
         return_attention_default: bool = False,
+        encoder: str = "transformer",
+        use_offer_inventory_attn: bool = True,
+        attn_recency_bias: bool = False,
+        product_id_embed: bool = True,
     ):
         super().__init__()
+        # Component ablation switches (EXPERIMENTS.md R18). Together with the
+        # separate RecurrentBaseline they form a 2x2 over
+        #   {sequence encoder: attention, GRU} x {offer-inventory cross-attn: on, off}
+        # plus a recency-bias arm and a features-only-product arm, so each
+        # piece of the architecture can be credited or blamed on its own.
+        encoder = str(encoder).lower()
+        if encoder not in ("transformer", "gru"):
+            raise ValueError(f"encoder must be 'transformer' or 'gru', got {encoder!r}")
+        self.encoder_kind = encoder
+        self.use_offer_inventory_attn = bool(use_offer_inventory_attn)
 
         if ai_rate != lto_len + obtained_len + prev_dec_len:
             raise ValueError(
@@ -406,6 +465,7 @@ class MultiStreamStateSpaceTransformer(nn.Module):
             feature_tensor=feature_tensor,
             product_ids=product_ids,
             vocab_size_src=vocab_size_src,
+            product_id_embed=product_id_embed,
         )
 
         self.decision_embed = nn.Embedding(vocab_size_src, d_model)
@@ -419,11 +479,9 @@ class MultiStreamStateSpaceTransformer(nn.Module):
             batch_first=True,
         )
 
-        self.offer_inventory_attn = OfferInventoryCrossAttention(
-            d_model=d_model,
-            n_heads=n_heads,
-            dropout=dropout,
-        )
+        self.offer_inventory_attn = (
+            OfferInventoryCrossAttention(d_model=d_model, n_heads=n_heads, dropout=dropout)
+            if self.use_offer_inventory_attn else None)
 
         self.use_user_embedding = bool(use_user_embedding and num_users is not None)
         if self.use_user_embedding:
@@ -432,7 +490,8 @@ class MultiStreamStateSpaceTransformer(nn.Module):
             self.user_embed = None
 
         # Event fusion: [z_x, z_sat, z_o, z_y, h_H] plus optional user embedding.
-        fusion_in = 5 * d_model + (d_model if self.use_user_embedding else 0)
+        n_pieces = 5 if self.use_offer_inventory_attn else 4   # z_x, [z_sat], z_o, z_y, h_H
+        fusion_in = n_pieces * d_model + (d_model if self.use_user_embedding else 0)
         self.event_fusion = nn.Sequential(
             nn.LayerNorm(fusion_in),
             nn.Linear(fusion_in, d_ff),
@@ -442,13 +501,28 @@ class MultiStreamStateSpaceTransformer(nn.Module):
             nn.LayerNorm(d_model),
         )
 
-        self.event_model = CausalEventTransformer(
-            d_model=d_model,
-            n_layers=n_layers,
-            n_heads=n_heads,
-            d_ff=d_ff,
-            dropout=dropout,
-        )
+        if self.encoder_kind == "transformer":
+            self.event_model = CausalEventTransformer(
+                d_model=d_model,
+                n_layers=n_layers,
+                n_heads=n_heads,
+                d_ff=d_ff,
+                dropout=dropout,
+                recency_bias=attn_recency_bias,
+            )
+        else:
+            # Stacked single-layer GRUs with explicit inter-layer dropout: the
+            # same model as nn.GRU(num_layers=N, dropout=p) but without the
+            # cuDNN dropout-state teardown crash on Windows (see
+            # model_recurrent_baseline.py). Everything upstream -- streams,
+            # pooling, inventory GRU, cross-attention -- is untouched, so this
+            # arm isolates the sequence encoder.
+            self.event_model = nn.ModuleList(
+                nn.GRU(input_size=d_model, hidden_size=d_model, num_layers=1,
+                       batch_first=True)
+                for _ in range(n_layers))
+            self.event_model_dropout = nn.Dropout(dropout)
+            self.event_model_norm = nn.LayerNorm(d_model)
 
         # num_mix_heads > 0 swaps the final projection for Lu & Kannan's
         # per-customer mixture over H projections. The pre-head MLP is kept
@@ -546,7 +620,9 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         h_H, _ = self.inventory_gru(z_o)            # (B,S,D)
 
         # 4. Current offer attends to cumulative inventory tokens.
-        if return_attention:
+        if self.offer_inventory_attn is None:
+            z_sat, sat_attn = None, None
+        elif return_attention:
             z_sat, sat_attn = self.offer_inventory_attn(
                 offer_tok=lto_tok,
                 inventory_tok=out_tok,
@@ -565,7 +641,7 @@ class MultiStreamStateSpaceTransformer(nn.Module):
             sat_attn = None
 
         # 5. Event representation r_t.
-        pieces = [z_x, z_sat, z_o, z_y, h_H]
+        pieces = [z_x, z_o, z_y, h_H] if z_sat is None else [z_x, z_sat, z_o, z_y, h_H]
 
         if self.use_user_embedding and user_idx is not None:
             z_u = self.user_embed(user_idx.long())                 # (B,D)
@@ -575,7 +651,16 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         r = self.event_fusion(torch.cat(pieces, dim=-1))           # (B,S,D)
 
         # 6. Causal sequence model over event representations.
-        s = self.event_model(r)                                    # (B,S,D)
+        if self.encoder_kind == "transformer":
+            s = self.event_model(r)                                # (B,S,D)
+        else:
+            s = r.contiguous()
+            last = len(self.event_model) - 1
+            for i, gru in enumerate(self.event_model):
+                s, _ = gru(s)
+                if i < last:
+                    s = self.event_model_dropout(s).contiguous()
+            s = self.event_model_norm(s)
 
         # 7. Decision logits.
         h = self.head_trunk(s)
@@ -635,4 +720,8 @@ def build_transformer(
         use_user_embedding=kwargs.get("use_user_embedding", True),
         num_mix_heads=kwargs.get("num_mix_heads", 0),
         return_attention_default=kwargs.get("return_attention_default", False),
+        encoder=kwargs.get("encoder", "transformer"),
+        use_offer_inventory_attn=kwargs.get("use_offer_inventory_attn", True),
+        attn_recency_bias=kwargs.get("attn_recency_bias", False),
+        product_id_embed=kwargs.get("product_id_embed", True),
     )

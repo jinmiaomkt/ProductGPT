@@ -150,6 +150,18 @@ def _base() -> Dict[str, Any]:
         # "transformer" (the gen-5 model), or "gru" / "lstm" baselines that
         # share its feature pipeline and differ only in the sequence encoder.
         "arch": "transformer",
+        # Component ablations INSIDE the gen-5 model (R18). Unlike arch=gru,
+        # encoder="gru" keeps the inventory GRU and the offer-inventory
+        # cross-attention and swaps only the event-level sequence model.
+        "encoder": "transformer",
+        "use_offer_inventory_attn": True,
+        # ALiBi recency bias in the attention stack. Off = the stack has no
+        # notion of order beyond the causal mask.
+        "attn_recency_bias": False,
+        # False = products are represented by attributes only, no identity
+        # embedding. Tests whether the early holdout peak is campaign
+        # memorisation through the offer stream.
+        "product_id_embed": True,
 
         # ---------- output ----------
         "run_name": "gen5_multistream",
