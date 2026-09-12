@@ -27,6 +27,7 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
 | 40859–40882 | `b2_*` (24 runs) | 2026-09-12 | Seeded replication: 4 transformer variants, GRU and LSTM baselines, dropout sweep (0.10/0.25/0.40/0.55), 3 seeds each | Running |
+| 40883–40888 | `b3_*` (6 runs) | 2026-09-12 | R18 screening: features-only products (tf, gru), ALiBi, GRU encoder ± cross-attn, transformer − cross-attn; seed 1, holdout tracked | Queued behind batch 2 |
 
 All at S=1024, `VAL_MODE=late`, EPOCHS=40, default patience. Submitted by
 `scripts/submit_batch2.sh`; read with `python3 scripts/summarize_batch.py`.
