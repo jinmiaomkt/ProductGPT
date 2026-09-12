@@ -110,9 +110,11 @@ def _base() -> Dict[str, Any]:
         #                it improved for 34 epochs while holdout NLL worsened.
         #   "late":      in-sample customers x the last calibration campaigns
         #                (>= val_from). Sits just before the holdout in time.
-        # Default stays "customers" until the late mode is shown to track the
-        # holdout; flip it once that is confirmed.
-        "val_mode": "customers",
+        # Default is "late" since 12 Sep 2026: the gate passed on all three
+        # architectures tested (transformer with and without the customer
+        # embedding, and the GRU baseline), with a selection cost of 0.0000,
+        # 0.0000 and 0.0006 nats against 0.211 for "customers". See R16.
+        "val_mode": "late",
         # Campaign 27 alone is ~378k rows, about the size of the entire
         # holdout block (28-30, ~440k). Campaigns 25-27 would be 32% of ALL
         # rows and strip the most recent third of calibration from training.

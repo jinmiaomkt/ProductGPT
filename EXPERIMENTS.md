@@ -70,6 +70,8 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R13 | Sep 10 2026 | Per-epoch holdout tracking, both architectures | Separate training length from architecture | **Training length. Decisively.** Holdout peaks at epoch 3-4 in BOTH models while validation improves to epoch 10 and 34. Both architectures reach the SAME holdout optimum (1.0194 vs 1.0158) | Validation must be temporally shifted. Cross-run rankings at different epochs are void (see R14 for what survives) |
 | R14 | Sep 11 2026 | v2 arms at S=1024 (40760-63), and which conclusions survive R13 | Separate matched-epoch comparisons from confounded ones | Augmentation no-op and dropout 0.25 gain both hold at matched epochs; S=512 ≈ S=1024 holds | Dropout sweep is justified; architecture comparisons wait for temporal validation |
 | R15 | Sep 11 2026 | In/out-sample gap across epochs, both diag runs | Does knowing a customer help at the honest epoch? | **No.** At the holdout optimum the embedding's gap equals the no-embedding model's pure cohort gap. Late-epoch sign flip is an over-training artefact | Heterogeneity finding stands, now controlled |
+| R16 | Sep 12 2026 | Gate: does late-calibration validation track the holdout? | Validation shifted in time can detect temporal drift | **Passes.** Selection cost 0.0000 / 0.0000 / 0.0006 nats (transformer no-emb / emb / GRU) against +0.211 for the old validation | `val_mode="late"` is now the default; batch 2 launched |
+| R17 | Sep 12 2026 | GRU baseline vs transformer, matched pipeline | The transformer beats a recurrent baseline | **Wrong, and not close.** GRU holdout NLL 0.8818 vs 1.0062 for the best transformer, F1 0.605 vs 0.590, with 45% fewer parameters | Baselines become a headline result, not a formality |
 
 ---
 
@@ -504,3 +506,52 @@ against 1.0354 → 1.3209). Out-of-sample customers receive ω̄, the mean of th
 trained embeddings; as those over-specialise, their mean becomes a poor stand-in
 for anyone. That is an over-training artefact, and it is also why an
 over-trained embedded model can *appear* to show heterogeneity when it does not.
+
+### R16 — late validation tracks the holdout (gate passed)
+
+Four runs, all S=1024, batch 4, dropout 0.10, no augmentation, no mixture
+heads, holdout tracked every epoch.
+
+| Run | Validation mode | Val picks | Holdout peaks | Cost |
+|---|---|---|---|---|
+| transformer, no embedding | late (campaign 27) | epoch 1 | epoch 1 | **0.0000 nats** |
+| transformer, embedding | late | epoch 3 | epoch 3 | **0.0000 nats** |
+| GRU baseline | late | epoch 17 | epoch 24 | **0.0006 nats** |
+| transformer, no embedding | customers (old) | epoch 32 | epoch 2 | **+0.211 nats** |
+
+The old design is worse than R13 measured (0.211 against 0.155), and the new
+one is free on every architecture tried. `val_mode="late"` is now the config
+default.
+
+**Step 1 resolved: drift, not under-training.** The epoch-1 model beats the
+best constant predictor by 0.63 nats, so it is not merely reproducing class
+frequencies. Of the degradation that follows, 82% survives an oracle
+prior-matching correction, i.e. it is a change in P(decision | history), not a
+change in class frequencies (18%). The class mix does move between periods
+(total variation 0.107), but that is not what costs the model its accuracy.
+
+### R17 — the GRU baseline beats the transformer
+
+Same feature pipeline (identical product-feature lookup, within-event pooling
+and decision embedding); the only difference is how events combine over time.
+
+| | GRU | Transformer (emb) | Transformer (no emb) |
+|---|---|---|---|
+| parameters | **669,077** | 1,905,430 | 1,215,382 |
+| validation NLL | **0.9194** | 0.9933 | 1.0347 |
+| in-sample × holdout NLL | **0.8968** | 1.0256 | 1.0320 |
+| out-of-sample × holdout NLL | **0.8818** | 1.0062 | 1.0159 |
+| holdout macro F1 | **0.605** | 0.590 | 0.585 |
+| gain over constant predictor | **+0.765 nats** | +0.640 | +0.631 |
+
+The recurrent baseline wins on every cell, by 0.12–0.15 nats, with 45% fewer
+parameters than the smaller transformer. It also wins on the calibration-period
+cell, so this is not a drift artefact.
+
+Three caveats before this is quoted. It is a single seed. The GRU had **not
+converged** — its holdout optimum is at the last epoch run (24 of 25), so its
+number may improve further, while the transformers are at interior optima.
+And neither architecture has been tuned; both use the same learning rate and
+dropout, which need not suit both equally.
+
+Batch 2 (24 runs, three seeds) tests whether it survives replication.
