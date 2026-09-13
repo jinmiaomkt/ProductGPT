@@ -69,6 +69,7 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R17 | Sep 12 2026 | GRU baseline vs transformer, matched pipeline | The transformer beats a recurrent baseline | **Wrong, and not close.** GRU holdout NLL 0.8818 vs 1.0062 for the best transformer, F1 0.605 vs 0.590, with 45% fewer parameters | Baselines become a headline result, not a formality |
 | R18 | Sep 13 2026 | Component ablation + recency bias + attributes-only products (batch 3) | Early holdout peak = campaign memorisation via product identity | **Prediction failed; the cause is recency.** Attributes-only did not move the optimum (still epoch 3). ALiBi moved it to epoch 19 and closed the gap: 0.888 vs GRU 0.880 +/- 0.008. Cross-attention worth 0.03-0.04 nats on both encoders | Batch 4: seed the winners and combine ALiBi with dropout 0.55 |
 | R19 | Sep 13 2026 | Batch 4: tf_alibi x {plain, do25, do55, noid} and gru_cross, 3 seeds each | Attention + recency + cross-attention beats the GRU by more than seed noise | _pending_ | _pending_ |
+| R20 | Sep 13 2026 | Recency measured in HOURS rather than events (batch 5, 6 runs) | Elapsed-time recency beats ordinal recency, because the event index mixes a minutes-scale burst clock with a weeks-scale silence clock | _pending_ | _pending_ |
 
 ---
 
@@ -665,3 +666,39 @@ but the cross-attention is worth keeping on either.
 If no transformer variant beats the GRU by more than ~0.02 across seeds, the
 honest conclusion is that on this data attention buys interpretability (the
 satiation cross-attention) and not accuracy, and the paper should say so.
+
+### R20 — pre-registered: is recency better measured in hours than in events?
+
+R18 established that the transformer's deficit was the absence of any recency
+signal; a zero-parameter ordinal bias closed the whole gap to the GRU. But the
+ordinal index is the wrong ruler for this data. R9 measured why: 46.5% of true
+inter-purchase gaps round to zero at the field's 36-second resolution, while
+the longest is 2,401 hours. Ten pulls four minutes apart and a three-week
+silence are both "one event ago".
+
+**Implementation.** `--time-bias time` replaces the ordinal distance with
+elapsed hours, taken from `IPT.cumsum()` over the row sequence (correct in the
+discrete representation, where inserted rows are rows — the censoring caveat
+in R9 only applies if inserted rows are dropped). The penalty is
+`s_h · log1p(t_i − t_j)` with a learnable per-head decay: log1p compresses the
+0–2,401 h range to 0–7.8, so the fixed ALiBi schedule would be far too gentle,
+and the rate is learned rather than guessed (initialised at 16× the ALiBi
+values, softplus-constrained positive). Cost: **+n_heads parameters**.
+
+Verified by unit test before submission — for the same event-index distance of
+five steps, the head-0 penalty is −0.32 across a burst of one-minute gaps and
+−26.94 across weekly gaps; causal masking, zero self-penalty, monotonicity and
+gradient flow to the decay rates all hold. `--time-bias ordinal` reproduces
+`--alibi` numerically, so the arms differ only in the ruler.
+
+**Predictions.** Time-based recency beats ordinal by more than seed noise
+(~0.009 nats), because it can distinguish the two clocks. If it merely ties,
+the useful signal is "recency of any kind", which is a weaker but still
+publishable claim and points at the continuous-time model rather than at
+better position encoding. If it is *worse*, the likely cause is the learnable
+decay being harder to optimise than a fixed schedule, and a fixed-scale
+variant should be tried before abandoning it.
+
+**Design.** `tb_time` and `tb_time_do55`, three seeds each
+(`scripts/submit_batch5.sh`). The ordinal comparison is batch 4's `tf_alibi`
+and `tf_alibi_do55` at the same three seeds, so only the ruler changes.

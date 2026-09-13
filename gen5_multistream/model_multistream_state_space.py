@@ -237,6 +237,7 @@ class CausalEventTransformer(nn.Module):
         d_ff: int,
         dropout: float,
         recency_bias: bool = False,
+        time_bias: str = "none",
     ):
         super().__init__()
         # ALiBi (Press et al. 2022): subtract slope_h * (i - j) from the
@@ -246,11 +247,33 @@ class CausalEventTransformer(nn.Module):
         # positional encoding, so without it "one event ago" and "fifty events
         # ago" are indistinguishable except through the causal mask. A GRU has
         # recency built in; this is the cheapest way to hand it to attention.
+        # time_bias: "none" | "ordinal" | "time".
+        #   ordinal  ALiBi on event distance (i - j). Fixed slopes, no params.
+        #   time     ALiBi on ELAPSED HOURS, log-compressed: the penalty is
+        #            s_h * log1p(t_i - t_j). The event index here mixes two
+        #            clocks -- a burst of pulls minutes apart and a three-week
+        #            silence are both "one event ago" -- so ordinal distance is
+        #            the wrong ruler even though it already helps.
+        #
+        # The slopes are LEARNABLE in time mode. log1p(hours) spans ~0-7.8 over
+        # the observed range of gaps (max 2,401 h), against ~0-1024 for the
+        # ordinal index, so the fixed ALiBi schedule is far too gentle on that
+        # scale. Rather than guess a scale factor, the per-head decay rate is
+        # learned, initialised at 16x the ALiBi values to put it in range.
+        # softplus keeps it positive, so the bias can never reward distance.
         self.recency_bias = bool(recency_bias)
+        self.time_bias = str(time_bias).lower()
+        if self.time_bias not in ("none", "ordinal", "time"):
+            raise ValueError(f"time_bias must be none|ordinal|time, got {time_bias!r}")
+        if self.recency_bias and self.time_bias == "none":
+            self.time_bias = "ordinal"      # --alibi is an alias for ordinal
         self.n_heads = int(n_heads)
-        if self.recency_bias:
+        if self.time_bias == "ordinal":
             self.register_buffer("alibi_slopes", self._alibi_slopes(n_heads),
                                  persistent=False)
+        elif self.time_bias == "time":
+            init = torch.log(torch.expm1(self._alibi_slopes(n_heads) * 16.0))
+            self.time_slopes_raw = nn.Parameter(init)
         layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=n_heads,
@@ -275,13 +298,16 @@ class CausalEventTransformer(nn.Module):
         extra = pow2(2 * closest)[0::2][: n_heads - closest]
         return torch.tensor(pow2(closest) + extra)
 
-    def forward(self, r: torch.Tensor) -> torch.Tensor:
+    def forward(self, r: torch.Tensor,
+                event_time: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
-        r: (B,S,D)
-        returns: (B,S,D)
+        r:          (B,S,D)
+        event_time: (B,S) cumulative hours since the sequence start. Required
+                    when time_bias == "time".
+        returns:    (B,S,D)
         """
         B, S = r.size(0), r.size(1)
-        if not self.recency_bias:
+        if self.time_bias == "none":
             causal_mask = torch.triu(
                 torch.ones(S, S, device=r.device, dtype=torch.bool),
                 diagonal=1,
@@ -291,11 +317,26 @@ class CausalEventTransformer(nn.Module):
         # Additive float mask, one per (batch, head), batch-major as
         # nn.MultiheadAttention expects: index = b * n_heads + h.
         pos = torch.arange(S, device=r.device)
-        dist = (pos[:, None] - pos[None, :]).clamp_min(0).to(r.dtype)   # (S,S)
-        bias = -self.alibi_slopes.to(r.dtype)[:, None, None] * dist    # (H,S,S)
-        bias = bias.masked_fill(pos[None, :] > pos[:, None], float("-inf"))
-        mask = bias.unsqueeze(0).expand(B, -1, -1, -1).reshape(B * self.n_heads, S, S)
-        return self.norm(self.encoder(r, mask=mask))
+        causal = pos[None, :] > pos[:, None]                            # (S,S)
+
+        if self.time_bias == "ordinal":
+            dist = (pos[:, None] - pos[None, :]).clamp_min(0).to(r.dtype)  # (S,S)
+            bias = -self.alibi_slopes.to(r.dtype)[:, None, None] * dist    # (H,S,S)
+            bias = bias.masked_fill(causal, float("-inf"))
+            mask = bias.unsqueeze(0).expand(B, -1, -1, -1)                 # (B,H,S,S)
+        else:
+            if event_time is None:
+                raise ValueError(
+                    "time_bias='time' needs event_time; the data file must "
+                    "carry an IPT field and the trainer must pass it through.")
+            t = event_time.to(r.dtype)                                     # (B,S)
+            dt = (t[:, :, None] - t[:, None, :]).clamp_min(0)              # (B,S,S)
+            slopes = F.softplus(self.time_slopes_raw).to(r.dtype)          # (H,)
+            bias = -slopes[None, :, None, None] * torch.log1p(dt)[:, None] # (B,H,S,S)
+            bias = bias.masked_fill(causal[None, None], float("-inf"))
+            mask = bias
+
+        return self.norm(self.encoder(r, mask=mask.reshape(B * self.n_heads, S, S)))
 
 
 class UserMixtureOutputHead(nn.Module):
@@ -426,6 +467,7 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         encoder: str = "transformer",
         use_offer_inventory_attn: bool = True,
         attn_recency_bias: bool = False,
+        attn_time_bias: str = "none",
         product_id_embed: bool = True,
     ):
         super().__init__()
@@ -509,6 +551,7 @@ class MultiStreamStateSpaceTransformer(nn.Module):
                 d_ff=d_ff,
                 dropout=dropout,
                 recency_bias=attn_recency_bias,
+                time_bias=attn_time_bias,
             )
         else:
             # Stacked single-layer GRUs with explicit inter-layer dropout: the
@@ -574,6 +617,7 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         obtained_ids: Optional[torch.Tensor] = None,
         prev_dec_ids: Optional[torch.Tensor] = None,
         user_idx: Optional[torch.Tensor] = None,
+        ipt: Optional[torch.Tensor] = None,
         projection_gate_mode: Optional[str] = None,
         return_hidden: bool = False,
         return_attention: Optional[bool] = None,
@@ -652,7 +696,13 @@ class MultiStreamStateSpaceTransformer(nn.Module):
 
         # 6. Causal sequence model over event representations.
         if self.encoder_kind == "transformer":
-            s = self.event_model(r)                                # (B,S,D)
+            # IPT is hours since the PREVIOUS ROW, so the cumulative sum is the
+            # elapsed time of each row since the sequence start. Inserted
+            # NotBuy rows are rows, so within this discrete representation the
+            # running total is correct -- the censoring problem noted in R9
+            # only bites if inserted rows are dropped.
+            event_time = ipt.cumsum(dim=1) if ipt is not None else None
+            s = self.event_model(r, event_time)                    # (B,S,D)
         else:
             s = r.contiguous()
             last = len(self.event_model) - 1
@@ -723,5 +773,6 @@ def build_transformer(
         encoder=kwargs.get("encoder", "transformer"),
         use_offer_inventory_attn=kwargs.get("use_offer_inventory_attn", True),
         attn_recency_bias=kwargs.get("attn_recency_bias", False),
+        attn_time_bias=kwargs.get("attn_time_bias", "none"),
         product_id_embed=kwargs.get("product_id_embed", True),
     )

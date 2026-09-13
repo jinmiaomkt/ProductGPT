@@ -158,6 +158,9 @@ def _base() -> Dict[str, Any]:
         # ALiBi recency bias in the attention stack. Off = the stack has no
         # notion of order beyond the causal mask.
         "attn_recency_bias": False,
+        # Ruler for that bias: "ordinal" (event distance) or "time" (elapsed
+        # hours from IPT, log-compressed, learnable per-head decay).
+        "attn_time_bias": "none",
         # False = products are represented by attributes only, no identity
         # embedding. Tests whether the early holdout peak is campaign
         # memorisation through the offer stream.

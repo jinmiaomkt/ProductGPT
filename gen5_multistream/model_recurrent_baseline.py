@@ -127,7 +127,10 @@ class RecurrentBaseline(nn.Module):
 
     def forward(self, lto_ids: torch.Tensor, obtained_ids: torch.Tensor,
                 prev_dec_ids: torch.Tensor,
-                user_idx: Optional[torch.Tensor] = None) -> torch.Tensor:
+                user_idx: Optional[torch.Tensor] = None,
+                ipt: Optional[torch.Tensor] = None) -> torch.Tensor:
+        # ipt is accepted and ignored: recurrence carries recency implicitly,
+        # and the trainer uses one call site for every architecture.
         lto_ids = lto_ids.long()
         obtained_ids = obtained_ids.long()
         prev_dec_ids = prev_dec_ids.long()

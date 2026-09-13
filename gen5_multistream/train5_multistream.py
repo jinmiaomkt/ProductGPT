@@ -237,11 +237,13 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device,
         prev = batch["prev_decision"].to(device, non_blocking=True)
         uid = batch["user_id"].to(device, non_blocking=True)
         tgt = batch["label"].to(device, non_blocking=True)
+        ipt = (batch["ipt"].to(device, non_blocking=True)
+               if "ipt" in batch else None)
 
         ctx = (torch.autocast("cuda", dtype=adtype)
                if adtype is not None else torch.autocast("cpu", enabled=False))
         with ctx:
-            logits = model(lto, obt, prev, uid)
+            logits = model(lto, obt, prev, uid, ipt)
         logits = logits.float()
 
         dec = logits[..., 1:1 + N_CLASSES]           # (B,S,9)
@@ -651,7 +653,14 @@ def main() -> None:
     ap.add_argument("--no-cross-attn", action="store_true",
                     help="Drop the offer-inventory cross-attention (z_sat).")
     ap.add_argument("--alibi", action="store_true",
-                    help="ALiBi recency bias in the attention stack.")
+                    help="ALiBi recency bias on ORDINAL event distance.")
+    ap.add_argument("--time-bias", choices=["none", "ordinal", "time"], default=None,
+                    help="Recency bias ruler. 'ordinal' = event distance "
+                         "(same as --alibi). 'time' = elapsed HOURS from IPT, "
+                         "log-compressed with a learnable per-head decay. The "
+                         "event index mixes two clocks here, so 'time' is the "
+                         "better ruler in principle -- R20 tests whether it is "
+                         "better in fact.")
     ap.add_argument("--no-product-id", action="store_true",
                     help="Represent products by attributes only (no identity "
                          "embedding). Tests campaign memorisation via the "
@@ -728,11 +737,15 @@ def main() -> None:
         cfg["use_offer_inventory_attn"] = False
     if args.alibi:
         cfg["attn_recency_bias"] = True
+        cfg["attn_time_bias"] = "ordinal"
+    if args.time_bias is not None:
+        cfg["attn_time_bias"] = args.time_bias
+        cfg["attn_recency_bias"] = args.time_bias != "none"
     if args.no_product_id:
         cfg["product_id_embed"] = False
     print(f"[cfg] arch={cfg.get('arch')} encoder={cfg.get('encoder')} "
           f"cross_attn={cfg.get('use_offer_inventory_attn')} "
-          f"alibi={cfg.get('attn_recency_bias')} product_id={cfg.get('product_id_embed')}")
+          f"time_bias={cfg.get('attn_time_bias')} product_id={cfg.get('product_id_embed')}")
     cfg["track_holdout"] = bool(args.track_holdout)
     if cfg["track_holdout"]:
         print("[cfg] --track-holdout: holdout cells scored EVERY epoch as a "
@@ -787,6 +800,7 @@ def main() -> None:
             encoder=cfg.get("encoder", "transformer"),
             use_offer_inventory_attn=cfg.get("use_offer_inventory_attn", True),
             attn_recency_bias=cfg.get("attn_recency_bias", False),
+            attn_time_bias=cfg.get("attn_time_bias", "none"),
             product_id_embed=cfg.get("product_id_embed", True),
         ).to(device)
 
@@ -863,13 +877,15 @@ def main() -> None:
             prev = batch["prev_decision"].to(device, non_blocking=True)
             uid = batch["user_id"].to(device, non_blocking=True)
             tgt = batch["label"].to(device, non_blocking=True)
+            ipt = (batch["ipt"].to(device, non_blocking=True)
+                   if "ipt" in batch else None)
             if not (tgt != PAD_ID).any():
                 continue
 
             ctx = (torch.autocast("cuda", dtype=adtype)
                    if adtype is not None else torch.autocast("cpu", enabled=False))
             with ctx:
-                logits = model(lto, obt, prev, uid)
+                logits = model(lto, obt, prev, uid, ipt)
                 loss = loss_fn(logits.float(), tgt) / accum
 
             if scaler.is_enabled():
