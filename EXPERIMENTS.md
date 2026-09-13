@@ -26,12 +26,10 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| 40859–40882 | `b2_*` (24 runs) | 2026-09-12 | Seeded replication: 4 transformer variants, GRU and LSTM baselines, dropout sweep (0.10/0.25/0.40/0.55), 3 seeds each | Running |
-| 40883–40888 | `b3_*` (6 runs) | 2026-09-12 | R18 screening: features-only products (tf, gru), ALiBi, GRU encoder ± cross-attn, transformer − cross-attn; seed 1, holdout tracked | Queued behind batch 2 |
+| see submit output | `b4_*` (15 runs) | 2026-09-13 | R19: seed the batch-3 winners; combine ALiBi with dropout | Queued |
 
-All at S=1024, `VAL_MODE=late`, EPOCHS=40, default patience. Submitted by
-`scripts/submit_batch2.sh`; read with `python3 scripts/summarize_batch.py`.
-Batch 1 (40852–40855) is complete and produced R16 and R17.
+Batches 1-3 (40852-40888) are complete and recorded as R16-R18.
+Read batch 4 with `python3 scripts/summarize_batch.py` once it lands.
 
 > **Always pass `MAX_EVENTS` explicitly — the PBS default is 512, not 1024.**
 > Jobs 40755–40758 omitted it and silently ran at 512 (recorded as R11).
@@ -69,7 +67,8 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R15 | Sep 11 2026 | In/out-sample gap across epochs, both diag runs | Does knowing a customer help at the honest epoch? | **No.** At the holdout optimum the embedding's gap equals the no-embedding model's pure cohort gap. Late-epoch sign flip is an over-training artefact | Heterogeneity finding stands, now controlled |
 | R16 | Sep 12 2026 | Gate: does late-calibration validation track the holdout? | Validation shifted in time can detect temporal drift | **Passes.** Selection cost 0.0000 / 0.0000 / 0.0006 nats (transformer no-emb / emb / GRU) against +0.211 for the old validation | `val_mode="late"` is now the default; batch 2 launched |
 | R17 | Sep 12 2026 | GRU baseline vs transformer, matched pipeline | The transformer beats a recurrent baseline | **Wrong, and not close.** GRU holdout NLL 0.8818 vs 1.0062 for the best transformer, F1 0.605 vs 0.590, with 45% fewer parameters | Baselines become a headline result, not a formality |
-| R18 | Sep 12 2026 | Component ablation + recency bias + features-only products (batch 3, 6 screening runs) | The transformer's early holdout peak is campaign memorisation via product identity in the offer stream; attention lacks recency; the cross-attention may or may not earn its cost | _pending_ | _pending_ |
+| R18 | Sep 13 2026 | Component ablation + recency bias + attributes-only products (batch 3) | Early holdout peak = campaign memorisation via product identity | **Prediction failed; the cause is recency.** Attributes-only did not move the optimum (still epoch 3). ALiBi moved it to epoch 19 and closed the gap: 0.888 vs GRU 0.880 +/- 0.008. Cross-attention worth 0.03-0.04 nats on both encoders | Batch 4: seed the winners and combine ALiBi with dropout 0.55 |
+| R19 | Sep 13 2026 | Batch 4: tf_alibi x {plain, do25, do55, noid} and gru_cross, 3 seeds each | Attention + recency + cross-attention beats the GRU by more than seed noise | _pending_ | _pending_ |
 
 ---
 
@@ -585,3 +584,84 @@ validation, holdout tracked every epoch (`TRACK_HOLDOUT=1`) so the position of
 the optimum is observed, not inferred. `scripts/submit_batch3.sh`. Winners get
 three seeds. Together with batch 2's `tf_noemb` and `gru` arms these complete
 the 2×2 {encoder: attention, GRU} × {cross-attention: on, off}.
+
+### R18 — results: the mechanism was recency, not product identity
+
+Batch 2 first, since it is the reference. 24 runs, three seeds each, late
+validation, S=1024. Out-of-sample × holdout, mean ± sd at the validation-
+selected epoch:
+
+| config | sel. epoch | params | **NLL** | F1 |
+|---|---|---|---|---|
+| **gru** | 14.7 | 669,077 | **0.8802 ± 0.0078** | 0.608 |
+| lstm | 19.7 | 801,173 | 0.9013 ± 0.0177 | 0.605 |
+| tf_noemb_do55 | 12.7 | 1,215,382 | 0.9971 ± 0.0129 | 0.582 |
+| tf_noemb_do25 | 3.3 | 1,215,382 | 1.0142 ± 0.0077 | 0.583 |
+| tf_emb | 2.3 | 1,905,430 | 1.0151 ± 0.0058 | 0.581 |
+| tf_noemb | 3.0 | 1,215,382 | 1.0203 ± 0.0243 | 0.578 |
+| tf_noemb_do40 | 6.0 | 1,215,382 | 1.0225 ± 0.0108 | 0.580 |
+| tf_mix8 | 3.7 | 1,271,676 | 1.0436 ± 0.0036 | 0.572 |
+
+R17 replicates: the GRU beats every transformer variant in 3/3 paired seeds,
+by ≥ 0.117 nats, against a typical seed sd of 0.009. Two smaller results:
+dropout 0.55 is the best transformer setting and pushes its selected epoch
+from 3 to 12.7; the mixture head is the *worst* transformer under honest
+selection, and the customer embedding is a wash (1.0151 vs 1.0203), as R15
+predicted.
+
+Batch 3 screening runs, seed 1, holdout tracked every epoch. The seed-1
+references are `b2_tf_noemb_s1` (1.0187, epoch 3) and the GRU mean above.
+
+| arm | val picks | holdout peaks | **NLL at pick** | gain vs constant |
+|---|---|---|---|---|
+| tf_noid (attributes only) | 3 | 3 | 1.0038 | +0.643 |
+| **tf_alibi (recency bias)** | 16 | 19 | **0.8881** | **+0.767** |
+| tf_nocross | 4 | 3 | 1.0613 | +0.602 |
+| gru_noid | 26 | 26 | 0.8726 | +0.774 |
+| gru_cross (GRU encoder + cross-attn) | 20 | 21 | 0.8797 | +0.768 |
+| gru_nocross | 10 | 14 | 0.9137 | +0.741 |
+
+**Prediction 1 failed.** Removing product identity did *not* move the
+transformer's optimum (still epoch 3) and improved it by only 0.015 nats,
+about 1.5 seed-sd. The campaign-memorisation hypothesis is wrong, or at most
+a minor contributor. It was pre-registered so that this could be said plainly.
+
+**Prediction 3 succeeded, and it is the whole story.** With a recency bias
+the optimum moved from epoch 3 to epoch 19, the gain over a constant
+predictor rose from +0.63 to +0.77 nats — the GRU's level — and holdout NLL
+fell from 1.019 to 0.888, within one seed-sd of the GRU's 0.880 ± 0.008.
+The transformer was not memorising campaigns; it had **no way to represent
+recency at all**. With only a causal mask the past is an unordered bag, so
+what it learned in the first epochs was whatever a bag-of-history model can
+learn, and further training fitted bag-level correlations specific to the
+calibration era. The GRU never had that problem because recurrence is
+recency. One additive bias with no parameters removes the gap.
+
+**Prediction 4: the cross-attention earns its cost on both encoders.**
+Removing it costs the transformer 0.043 nats (1.0187 → 1.0613) and the GRU
+encoder 0.034 (0.8797 → 0.9137), 3–4 seed-sd each. Note the GRU encoder
+*without* cross-attention (0.9137) is worse than the plain GRU baseline
+(0.8802), so the inventory GRU on its own does not help; with the
+cross-attention it recovers to parity. Single seed — batch 4 replicates.
+
+**What this does and does not establish.** A recency-biased transformer
+*ties* a GRU with 45% fewer parameters. That is not an advantage. Whether
+one exists is the question batch 4 asks, by combining the recency bias with
+the regularisation that helped (dropout 0.55) and replicating across seeds.
+
+### R19 — pre-registered: can attention + recency + cross-attention beat the GRU?
+
+Five configurations, three seeds each (`scripts/submit_batch4.sh`):
+`tf_alibi` and `gru_cross` replicated; `tf_alibi` + dropout 0.25, + dropout
+0.55, + attributes-only products.
+
+Predictions. `tf_alibi` replicates within 0.01 of 0.888. Dropout 0.55 helps
+it by roughly what it helped the plain transformer (~0.02), which would put it
+at ~0.87, marginally ahead of the GRU; whether that clears seed noise
+(~0.009) is the test. Attributes-only adds little (R18). `gru_cross`
+replicates at ~0.88, i.e. the GRU gains nothing from the attention encoder
+but the cross-attention is worth keeping on either.
+
+If no transformer variant beats the GRU by more than ~0.02 across seeds, the
+honest conclusion is that on this data attention buys interpretability (the
+satiation cross-attention) and not accuracy, and the paper should say so.
