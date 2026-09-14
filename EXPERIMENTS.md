@@ -26,10 +26,15 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| see submit output | `b4_*` (15 runs) | 2026-09-13 | R19: seed the batch-3 winners; combine ALiBi with dropout | Queued |
+| 40908 | `b5_tb_time_do55_s2` | 2026-09-13 | **MISLABELLED** — started after the R21 fix was pulled, so it runs the LAGGED clock + dropout 0.55 (log: `lag_ipt=True`). A valid R21-style run under a batch-5 tag | Running (qstat 2026-09-14) |
+| 40909 | `b5_tb_time_do55_s3` | 2026-09-13 | Same: will run the lagged clock under a batch-5 tag. Cancel, or keep as lagged do55 seed 3 | Queued (qstat 2026-09-14) |
 
-Batches 1-3 (40852-40888) are complete and recorded as R16-R18.
-Read batch 4 with `python3 scripts/summarize_batch.py` once it lands.
+Batches 1-4 (40852-40903) are complete and recorded as R16-R19. Batch 5
+(40904-40907) is complete and void (R20). Batch 6 (`scripts/submit_batch6.sh`,
+R21) is written but NOT yet submitted.
+
+**Reading batch-5-tagged runs:** trust `cfg.time_bias_lag_ipt` in `final.json`,
+not the tag. Absent or False = leaky (void); True = lagged (valid).
 
 > **Always pass `MAX_EVENTS` explicitly — the PBS default is 512, not 1024.**
 > Jobs 40755–40758 omitted it and silently ran at 512 (recorded as R11).
@@ -690,8 +695,8 @@ Against the predictions:
    missing recency signal caused; once recency is present it only removes
    capacity. The batch-2 regularisation result does not transfer.
 3. *Attributes-only adds little* — **held**, and slightly negative (+0.012).
-4. *gru_cross replicates at ~0.88* — **held** (0.889). The attention encoder
-   adds nothing to a GRU.
+4. *gru_cross replicates at ~0.88* — **held** (0.889). On a GRU backbone,
+   gen 5's extras (inventory GRU + satiation cross-attention) add nothing.
 
 **The decision rule fires.** No transformer variant beats the GRU; the best
 one trails by 0.006, under one seed-sd, and the paired seeds split. Per-class
@@ -765,6 +770,19 @@ Meeting 41's deck had flagged exactly this risk ("the gap may itself identify
 [inserted rows] and re-create the leak") before R20 was built. It was not
 checked. Lesson recorded: any field produced by the same process that creates
 rows must be tested against the label *before* a model consumes it.
+
+**The model uses it.** `scripts/ipt_leak_counterfactual.py` re-scored the three
+batch-5 checkpoints locally (bf16), reproducing the HPCC numbers to within
+0.001, then again with the clock stopped at row t−1:
+
+| out-of-sample × holdout | seed 1 | seed 2 | seed 3 | mean | hit |
+|---|---|---|---|---|---|
+| as trained (leaky clock) | 0.669 | 0.686 | 0.763 | 0.706 | 0.793 |
+| clock lagged at evaluation | 1.382 | 1.496 | 1.444 | **1.441** | 0.590 |
+
+Losing the leak costs 0.73 nats, leaving the models worse than a transformer
+with no recency at all (1.020): the weights were built around it. This bounds
+reliance on the leak; it does not estimate a properly trained lagged model.
 
 **Fix.** `time_bias_lag_ipt=True` (now the default; `--leaky-time-bias`
 reproduces batch 5) rolls IPT forward one row, so row t's clock stops at row
