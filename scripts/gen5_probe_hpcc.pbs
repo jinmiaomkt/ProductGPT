@@ -9,7 +9,7 @@
 #     S=256 0.35 GB | S=512 1.29 GB | S=768 2.87 GB | S=1024 5.08 GB
 # An A100 (40/80 GB) will go far higher, but measure rather than guess.
 #
-#     cd ~/ProductGPT/ProductGPT
+#     cd ~/ProductGPT/work
 #     qsub scripts/gen5_probe_hpcc.pbs
 #     tail -f ~/ProductGPT/logs/gen5_probe_<jobid>.log
 # ============================================================================

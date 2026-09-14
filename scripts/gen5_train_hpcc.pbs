@@ -3,7 +3,7 @@
 # Train the gen-5 multi-stream state-space model on SMU HPCC.
 #
 # SUBMIT FROM THE REPO ROOT so $PBS_O_WORKDIR is the repo root:
-#     cd ~/ProductGPT/ProductGPT
+#     cd ~/ProductGPT/work
 #     qsub scripts/gen5_train_hpcc.pbs
 #
 # Override settings without editing this file, using -v:
