@@ -336,7 +336,21 @@ class CausalEventTransformer(nn.Module):
             bias = bias.masked_fill(causal[None, None], float("-inf"))
             mask = bias
 
-        return self.norm(self.encoder(r, mask=mask.reshape(B * self.n_heads, S, S)))
+        # PyTorch's inference fast path (eval mode, no grad, NO autocast) does
+        # not apply this per-head additive mask the way the training path does:
+        # measured on torch 2.11, eval and train outputs differ by ~2.4 for both
+        # the ordinal and time biases, and a changed gap alters only one row.
+        # Under autocast the fast path is skipped and the two agree exactly,
+        # which is why every bf16 HPCC evaluation so far is correct -- but a CPU
+        # or fp32 evaluation would silently score a different model. Force the
+        # standard path. Checked by scripts/test_time_bias_causality.py.
+        fast = torch.backends.mha.get_fastpath_enabled()
+        torch.backends.mha.set_fastpath_enabled(False)
+        try:
+            out = self.encoder(r, mask=mask.reshape(B * self.n_heads, S, S))
+        finally:
+            torch.backends.mha.set_fastpath_enabled(fast)
+        return self.norm(out)
 
 
 class UserMixtureOutputHead(nn.Module):
@@ -469,8 +483,17 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         attn_recency_bias: bool = False,
         attn_time_bias: str = "none",
         product_id_embed: bool = True,
+        time_bias_lag_ipt: bool = True,
     ):
         super().__init__()
+        # LABEL LEAKAGE FIX (Sep 2026, EXPERIMENTS.md R21). IPT at row t is the
+        # gap ENDING at row t, and rows exist because of outcomes: a draw makes
+        # a row, a quiet day makes an inserted NotBuy at the 24-hour mark. So
+        # IPT_t says what kind of row t is -- 0.40 nats of label information,
+        # against 0.16 for IPT_{t-1} (scripts/ipt_leak_check.py). With the lag,
+        # row t's clock reads the time of row t-1, so the bias uses only gaps
+        # that had already closed. False reproduces batch 5 (leaky).
+        self.time_bias_lag_ipt = bool(time_bias_lag_ipt)
         # Component ablation switches (EXPERIMENTS.md R18). Together with the
         # separate RecurrentBaseline they form a 2x2 over
         #   {sequence encoder: attention, GRU} x {offer-inventory cross-attn: on, off}
@@ -701,7 +724,12 @@ class MultiStreamStateSpaceTransformer(nn.Module):
             # NotBuy rows are rows, so within this discrete representation the
             # running total is correct -- the censoring problem noted in R9
             # only bites if inserted rows are dropped.
-            event_time = ipt.cumsum(dim=1) if ipt is not None else None
+            event_time = None
+            if ipt is not None:
+                if self.time_bias_lag_ipt:
+                    # Row t carries IPT_{t-1}; see time_bias_lag_ipt in __init__.
+                    ipt = torch.cat([torch.zeros_like(ipt[:, :1]), ipt[:, :-1]], dim=1)
+                event_time = ipt.cumsum(dim=1)
             s = self.event_model(r, event_time)                    # (B,S,D)
         else:
             s = r.contiguous()
@@ -775,4 +803,5 @@ def build_transformer(
         attn_recency_bias=kwargs.get("attn_recency_bias", False),
         attn_time_bias=kwargs.get("attn_time_bias", "none"),
         product_id_embed=kwargs.get("product_id_embed", True),
+        time_bias_lag_ipt=kwargs.get("time_bias_lag_ipt", True),
     )

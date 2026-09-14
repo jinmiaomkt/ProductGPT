@@ -161,6 +161,10 @@ def _base() -> Dict[str, Any]:
         # Ruler for that bias: "ordinal" (event distance) or "time" (elapsed
         # hours from IPT, log-compressed, learnable per-head decay).
         "attn_time_bias": "none",
+        # True = the time ruler at row t uses only gaps up to row t-1. False
+        # lets row t see its own gap, which leaks its label (R21). Never set
+        # False except to reproduce batch 5.
+        "time_bias_lag_ipt": True,
         # False = products are represented by attributes only, no identity
         # embedding. Tests whether the early holdout peak is campaign
         # memorisation through the offer stream.

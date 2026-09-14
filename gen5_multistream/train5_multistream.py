@@ -661,6 +661,10 @@ def main() -> None:
                          "event index mixes two clocks here, so 'time' is the "
                          "better ruler in principle -- R20 tests whether it is "
                          "better in fact.")
+    ap.add_argument("--leaky-time-bias", action="store_true",
+                    help="Reproduce batch 5: the time bias at row t sees IPT_t, "
+                         "the gap ending at t, which reveals t's own label "
+                         "(R21). For before/after comparison only.")
     ap.add_argument("--no-product-id", action="store_true",
                     help="Represent products by attributes only (no identity "
                          "embedding). Tests campaign memorisation via the "
@@ -743,9 +747,12 @@ def main() -> None:
         cfg["attn_recency_bias"] = args.time_bias != "none"
     if args.no_product_id:
         cfg["product_id_embed"] = False
+    if args.leaky_time_bias:
+        cfg["time_bias_lag_ipt"] = False
     print(f"[cfg] arch={cfg.get('arch')} encoder={cfg.get('encoder')} "
           f"cross_attn={cfg.get('use_offer_inventory_attn')} "
-          f"time_bias={cfg.get('attn_time_bias')} product_id={cfg.get('product_id_embed')}")
+          f"time_bias={cfg.get('attn_time_bias')} lag_ipt={cfg.get('time_bias_lag_ipt', True)} "
+          f"product_id={cfg.get('product_id_embed')}")
     cfg["track_holdout"] = bool(args.track_holdout)
     if cfg["track_holdout"]:
         print("[cfg] --track-holdout: holdout cells scored EVERY epoch as a "
@@ -802,6 +809,7 @@ def main() -> None:
             attn_recency_bias=cfg.get("attn_recency_bias", False),
             attn_time_bias=cfg.get("attn_time_bias", "none"),
             product_id_embed=cfg.get("product_id_embed", True),
+            time_bias_lag_ipt=cfg.get("time_bias_lag_ipt", True),
         ).to(device)
 
     n_par = sum(p.numel() for p in model.parameters())

@@ -68,8 +68,9 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R16 | Sep 12 2026 | Gate: does late-calibration validation track the holdout? | Validation shifted in time can detect temporal drift | **Passes.** Selection cost 0.0000 / 0.0000 / 0.0006 nats (transformer no-emb / emb / GRU) against +0.211 for the old validation | `val_mode="late"` is now the default; batch 2 launched |
 | R17 | Sep 12 2026 | GRU baseline vs transformer, matched pipeline | The transformer beats a recurrent baseline | **Wrong, and not close.** GRU holdout NLL 0.8818 vs 1.0062 for the best transformer, F1 0.605 vs 0.590, with 45% fewer parameters | Baselines become a headline result, not a formality |
 | R18 | Sep 13 2026 | Component ablation + recency bias + attributes-only products (batch 3) | Early holdout peak = campaign memorisation via product identity | **Prediction failed; the cause is recency.** Attributes-only did not move the optimum (still epoch 3). ALiBi moved it to epoch 19 and closed the gap: 0.888 vs GRU 0.880 +/- 0.008. Cross-attention worth 0.03-0.04 nats on both encoders | Batch 4: seed the winners and combine ALiBi with dropout 0.55 |
-| R19 | Sep 13 2026 | Batch 4: tf_alibi x {plain, do25, do55, noid} and gru_cross, 3 seeds each | Attention + recency + cross-attention beats the GRU by more than seed noise | _pending_ | _pending_ |
-| R20 | Sep 13 2026 | Recency measured in HOURS rather than events (batch 5, 6 runs) | Elapsed-time recency beats ordinal recency, because the event index mixes a minutes-scale burst clock with a weeks-scale silence clock | _pending_ | _pending_ |
+| R19 | Sep 13 2026 | Batch 4: tf_alibi x {plain, do25, do55, noid} and gru_cross, 3 seeds each | Attention + recency + cross-attention beats the GRU by more than seed noise | **No. A tie.** tf_alibi 0.886 +/- 0.006 vs GRU 0.880 +/- 0.008; paired seeds split 1-1 with one identical to 4 d.p. Dropout 0.55 now HURTS (+0.042); attributes-only +0.012; gru_cross 0.889 gains nothing over the plain GRU. Per-class profiles are indistinguishable | Pre-registered rule applies: on ordinal recency, attention buys interpretability, not accuracy |
+| R20 | Sep 13 2026 | Recency measured in HOURS rather than events (batch 5, 6 runs) | Elapsed-time recency beats ordinal recency, because the event index mixes a minutes-scale burst clock with a weeks-scale silence clock | **VOID: label leakage.** 0.706 +/- 0.051, a 0.18-nat "gain" in every cell including calibration. Row t's clock included IPT_t, the gap ending at t, which carries 0.40 nats about y_t (gap 23.5-24.5h => NotBuy 99.3%; gap 0 => NotBuy 0.6%) | Lag the clock one row (now default); rerun as R21. Batch-5 numbers must never be cited |
+| R21 | Sep 14 2026 | Recency in hours, clock lagged one row (batch 6, 3 seeds) | Honest elapsed-time recency beats ordinal recency (0.886) by more than seed noise | _pending_ | _pending_ |
 
 ---
 
@@ -667,6 +668,39 @@ If no transformer variant beats the GRU by more than ~0.02 across seeds, the
 honest conclusion is that on this data attention buys interpretability (the
 satiation cross-attention) and not accuracy, and the paper should say so.
 
+### R19 — results: a tie, and the rule applies
+
+Out-of-sample × holdout, validation-selected epoch (late validation, S=1024):
+
+| config | seed 1 | seed 2 | seed 3 | mean ± sd | sel. epoch |
+|---|---|---|---|---|---|
+| gru (batch 2) | 0.8720 | 0.8812 | 0.8876 | **0.8802 ± 0.0078** | 14.7 |
+| tf_alibi | 0.8924 | 0.8812 | 0.8844 | **0.8860 ± 0.0057** | 18.7 |
+| gru_cross | 0.8892 | 0.8928 | 0.8847 | 0.8889 ± 0.0040 | 15.0 |
+| tf_alibi_do25 | 0.8970 | 0.8827 | 0.8984 | 0.8927 ± 0.0087 | 24.0 |
+| tf_alibi_noid | 0.8910 | 0.9056 | 0.8984 | 0.8983 ± 0.0073 | 20.7 |
+| lstm (batch 2) | 0.8887 | 0.8935 | 0.9215 | 0.9013 ± 0.0177 | 19.7 |
+| tf_alibi_do55 | 0.9263 | 0.9297 | 0.9281 | 0.9280 ± 0.0017 | 14.0 |
+
+Against the predictions:
+
+1. *tf_alibi replicates within 0.01 of 0.888* — **held** (0.886).
+2. *Dropout 0.55 helps by ~0.02* — **failed, in the opposite direction**: it
+   costs 0.042. Heavy dropout was compensating for the overfitting that the
+   missing recency signal caused; once recency is present it only removes
+   capacity. The batch-2 regularisation result does not transfer.
+3. *Attributes-only adds little* — **held**, and slightly negative (+0.012).
+4. *gru_cross replicates at ~0.88* — **held** (0.889). The attention encoder
+   adds nothing to a GRU.
+
+**The decision rule fires.** No transformer variant beats the GRU; the best
+one trails by 0.006, under one seed-sd, and the paired seeds split. Per-class
+precision, recall, F1 and AUPRC of the two models agree to within 0.03 on
+every class, so they are not two different models that happen to tie on
+average — they extract the same signal. On this data, with ordinal recency,
+attention buys interpretability (the satiation cross-attention) and not
+accuracy.
+
 ### R20 — pre-registered: is recency better measured in hours than in events?
 
 R18 established that the transformer's deficit was the absence of any recency
@@ -702,3 +736,65 @@ variant should be tried before abandoning it.
 **Design.** `tb_time` and `tb_time_do55`, three seeds each
 (`scripts/submit_batch5.sh`). The ordinal comparison is batch 4's `tf_alibi`
 and `tf_alibi_do55` at the same three seeds, so only the ruler changes.
+
+### R20 — results: void, the clock leaked the label
+
+Three seeds of `tb_time` finished at **0.706 ± 0.051** out-of-sample × holdout
+(0.668 / 0.685 / 0.763), hit rate 0.79 against 0.69 for every other model. The
+gain was the same size in the out-of-sample × *calibration* cell (0.731 vs
+0.977), where recency has no drift to fix, and the seed spread was six times
+the usual. A mechanism that helps only across time should not do that.
+
+**The channel.** IPT at row t is the gap that *ends* at row t. Query t's bias
+toward key t−1 is −s·log1p(IPT_t), so the attention pattern at t encodes
+IPT_t. But rows exist because of outcomes — a draw creates a row, a quiet day
+creates an inserted NotBuy at the 24-hour mark — so the row's own timestamp
+says what kind of row it is. `scripts/ipt_leak_check.py`, all 3,017,180
+labelled rows, aggregates only:
+
+| conditioning on | H(Y \| ·) nats | information | modal hit |
+|---|---|---|---|
+| nothing | 1.7062 | — | 0.365 |
+| own gap IPT_t (leaky) | 1.3041 | **0.402** | 0.503 |
+| previous gap IPT_t−1 (legitimate) | 1.5484 | 0.158 | 0.425 |
+
+Two bins do most of the work: gaps that round to 0 h (29.7% of rows) are
+NotBuy 0.6% of the time; gaps of 23.5–24.5 h (22.4% of rows) are NotBuy 99.3%.
+
+Meeting 41's deck had flagged exactly this risk ("the gap may itself identify
+[inserted rows] and re-create the leak") before R20 was built. It was not
+checked. Lesson recorded: any field produced by the same process that creates
+rows must be tested against the label *before* a model consumes it.
+
+**Fix.** `time_bias_lag_ipt=True` (now the default; `--leaky-time-bias`
+reproduces batch 5) rolls IPT forward one row, so row t's clock stops at row
+t−1 — the same fix as R1's obtained stream. `scripts/test_time_bias_causality.py`
+is the formal test: perturbing IPT_t leaves every logit at rows ≤ t unchanged
+(exactly 0.0) and moves later rows; with the leaky clock row t moves.
+
+**Found alongside: PyTorch's eval fast path mishandles the additive mask.**
+Without autocast, eval-mode output of the biased encoder differed from
+train-mode output (dropout 0) by ~2.4, for both ordinal and time biases, and a
+changed gap altered only one row. With bf16 autocast the fast path is skipped
+and the two agree exactly. All 18 batch-4/5 job logs show
+`amp=torch.bfloat16` on CUDA, so **no reported number is affected**, but a CPU
+or fp32 evaluation would have silently scored a different model. The encoder
+now disables the fast path around its call; the same test checks eval = train.
+
+### R21 — pre-registered: honest recency in hours (batch 6)
+
+`tb_lag`, three seeds (`scripts/submit_batch6.sh`): identical to batch 5's
+`tb_time` except the clock is lagged. Comparison is batch 4's `tf_alibi`
+(0.886 ± 0.006) and the GRU (0.880 ± 0.008) at the same seeds.
+
+Predictions, written before the runs:
+
+1. The leak is gone: out-of-sample × calibration NLL returns to the
+   0.97–0.99 band of every other model. If it stays near 0.73, a second
+   channel exists and the result is void again.
+2. Lagged time beats ordinal by **0.00–0.02 nats**. The legitimate signal
+   (0.16 nats in IPT_t−1) is real, but it reaches the model only through how
+   attention weights are spread, a weak channel.
+3. If it beats the GRU by more than ~0.02, the fair follow-up is a GRU given
+   lagged log1p(IPT) as an input feature, before crediting attention: the
+   information, not the architecture, would be the source.
