@@ -26,12 +26,16 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| — | — | — | Queue empty (qstat 2026-09-14 14:00). Batch 6 not yet submitted | — |
+| 40922 | `b6_tb_lag_s1` | 2026-09-14 | R21: recency in hours, clock lagged one row | Running |
+| 40923 | `b6_tb_lag_s2` | 2026-09-14 | R21 | Queued |
+| 40924 | `b6_tb_lag_s3` | 2026-09-14 | R21 | Queued |
 
 Batches 1-4 (40852-40903) are complete and recorded as R16-R19. Batch 5
 (40904-40909) is complete: 40904-40907 void (R20); 40908-40909 ran the lagged
-clock under batch-5 tags and are recorded under R21 as an early read. Batch 6 (`scripts/submit_batch6.sh`,
-R21) is written but NOT yet submitted.
+clock under batch-5 tags and are recorded under R21 as an early read. Batch 6 (40922-40924, R21) submitted
+2026-09-14; statuses above are from the qstat at submission. Read it with
+`python3 scripts/summarize_batch.py --prefix b6_` and compare against
+`b4_tf_alibi` and `b2_gru`.
 
 **Reading batch-5-tagged runs:** trust `cfg.time_bias_lag_ipt` in `final.json`,
 not the tag. Absent or False = leaky (void); True = lagged (valid).
