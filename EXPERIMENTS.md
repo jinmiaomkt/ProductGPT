@@ -26,11 +26,11 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| 40908 | `b5_tb_time_do55_s2` | 2026-09-13 | **MISLABELLED** — started after the R21 fix was pulled, so it runs the LAGGED clock + dropout 0.55 (log: `lag_ipt=True`). A valid R21-style run under a batch-5 tag | Running (qstat 2026-09-14) |
-| 40909 | `b5_tb_time_do55_s3` | 2026-09-13 | Same: will run the lagged clock under a batch-5 tag. Cancel, or keep as lagged do55 seed 3 | Queued (qstat 2026-09-14) |
+| — | — | — | Queue empty (qstat 2026-09-14 14:00). Batch 6 not yet submitted | — |
 
 Batches 1-4 (40852-40903) are complete and recorded as R16-R19. Batch 5
-(40904-40907) is complete and void (R20). Batch 6 (`scripts/submit_batch6.sh`,
+(40904-40909) is complete: 40904-40907 void (R20); 40908-40909 ran the lagged
+clock under batch-5 tags and are recorded under R21 as an early read. Batch 6 (`scripts/submit_batch6.sh`,
 R21) is written but NOT yet submitted.
 
 **Reading batch-5-tagged runs:** trust `cfg.time_bias_lag_ipt` in `final.json`,
@@ -816,3 +816,26 @@ Predictions, written before the runs:
 3. If it beats the GRU by more than ~0.02, the fair follow-up is a GRU given
    lagged log1p(IPT) as an input feature, before crediting attention: the
    information, not the architecture, would be the source.
+
+### R21 — early read: two accidental lagged runs (dropout 0.55)
+
+Jobs 40908-40909 started after the fix was pulled, so they ran the lagged
+clock with dropout 0.55 under `b5_tb_time_do55_s2/s3` (`final.json` confirms
+`time_bias_lag_ipt=True`). Like-for-like comparator: batch 4's ordinal
+`tf_alibi_do55` at the same seeds. Out-of-sample customers:
+
+| seed | lagged hours: holdout | ordinal: holdout | Δ | lagged hours: calibration cell |
+|---|---|---|---|---|
+| 2 | 0.9527 | 0.9297 | +0.023 | 1.061 |
+| 3 | 0.9345 | 0.9281 | +0.006 | 1.037 |
+
+- **Prediction 1 holds: the leak is gone.** The out-of-sample × calibration
+  cell is back at ~1.04-1.06, the band of every honest dropout-0.55 model
+  (ordinal: 1.02-1.03), not 0.73.
+- **Prediction 2 is not supported so far:** the lagged time ruler is *worse*
+  than ordinal by 0.015 on average, in both seeds. Two seeds, and at dropout
+  0.55, the setting R19 showed is harmful with recency — so this does not
+  settle R21. Batch 6 (plain dropout, three seeds) does.
+- For the record, the leaky arm at dropout 0.55 (40907, `_s1`, void) scored
+  0.902: heavy dropout limited how far that model exploited the leak, compared
+  with 0.668 for the same seed at dropout 0.10.
