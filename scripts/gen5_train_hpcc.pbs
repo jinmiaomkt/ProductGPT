@@ -79,8 +79,10 @@ DATA_FILE="${DATA_FILE:-}"          # empty = whatever config5 defaults to
 RESUME="${RESUME:-0}"
 
 # Regularisation sweep knobs. Empty/0 means "leave the config default".
-#   USER_EMB=0   drop the per-user embedding (memorisation capacity that is
-#                a constant at eval time, since val/test users are unseen)
+#   USER_EMB=1   add the per-customer embedding. OFF by default since
+#                14 Sep 2026 (EXPERIMENTS.md R15: it buys nothing measurable).
+#   USER_EMB=0   explicitly off -- same as the default; older batch scripts
+#                pass it
 #   AUGMENT=1    permute obtained-product slots within each event
 #   DROPOUT=0.25 override dropout
 #   PATIENCE=10  override early-stopping patience
@@ -220,6 +222,7 @@ args=(
 [[ -n "$DATA_FILE" ]] && args+=(--data-file "$DATA_FILE")
 [[ "$RESUME" == "1" ]] && args+=(--resume)
 [[ "$USER_EMB" == "0" ]] && args+=(--no-user-embedding)
+[[ "$USER_EMB" == "1" ]] && args+=(--user-embedding)
 [[ "$AUGMENT" == "1" ]] && args+=(--augment)
 [[ -n "$DROPOUT" ]] && args+=(--dropout "$DROPOUT")
 [[ -n "$PATIENCE" ]] && args+=(--patience "$PATIENCE")

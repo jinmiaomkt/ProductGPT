@@ -39,7 +39,7 @@ COMMON="MAX_EVENTS=1024,VAL_MODE=late,EPOCHS=40"
 declare -a NAMES=(tf_noemb tf_emb tf_mix8 tf_noemb_do25 gru lstm tf_noemb_do40 tf_noemb_do55)
 declare -A VARS=(
   [tf_noemb]="USER_EMB=0"
-  [tf_emb]=""
+  [tf_emb]="USER_EMB=1"   # was "" when the embedding was the default (before 14 Sep 2026)
   [tf_mix8]="USER_EMB=0,MIX_HEADS=8"
   [tf_noemb_do25]="USER_EMB=0,DROPOUT=0.25"
   [gru]="ARCH=gru,USER_EMB=0"

@@ -209,7 +209,7 @@ python gen5_multistream\probe_memory.py
 | Recency bias | `--time-bias` | `none`, `ordinal` (ALiBi, same as `--alibi`), `time` (elapsed hours) | `none` |
 | Time clock | `--leaky-time-bias` | reproduces the batch-5 leak (section 7); never use for results | lagged |
 | Product representation | `--no-product-id` | identity + attributes / attributes only | identity + attributes |
-| Customer embedding | `--no-user-embedding` | on / off | on |
+| Customer embedding | `--user-embedding` | on / off (ledger R15: buys nothing measurable) | off |
 | Mixture head (Lu & Kannan) | `--mix-heads H` | 0 = single projection | 0 |
 | Regularisation | `--dropout`, `--augment`, `--patience` | | 0.10, off, 5 |
 | Validation design | `--val-mode`, `--val-from` | `customers`, `late`; first late campaign | `late`, 27 |
@@ -229,11 +229,11 @@ code in the directory it was submitted from.
 ```bash
 cd ~/ProductGPT/work
 git pull                                     # pick up laptop changes first
-qsub -v MAX_EVENTS=1024,USER_EMB=0,SEED=1,TAG=mytest scripts/gen5_train_hpcc.pbs
+qsub -v MAX_EVENTS=1024,SEED=1,TAG=mytest scripts/gen5_train_hpcc.pbs
 ```
 
 Every switch in 5.2 has a knob: `ARCH`, `ENCODER`, `CROSS_ATTN=0`, `ALIBI=1`,
-`TIME_BIAS`, `PROD_ID=0`, `USER_EMB=0`, `MIX_HEADS`, `DROPOUT`, `AUGMENT=1`,
+`TIME_BIAS`, `PROD_ID=0`, `USER_EMB=1`, `MIX_HEADS`, `DROPOUT`, `AUGMENT=1`,
 `PATIENCE`, `VAL_MODE`, `VAL_FROM`, `SPLIT`, `SEED`, `TRACK_HOLDOUT=1`, plus
 `EPOCHS`, `BATCH_SIZE`, `MAX_EVENTS`, `RESUME=1` and `TAG`. The comments at the
 top of `scripts/gen5_train_hpcc.pbs` document each one.

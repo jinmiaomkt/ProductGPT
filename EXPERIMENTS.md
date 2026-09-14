@@ -515,6 +515,12 @@ trained embeddings; as those over-specialise, their mean becomes a poor stand-in
 for anyone. That is an over-training artefact, and it is also why an
 over-trained embedded model can *appear* to show heterogeneity when it does not.
 
+**Default changed (14 Sep 2026).** `use_user_embedding` is now `False` in
+`config5.py` and the model builders; `--user-embedding` (PBS `USER_EMB=1`) turns
+it on. Every reported run since batch 2 already passed `USER_EMB=0`, so no
+result changes. `submit_batch2.sh`'s `tf_emb` arm now passes `USER_EMB=1`
+explicitly, so rerunning it reproduces the original arm.
+
 ### R16 — late validation tracks the holdout (gate passed)
 
 Four runs, all S=1024, batch 4, dropout 0.10, no augmentation, no mixture

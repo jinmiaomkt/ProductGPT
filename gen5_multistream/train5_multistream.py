@@ -612,13 +612,15 @@ def main() -> None:
                          "last.pt, so the run ends before PBS kills it. "
                          "Set it a little under the job's walltime.")
     # --- knobs for the regularisation sweep ---------------------------------
+    ap.add_argument("--user-embedding", action="store_true",
+                    help="Add a per-customer embedding (off by default). "
+                         "Out-of-sample customers receive the mean of the "
+                         "trained rows. Under honest evaluation it buys "
+                         "nothing measurable (EXPERIMENTS.md R15) while adding "
+                         "one d_model vector per training customer.")
     ap.add_argument("--no-user-embedding", action="store_true",
-                    help="Drop the per-user embedding. It is a lookup over "
-                         "TRAINING users only; because splits are disjoint by "
-                         "user, every val/test user falls back to index 0, so "
-                         "at evaluation it is a constant carrying no "
-                         "information while accounting for ~29%% of "
-                         "parameters. Pure memorisation capacity.")
+                    help="No per-customer embedding. Now the default; kept so "
+                         "existing job scripts that pass it still work.")
     ap.add_argument("--mix-heads", type=int, default=None,
                     help="H for Lu & Kannan's per-customer mixture over H "
                          "output projections. 0 = single shared projection. "
@@ -719,6 +721,10 @@ def main() -> None:
         cfg["shift_obtained"] = False
     if args.split_mode is not None:
         cfg["split_mode"] = args.split_mode
+    if args.user_embedding and args.no_user_embedding:
+        raise SystemExit("--user-embedding and --no-user-embedding contradict each other")
+    if args.user_embedding:
+        cfg["use_user_embedding"] = True
     if args.no_user_embedding:
         cfg["use_user_embedding"] = False
     if args.mix_heads is not None:

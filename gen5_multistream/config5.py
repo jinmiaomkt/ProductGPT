@@ -137,7 +137,13 @@ def _base() -> Dict[str, Any]:
         "augment_permute_obtained": False,
 
         # ---------- model ----------
-        "use_user_embedding": True,
+        # Off by default since 14 Sep 2026. A per-customer lookup buys nothing
+        # measurable under honest evaluation: holdout NLL 1.015 with it vs
+        # 1.020 without (3 seeds), and its in-sample advantage equals that of a
+        # model with no customer parameters at all (EXPERIMENTS.md R15). Every
+        # reported run since batch 2 already had it off. --user-embedding (PBS
+        # USER_EMB=1) turns it back on.
+        "use_user_embedding": False,
         # Lu & Kannan's heterogeneous mixture: H output projections combined
         # by per-customer weights alpha_n = softmax(user_mix_logits[n]).
         # 0 disables it and uses a single shared projection. Their application
