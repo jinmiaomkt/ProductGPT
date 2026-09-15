@@ -26,16 +26,12 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| 40922 | `b6_tb_lag_s1` | 2026-09-14 | R21: recency in hours, clock lagged one row | Running |
-| 40923 | `b6_tb_lag_s2` | 2026-09-14 | R21 | Queued |
-| 40924 | `b6_tb_lag_s3` | 2026-09-14 | R21 | Queued |
+| — | — | — | Queue empty (qstat 2026-09-15). Nothing submitted | — |
 
 Batches 1-4 (40852-40903) are complete and recorded as R16-R19. Batch 5
 (40904-40909) is complete: 40904-40907 void (R20); 40908-40909 ran the lagged
-clock under batch-5 tags and are recorded under R21 as an early read. Batch 6 (40922-40924, R21) submitted
-2026-09-14; statuses above are from the qstat at submission. Read it with
-`python3 scripts/summarize_batch.py --prefix b6_` and compare against
-`b4_tf_alibi` and `b2_gru`.
+clock under batch-5 tags and are recorded under R21 as an early read. Batch 6 (40922-40924) is complete and
+recorded as R21.
 
 **Reading batch-5-tagged runs:** trust `cfg.time_bias_lag_ipt` in `final.json`,
 not the tag. Absent or False = leaky (void); True = lagged (valid).
@@ -79,7 +75,7 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R18 | Sep 13 2026 | Component ablation + recency bias + attributes-only products (batch 3) | Early holdout peak = campaign memorisation via product identity | **Prediction failed; the cause is recency.** Attributes-only did not move the optimum (still epoch 3). ALiBi moved it to epoch 19 and closed the gap: 0.888 vs GRU 0.880 +/- 0.008. Cross-attention worth 0.03-0.04 nats on both encoders | Batch 4: seed the winners and combine ALiBi with dropout 0.55 |
 | R19 | Sep 13 2026 | Batch 4: tf_alibi x {plain, do25, do55, noid} and gru_cross, 3 seeds each | Attention + recency + cross-attention beats the GRU by more than seed noise | **No. A tie.** tf_alibi 0.886 +/- 0.006 vs GRU 0.880 +/- 0.008; paired seeds split 1-1 with one identical to 4 d.p. Dropout 0.55 now HURTS (+0.042); attributes-only +0.012; gru_cross 0.889 gains nothing over the plain GRU. Per-class profiles are indistinguishable | Pre-registered rule applies: on ordinal recency, attention buys interpretability, not accuracy |
 | R20 | Sep 13 2026 | Recency measured in HOURS rather than events (batch 5, 6 runs) | Elapsed-time recency beats ordinal recency, because the event index mixes a minutes-scale burst clock with a weeks-scale silence clock | **VOID: label leakage.** 0.706 +/- 0.051, a 0.18-nat "gain" in every cell including calibration. Row t's clock included IPT_t, the gap ending at t, which carries 0.40 nats about y_t (gap 23.5-24.5h => NotBuy 99.3%; gap 0 => NotBuy 0.6%) | Lag the clock one row (now default); rerun as R21. Batch-5 numbers must never be cited |
-| R21 | Sep 14 2026 | Recency in hours, clock lagged one row (batch 6, 3 seeds) | Honest elapsed-time recency beats ordinal recency (0.886) by more than seed noise | _pending_ | _pending_ |
+| R21 | Sep 14 2026 | Recency in hours, clock lagged one row (batch 6, 3 seeds) | Honest elapsed-time recency beats ordinal recency (0.886) by more than seed noise | **No — it is worse.** 0.9005 +/- 0.008 vs ordinal 0.8860: +0.0145, worse on all 3 paired seeds (sd of the difference 0.002). Trails the GRU by 0.020. Leak confirmed gone (calibration cell 0.981) | Keep the ordinal ruler. Calendar time does not help as an attention kernel; timing goes to the continuous-time model, or a hybrid ruler is tested first |
 
 ---
 
@@ -849,3 +845,45 @@ clock with dropout 0.55 under `b5_tb_time_do55_s2/s3` (`final.json` confirms
 - For the record, the leaky arm at dropout 0.55 (40907, `_s1`, void) scored
   0.902: heavy dropout limited how far that model exploited the leak, compared
   with 0.668 for the same seed at dropout 0.10.
+
+### R21 — results: calendar-time recency is worse than event order
+
+Batch 6, `tb_lag`, three seeds, stopped early at epochs 28 / 21 / 18 with the
+selected checkpoints at 22 / 15 / 12. Out-of-sample customers:
+
+| seed | lagged hours: holdout | ordinal (b4): holdout | Δ vs ordinal | GRU (b2) | lagged hours: calibration cell |
+|---|---|---|---|---|---|
+| 1 | 0.9094 | 0.8924 | +0.0170 | 0.8720 | 0.9745 |
+| 2 | 0.8943 | 0.8812 | +0.0131 | 0.8812 | 0.9855 |
+| 3 | 0.8979 | 0.8844 | +0.0135 | 0.8876 | 0.9824 |
+| **mean** | **0.9005 ± 0.0079** | **0.8860** | **+0.0145** | **0.8802** | **0.9808** |
+
+Hit 0.694, macro F1 0.605, macro AUPRC 0.602 — every metric slightly below the
+ordinal arm (0.693 / 0.607 / 0.610 on hit is the one tie).
+
+Against the predictions:
+
+1. *The leak is gone: the calibration cell returns to 0.97–0.99* — **held**
+   (0.974–0.986, against 0.731 for the leaky batch 5).
+2. *Lagged time beats ordinal by 0.00–0.02* — **failed.** It is worse by
+   0.0145, and the difference is unusually stable: 0.013–0.017 on every seed,
+   so this is not seed noise. The two accidental dropout-0.55 runs (R21 early
+   read) pointed the same way.
+3. *If it beats the GRU, test the information in a GRU* — does not arise.
+
+**Interpretation (not yet tested).** On this grid, event distance already
+encodes calendar time over quiet periods, because every silent day adds an
+inserted row. What the hours ruler adds is a distinction *within bursts* — and
+that is where it loses information: 46.5% of gaps round to zero, so
+log(1 + hours) is near zero across a whole burst and the kernel treats every
+pull in it as equally recent. The ordinal ruler still orders them. A hybrid
+ruler (ordinal and time penalties added, each with its own slope) would test
+this directly: if the explanation is right, it should at least match ordinal.
+R20's pre-registration also named a second candidate — the learnable decay
+being harder to optimise than a fixed schedule — which a fixed-slope time arm
+would separate.
+
+**Decision.** Keep the ordinal ruler as the recency kernel. Calendar time does
+not earn its place as an attention bias on the discrete grid, which strengthens
+the case for handling timing as an outcome in the continuous-time model rather
+than as a feature.
