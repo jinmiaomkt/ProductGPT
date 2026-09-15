@@ -217,6 +217,17 @@ def set_unknown_user_to_mean(model: nn.Module, trained_idx: List[int]) -> bool:
     return done
 
 
+def inventory_kwargs(model: nn.Module, batch: Dict[str, Any],
+                     device: torch.device) -> Dict[str, torch.Tensor]:
+    """Pre-window inventory for the additive slots (R23). Only models built with
+    inventory='slots' accept these; the token path and the recurrent baseline
+    get nothing, so their call signatures are unchanged."""
+    if getattr(model, "inventory_kind", "tokens") != "slots" or "inv_init_count" not in batch:
+        return {}
+    return {"inv_init_count": batch["inv_init_count"].to(device, non_blocking=True),
+            "inv_init_last": batch["inv_init_last"].to(device, non_blocking=True)}
+
+
 @torch.no_grad()
 def evaluate(model: nn.Module, loader: DataLoader, device: torch.device,
              adtype: Optional[torch.dtype]) -> Dict[str, float]:
@@ -239,11 +250,12 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device,
         tgt = batch["label"].to(device, non_blocking=True)
         ipt = (batch["ipt"].to(device, non_blocking=True)
                if "ipt" in batch else None)
+        inv = inventory_kwargs(model, batch, device)
 
         ctx = (torch.autocast("cuda", dtype=adtype)
                if adtype is not None else torch.autocast("cpu", enabled=False))
         with ctx:
-            logits = model(lto, obt, prev, uid, ipt)
+            logits = model(lto, obt, prev, uid, ipt, **inv)
         logits = logits.float()
 
         dec = logits[..., 1:1 + N_CLASSES]           # (B,S,9)
@@ -674,6 +686,13 @@ def main() -> None:
                     help="Reproduce batch 5: the time bias at row t sees IPT_t, "
                          "the gap ending at t, which reveals t's own label "
                          "(R21). For before/after comparison only.")
+    ap.add_argument("--inventory", choices=["tokens", "slots"], default=None,
+                    help="tokens: inventory GRU + attention over every obtained token "
+                         "(original). slots: additive per-product inventory counted over "
+                         "the full history, lagged to t-1 (EXPERIMENTS.md R23).")
+    ap.add_argument("--sat-layers", type=int, default=None,
+                    help="With --inventory slots: 0 = one attention step (R23); "
+                         ">=1 = stacked offer-inventory blocks (R24).")
     ap.add_argument("--no-product-id", action="store_true",
                     help="Represent products by attributes only (no identity "
                          "embedding). Tests campaign memorisation via the "
@@ -762,12 +781,17 @@ def main() -> None:
         cfg["attn_recency_bias"] = args.time_bias != "none"
     if args.no_product_id:
         cfg["product_id_embed"] = False
+    if args.inventory is not None:
+        cfg["inventory"] = args.inventory
+    if args.sat_layers is not None:
+        cfg["sat_layers"] = args.sat_layers
     if args.leaky_time_bias:
         cfg["time_bias_lag_ipt"] = False
     print(f"[cfg] arch={cfg.get('arch')} encoder={cfg.get('encoder')} "
           f"cross_attn={cfg.get('use_offer_inventory_attn')} "
           f"time_bias={cfg.get('attn_time_bias')} lag_ipt={cfg.get('time_bias_lag_ipt', True)} "
-          f"product_id={cfg.get('product_id_embed')}")
+          f"product_id={cfg.get('product_id_embed')} inventory={cfg.get('inventory', 'tokens')} "
+          f"sat_layers={cfg.get('sat_layers', 0)}")
     cfg["track_holdout"] = bool(args.track_holdout)
     if cfg["track_holdout"]:
         print("[cfg] --track-holdout: holdout cells scored EVERY epoch as a "
@@ -825,6 +849,8 @@ def main() -> None:
             attn_time_bias=cfg.get("attn_time_bias", "none"),
             product_id_embed=cfg.get("product_id_embed", True),
             time_bias_lag_ipt=cfg.get("time_bias_lag_ipt", True),
+            inventory=cfg.get("inventory", "tokens"),
+            sat_layers=cfg.get("sat_layers", 0),
         ).to(device)
 
     n_par = sum(p.numel() for p in model.parameters())
@@ -902,13 +928,14 @@ def main() -> None:
             tgt = batch["label"].to(device, non_blocking=True)
             ipt = (batch["ipt"].to(device, non_blocking=True)
                    if "ipt" in batch else None)
+            inv = inventory_kwargs(model, batch, device)
             if not (tgt != PAD_ID).any():
                 continue
 
             ctx = (torch.autocast("cuda", dtype=adtype)
                    if adtype is not None else torch.autocast("cpu", enabled=False))
             with ctx:
-                logits = model(lto, obt, prev, uid, ipt)
+                logits = model(lto, obt, prev, uid, ipt, **inv)
                 loss = loss_fn(logits.float(), tgt) / accum
 
             if scaler.is_enabled():

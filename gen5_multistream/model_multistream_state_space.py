@@ -11,6 +11,7 @@ import torch.nn.functional as F
 PAD_ID = 0
 FIRST_PROD_ID = 13
 LAST_PROD_ID = 56
+N_PRODUCTS = LAST_PROD_ID - FIRST_PROD_ID + 1   # 44 inventory slots
 UNK_PROD_ID = 59
 
 
@@ -222,6 +223,188 @@ class OfferInventoryCrossAttention(nn.Module):
         if return_attention:
             return z_sat, attn.mean(dim=1)                       # (B,S,Lx,M)
         return z_sat
+
+
+def additive_inventory(obtained_ids: torch.Tensor,
+                       init_count: Optional[torch.Tensor] = None,
+                       init_last: Optional[torch.Tensor] = None):
+    """
+    Cumulative per-product inventory, lagged to the previous occasion (R23).
+
+    obtained_ids: (B,S,10). Row t already carries o_(t-1) (the R1 shift), so a
+        running sum through row t counts acquisitions up to occasion t-1 only.
+    init_count:   (B,44) acquisitions BEFORE the window, from the loader, so
+        items obtained before truncation are not forgotten. None = zeros.
+    init_last:    (B,44) row index, relative to the window start, of each
+        product's last acquisition before the window (<= 0). None = never.
+
+    Returns count (B,S,44) float and rows_since_last (B,S,44) float. Counts are
+    additive by construction -- they never decrease, and an empty row (37.9% of
+    rows, mostly inserted NotBuy days) leaves them unchanged.
+    """
+    B, S, _ = obtained_ids.shape
+    dev = obtained_ids.device
+    valid = (obtained_ids >= FIRST_PROD_ID) & (obtained_ids <= LAST_PROD_ID)
+    idx = (obtained_ids - FIRST_PROD_ID).clamp(0, N_PRODUCTS - 1)
+    per_row = torch.zeros(B, S, N_PRODUCTS, device=dev, dtype=torch.float32)
+    per_row.scatter_add_(2, idx, valid.to(torch.float32))
+
+    count = per_row.cumsum(dim=1)
+    if init_count is not None:
+        count = count + init_count.to(dev, torch.float32)[:, None, :]
+
+    never = -1.0e6
+    pos = torch.arange(S, device=dev, dtype=torch.float32)[None, :, None].expand(B, S, N_PRODUCTS)
+    last = torch.where(per_row > 0, pos, torch.full_like(pos, never))
+    last = torch.cummax(last, dim=1).values
+    if init_last is not None:
+        last = torch.maximum(last, init_last.to(dev, torch.float32)[:, None, :])
+    rows_since = (pos - last).clamp(min=0.0)
+    rows_since = torch.where(count > 0, rows_since, torch.zeros_like(rows_since))
+    return count, rows_since
+
+
+class _SDPAttention(nn.Module):
+    """Multi-head attention through F.scaled_dot_product_attention with a
+    boolean keep-mask (True = may attend). Callers guarantee no query row is
+    fully masked, which would otherwise produce NaN."""
+
+    def __init__(self, d_model: int, n_heads: int, dropout: float):
+        super().__init__()
+        if d_model % n_heads != 0:
+            raise ValueError(f"d_model={d_model} must be divisible by n_heads={n_heads}")
+        self.h, self.dh, self.p = n_heads, d_model // n_heads, dropout
+        self.q = nn.Linear(d_model, d_model)
+        self.k = nn.Linear(d_model, d_model)
+        self.v = nn.Linear(d_model, d_model)
+        self.o = nn.Linear(d_model, d_model)
+
+    def forward(self, x_q, x_kv, keep):
+        N, Lq, D = x_q.shape
+        Lk = x_kv.size(1)
+        q = self.q(x_q).view(N, Lq, self.h, self.dh).transpose(1, 2)
+        k = self.k(x_kv).view(N, Lk, self.h, self.dh).transpose(1, 2)
+        v = self.v(x_kv).view(N, Lk, self.h, self.dh).transpose(1, 2)
+        out = F.scaled_dot_product_attention(
+            q, k, v, attn_mask=keep[:, None, :, :],
+            dropout_p=self.p if self.training else 0.0)
+        return self.o(out.transpose(1, 2).reshape(N, Lq, D))
+
+
+class SatiationBlock(nn.Module):
+    """One layer of offer-inventory computation (R24): the offers attend to each
+    other (competition between concurrent banners), then to the inventory
+    slots, then a feed-forward layer. Pre-norm residual throughout."""
+
+    def __init__(self, d_model: int, n_heads: int, d_ff: int, dropout: float):
+        super().__init__()
+        self.n1, self.n2, self.n3 = nn.LayerNorm(d_model), nn.LayerNorm(d_model), nn.LayerNorm(d_model)
+        self.self_attn = _SDPAttention(d_model, n_heads, dropout)
+        self.cross_attn = _SDPAttention(d_model, n_heads, dropout)
+        self.ff = nn.Sequential(nn.Linear(d_model, d_ff), nn.GELU(), nn.Dropout(dropout),
+                                nn.Linear(d_ff, d_model))
+        self.drop = nn.Dropout(dropout)
+
+    def forward(self, x, self_keep, mem, mem_keep):
+        h = self.n1(x)
+        x = x + self.drop(self.self_attn(h, h, self_keep))
+        x = x + self.drop(self.cross_attn(self.n2(x), mem, mem_keep))
+        return x + self.drop(self.ff(self.n3(x)))
+
+
+class InventorySlots(nn.Module):
+    """
+    Additive inventory as a set of per-product slots (R23), read by the offers
+    through either the original single attention step (sat_layers=0) or a
+    stack of SatiationBlocks (sat_layers>=1, R24).
+
+    Replaces two parts of the token path: the inventory GRU (gated, forgets,
+    updates on every empty row) and the S x 10 token memory (median customer:
+    643 tokens for 13 distinct products). A slot is the product's embedding
+    plus its log count and log occasions since last acquired; only owned slots
+    are attended. The attribute stock -- counts x the 34 product attributes --
+    is McAlister's accumulated-attribute satiation in closed form.
+
+    Returns z_sat, z_inv (pooled owned slots) and z_stock, each (B,S,D).
+    """
+
+    def __init__(self, d_model: int, n_heads: int, d_ff: int, dropout: float,
+                 feature_tensor: torch.Tensor, sat_layers: int = 0):
+        super().__init__()
+        self.sat_layers = int(sat_layers)
+        prod = feature_tensor[FIRST_PROD_ID:LAST_PROD_ID + 1].float()       # (44,F)
+        std = prod.std(dim=0, keepdim=True)
+        std = torch.where(std > 0, std, torch.ones_like(std))
+        self.register_buffer("feat_std", (prod - prod.mean(dim=0, keepdim=True)) / std,
+                             persistent=False)
+        self.register_buffer("slot_ids", torch.arange(FIRST_PROD_ID, LAST_PROD_ID + 1),
+                             persistent=False)
+        self.state_mlp = nn.Sequential(nn.Linear(3, d_model), nn.GELU(), nn.Linear(d_model, d_model))
+        self.slot_norm = nn.LayerNorm(d_model)
+        self.inv_pool = AttentionPool(d_model, dropout)
+        self.stock_proj = nn.Sequential(nn.Linear(prod.size(1) + 1, d_model), nn.GELU(),
+                                        nn.Linear(d_model, d_model))
+        if self.sat_layers == 0:
+            self.single = OfferInventoryCrossAttention(d_model, n_heads, dropout)
+        else:
+            self.null_slot = nn.Parameter(torch.zeros(1, 1, d_model))
+            self.blocks = nn.ModuleList(SatiationBlock(d_model, n_heads, d_ff, dropout)
+                                        for _ in range(self.sat_layers))
+            self.out_norm = nn.LayerNorm(d_model)
+            self.offer_out = nn.Linear(4 * d_model, d_model)
+
+    def forward(self, product_embed, offer_tok, offer_mask, obtained_ids,
+                init_count=None, init_last=None):
+        B, S, Lx, D = offer_tok.shape
+        count, since = additive_inventory(obtained_ids, init_count, init_last)
+        owned = count > 0                                                     # (B,S,44)
+
+        state = torch.stack([torch.log1p(count), torch.log1p(since), owned.float()], dim=-1)
+        base = product_embed(self.slot_ids)                                   # (44,D)
+        slots = self.slot_norm(base[None, None] + self.state_mlp(state.to(base.dtype)))
+
+        stock = count @ self.feat_std                                         # (B,S,F)
+        stock = torch.sign(stock) * torch.log1p(stock.abs())
+        total = torch.log1p(count.sum(dim=-1, keepdim=True))
+        z_stock = self.stock_proj(torch.cat([stock, total], dim=-1).to(base.dtype))
+        z_inv = self.inv_pool(slots, owned)
+
+        if self.sat_layers == 0:
+            # Same single attention step as the token path, over slots instead
+            # of tokens. Row t's slots already summarise occasions < t, so every
+            # row may read its own slots: pass them as a length-1 "memory row"
+            # per occasion by attending within the row.
+            z_sat = self._single_step(offer_tok, offer_mask, slots, owned)
+            return z_sat, z_inv, z_stock
+
+        N = B * S
+        x = offer_tok.reshape(N, Lx, D)
+        xm = offer_mask.reshape(N, Lx)
+        self_keep = xm[:, None, :] | torch.eye(Lx, dtype=torch.bool, device=x.device)[None]
+        mem = torch.cat([self.null_slot.expand(N, 1, D), slots.reshape(N, -1, D)], dim=1)
+        mk = torch.cat([torch.ones(N, 1, dtype=torch.bool, device=x.device),
+                        owned.reshape(N, -1)], dim=1)
+        mem_keep = mk[:, None, :].expand(N, Lx, mk.size(1))
+        for blk in self.blocks:
+            x = blk(x, self_keep, mem, mem_keep)
+        x = self.out_norm(x) * xm[..., None]
+        z_sat = self.offer_out(x.reshape(B, S, Lx * D))
+        return z_sat, z_inv, z_stock
+
+    def _single_step(self, offer_tok, offer_mask, slots, owned):
+        attn = self.single
+        B, S, Lx, D = offer_tok.shape
+        K = slots.size(2)
+        q = attn.q_proj(offer_tok).view(B, S, Lx, attn.n_heads, attn.d_head)
+        k = attn.k_proj(slots).view(B, S, K, attn.n_heads, attn.d_head)
+        v = attn.v_proj(slots).view(B, S, K, attn.n_heads, attn.d_head)
+        logits = torch.einsum("bslhd,bskhd->bshlk", q, k) / math.sqrt(attn.d_head)
+        keep = owned[:, :, None, None, :]                                     # (B,S,1,1,K)
+        logits = logits.masked_fill(~keep, -1e9)
+        w = torch.softmax(logits, dim=-1).masked_fill(~keep, 0.0)
+        w = attn.dropout(w)
+        ctx = torch.einsum("bshlk,bskhd->bslhd", w, v).reshape(B, S, Lx, D)
+        return attn.offer_context_pool(attn.out_proj(ctx), offer_mask)
 
 
 class CausalEventTransformer(nn.Module):
@@ -484,8 +667,19 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         attn_time_bias: str = "none",
         product_id_embed: bool = True,
         time_bias_lag_ipt: bool = True,
+        inventory: str = "tokens",
+        sat_layers: int = 0,
     ):
         super().__init__()
+        # inventory: "tokens" = the original path (inventory GRU + attention over
+        # every obtained token). "slots" = additive per-product inventory (R23),
+        # read by one attention step (sat_layers=0) or stacked SatiationBlocks
+        # (sat_layers>=1, R24). See InventorySlots.
+        self.inventory_kind = str(inventory).lower()
+        if self.inventory_kind not in ("tokens", "slots"):
+            raise ValueError(f"inventory must be 'tokens' or 'slots', got {inventory!r}")
+        if int(sat_layers) > 0 and self.inventory_kind != "slots":
+            raise ValueError("sat_layers > 0 requires inventory='slots'")
         # LABEL LEAKAGE FIX (Sep 2026, EXPERIMENTS.md R21). IPT at row t is the
         # gap ENDING at row t, and rows exist because of outcomes: a draw makes
         # a row, a quiet day makes an inserted NotBuy at the 24-hour mark. So
@@ -537,16 +731,24 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         self.offer_pool = AttentionPool(d_model, dropout)
         self.outcome_pool = AttentionPool(d_model, dropout)
 
-        self.inventory_gru = nn.GRU(
-            input_size=d_model,
-            hidden_size=d_model,
-            num_layers=1,
-            batch_first=True,
-        )
-
-        self.offer_inventory_attn = (
-            OfferInventoryCrossAttention(d_model=d_model, n_heads=n_heads, dropout=dropout)
-            if self.use_offer_inventory_attn else None)
+        if self.inventory_kind == "tokens":
+            self.inventory_gru = nn.GRU(
+                input_size=d_model,
+                hidden_size=d_model,
+                num_layers=1,
+                batch_first=True,
+            )
+            self.offer_inventory_attn = (
+                OfferInventoryCrossAttention(d_model=d_model, n_heads=n_heads, dropout=dropout)
+                if self.use_offer_inventory_attn else None)
+            self.inventory_slots = None
+        else:
+            if not self.use_offer_inventory_attn:
+                raise ValueError("inventory='slots' needs the offer-inventory attention on")
+            self.inventory_gru = None
+            self.offer_inventory_attn = None
+            self.inventory_slots = InventorySlots(d_model, n_heads, d_ff, dropout,
+                                                  feature_tensor, sat_layers)
 
         self.use_user_embedding = bool(use_user_embedding and num_users is not None)
         if self.use_user_embedding:
@@ -556,6 +758,8 @@ class MultiStreamStateSpaceTransformer(nn.Module):
 
         # Event fusion: [z_x, z_sat, z_o, z_y, h_H] plus optional user embedding.
         n_pieces = 5 if self.use_offer_inventory_attn else 4   # z_x, [z_sat], z_o, z_y, h_H
+        if self.inventory_kind == "slots":
+            n_pieces = 6                                        # z_x, z_sat, z_o, z_y, z_inv, z_stock
         fusion_in = n_pieces * d_model + (d_model if self.use_user_embedding else 0)
         self.event_fusion = nn.Sequential(
             nn.LayerNorm(fusion_in),
@@ -642,6 +846,8 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         user_idx: Optional[torch.Tensor] = None,
         ipt: Optional[torch.Tensor] = None,
         projection_gate_mode: Optional[str] = None,
+        inv_init_count: Optional[torch.Tensor] = None,
+        inv_init_last: Optional[torch.Tensor] = None,
         return_hidden: bool = False,
         return_attention: Optional[bool] = None,
         return_proj_alpha: bool = False,
@@ -683,11 +889,21 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         z_o = self.outcome_pool(out_tok, out_mask)  # (B,S,D)
         z_y = self.decision_embed(prev_dec_ids)     # (B,S,D)
 
+        # 3-4 (slots). Additive inventory, read by the current offer (R23/R24).
+        if self.inventory_kind == "slots":
+            z_sat, z_inv, z_stock = self.inventory_slots(
+                self.product_embed, lto_tok, lto_mask, obtained_ids,
+                inv_init_count, inv_init_last)
+            sat_attn = None
+            h_H = None
         # 3. Latent inventory state from immediate outcomes.
-        h_H, _ = self.inventory_gru(z_o)            # (B,S,D)
+        else:
+            h_H, _ = self.inventory_gru(z_o)        # (B,S,D)
 
         # 4. Current offer attends to cumulative inventory tokens.
-        if self.offer_inventory_attn is None:
+        if self.inventory_kind == "slots":
+            pass
+        elif self.offer_inventory_attn is None:
             z_sat, sat_attn = None, None
         elif return_attention:
             z_sat, sat_attn = self.offer_inventory_attn(
@@ -708,7 +924,10 @@ class MultiStreamStateSpaceTransformer(nn.Module):
             sat_attn = None
 
         # 5. Event representation r_t.
-        pieces = [z_x, z_o, z_y, h_H] if z_sat is None else [z_x, z_sat, z_o, z_y, h_H]
+        if self.inventory_kind == "slots":
+            pieces = [z_x, z_sat, z_o, z_y, z_inv, z_stock]
+        else:
+            pieces = [z_x, z_o, z_y, h_H] if z_sat is None else [z_x, z_sat, z_o, z_y, h_H]
 
         if self.use_user_embedding and user_idx is not None:
             z_u = self.user_embed(user_idx.long())                 # (B,D)
@@ -804,4 +1023,6 @@ def build_transformer(
         attn_time_bias=kwargs.get("attn_time_bias", "none"),
         product_id_embed=kwargs.get("product_id_embed", True),
         time_bias_lag_ipt=kwargs.get("time_bias_lag_ipt", True),
+        inventory=kwargs.get("inventory", "tokens"),
+        sat_layers=kwargs.get("sat_layers", 0),
     )

@@ -89,6 +89,14 @@ def main() -> None:
         lto_len=cfg["lto_len"], obtained_len=cfg["obtained_len"],
         prev_dec_len=cfg["prev_dec_len"],
         use_user_embedding=cfg["use_user_embedding"],
+        encoder=cfg.get("encoder", "transformer"),
+        use_offer_inventory_attn=cfg.get("use_offer_inventory_attn", True),
+        attn_recency_bias=cfg.get("attn_recency_bias", False),
+        attn_time_bias=cfg.get("attn_time_bias", "none"),
+        product_id_embed=cfg.get("product_id_embed", True),
+        time_bias_lag_ipt=cfg.get("time_bias_lag_ipt", True),
+        inventory=cfg.get("inventory", "tokens"),
+        sat_layers=cfg.get("sat_layers", 0),
     ).to(device)
 
     missing, unexpected = model.load_state_dict(state["model_state_dict"], strict=False)

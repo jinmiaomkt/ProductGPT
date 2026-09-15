@@ -63,6 +63,8 @@ def main() -> None:
             attn_recency_bias=cfg.get("attn_recency_bias", False),
             attn_time_bias=cfg.get("attn_time_bias", "none"),
             product_id_embed=cfg.get("product_id_embed", True),
+            inventory=cfg.get("inventory", "tokens"),
+            sat_layers=cfg.get("sat_layers", 0),
         ).to(device)
         model.load_state_dict(state["model_state_dict"])
         print(f"\n=== {p.parent.parent.parent.name if p.parent.name == 'hpcc' else p}"

@@ -206,6 +206,9 @@ python gen5_multistream\probe_memory.py
 | Sequence model | `--arch` | `transformer`, `gru`, `lstm` | `transformer` |
 | Encoder inside gen 5 | `--encoder` | `transformer`, `gru` (keeps cross-attention and inventory GRU) | `transformer` |
 | Satiation cross-attention | `--no-cross-attn` | on / off | on |
+| Inventory representation | `--inventory` | `tokens` (GRU + attention over every obtained token), `slots` (additive per-product counts over the full history, lagged) | `tokens` |
+| Satiation depth | `--sat-layers` | with `slots`: 0 = one attention step; L = L stacked offer–inventory blocks | 0 |
+| Capacity | `--d-model`, `--n-layers`, `--n-heads`, `--d-ff` | width, depth of the sequence model | profile |
 | Recency bias | `--time-bias` | `none`, `ordinal` (ALiBi, same as `--alibi`), `time` (elapsed hours) | `none` |
 | Time clock | `--leaky-time-bias` | reproduces the batch-5 leak (section 7); never use for results | lagged |
 | Product representation | `--no-product-id` | identity + attributes / attributes only | identity + attributes |
@@ -233,7 +236,8 @@ qsub -v MAX_EVENTS=1024,SEED=1,TAG=mytest scripts/gen5_train_hpcc.pbs
 ```
 
 Every switch in 5.2 has a knob: `ARCH`, `ENCODER`, `CROSS_ATTN=0`, `ALIBI=1`,
-`TIME_BIAS`, `PROD_ID=0`, `USER_EMB=1`, `MIX_HEADS`, `DROPOUT`, `AUGMENT=1`,
+`TIME_BIAS`, `PROD_ID=0`, `USER_EMB=1`, `INVENTORY`, `SAT_LAYERS`, `D_MODEL`,
+`N_LAYERS`, `N_HEADS`, `D_FF`, `MIX_HEADS`, `DROPOUT`, `AUGMENT=1`,
 `PATIENCE`, `VAL_MODE`, `VAL_FROM`, `SPLIT`, `SEED`, `TRACK_HOLDOUT=1`, plus
 `EPOCHS`, `BATCH_SIZE`, `MAX_EVENTS`, `RESUME=1` and `TAG`. The comments at the
 top of `scripts/gen5_train_hpcc.pbs` document each one.
@@ -317,11 +321,13 @@ consumes it.**
 | Obtained products (R1) | Row *t*'s inventory block recorded what was obtained *at* *t*; an all-zero block meant NotBuy with certainty | stream shifted one row (`shift_obtained=True`) | `scripts/check_obtained_leak.py` |
 | Elapsed-time clock (R20) | Row *t*'s clock included the gap ending at *t*; a 24-hour gap means NotBuy 99.3% of the time | clock lagged one row (`time_bias_lag_ipt=True`) | `scripts/ipt_leak_check.py`, `scripts/test_time_bias_causality.py` |
 
-After any edit to a model file, run both of these (a few seconds each):
+After any edit to a model file, run these (a few seconds each; add `--data` to
+the last one to also check pre-window inventory counts on real data):
 
 ```powershell
 python scripts\smoke_test_shared_refactor.py
 python scripts\test_time_bias_causality.py
+python scripts\test_inventory_slots.py
 ```
 
 The second also guards a PyTorch trap: without autocast, the inference fast

@@ -175,6 +175,11 @@ def _base() -> Dict[str, Any]:
         # embedding. Tests whether the early holdout peak is campaign
         # memorisation through the offer stream.
         "product_id_embed": True,
+        # Inventory representation (EXPERIMENTS.md R23/R24). "tokens" is the
+        # original path; "slots" is the additive per-product inventory, read by
+        # sat_layers stacked offer-inventory blocks (0 = one attention step).
+        "inventory": "tokens",
+        "sat_layers": 0,
 
         # ---------- output ----------
         "run_name": "gen5_multistream",

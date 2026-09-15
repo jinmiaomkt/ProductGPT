@@ -46,6 +46,8 @@ from torch.utils.data import Dataset
 
 PAD_ID = 0
 UNK_ID = 12  # what the WordLevel tokenizer maps an unrecognised token to
+FIRST_PROD_ID = 13
+LAST_PROD_ID = 56
 
 
 # ─────────────────────────────── loading ───────────────────────────────
@@ -260,6 +262,13 @@ class TransformerDataset(Dataset):
         # block (e.g. campaign 27 only), which the two holdout flags cannot
         # express -- they only encode the >=28 and >=29 boundaries.
         self._camp: List[Optional[torch.Tensor]] = []
+        # Inventory BEFORE the window (EXPERIMENTS.md R23): per-product counts
+        # and the row, relative to the window start, of each product's last
+        # acquisition. Tail truncation keeps the last max_events rows; without
+        # these, anything obtained earlier is invisible to an additive
+        # inventory. 44 numbers each per customer.
+        self._inv_count: List[torch.Tensor] = []
+        self._inv_last: List[torch.Tensor] = []
 
         self.has_ipt = False
         self.has_is_inserted = False
@@ -311,6 +320,27 @@ class TransformerDataset(Dataset):
 
             self._lto.append(blocks[:, :a].contiguous())
             self._obt.append(obtained)
+
+            # Pre-window inventory. Raw row r's obtained block is o_r. With the
+            # R1 shift, window row k carries raw row start+k-1, so window rows
+            # cover raw rows >= start and everything in raw rows < start
+            # belongs here -- no overlap, no gap. Raw row r would appear at
+            # window row r+1-start, hence the relative index (<= 0).
+            n_prod = LAST_PROD_ID - FIRST_PROD_ID + 1
+            inv_count = torch.zeros(n_prod, dtype=torch.float32)
+            inv_last = torch.full((n_prod,), -1.0e6, dtype=torch.float32)
+            if start > 0:
+                pre = torch.tensor(ai[: start * self.ai_rate], dtype=torch.long)
+                pre = pre.view(start, self.ai_rate)[:, a:b]
+                ok = (pre >= FIRST_PROD_ID) & (pre <= LAST_PROD_ID)
+                if bool(ok.any()):
+                    rows = torch.arange(start).unsqueeze(1).expand_as(pre)[ok]
+                    pid = pre[ok] - FIRST_PROD_ID
+                    inv_count.scatter_add_(0, pid, torch.ones_like(pid, dtype=torch.float32))
+                    rel = (rows + 1 - start).to(torch.float32)
+                    inv_last.scatter_reduce_(0, pid, rel, reduce="amax")
+            self._inv_count.append(inv_count)
+            self._inv_last.append(inv_last)
             self._prev.append(blocks[:, b].contiguous())
             self._label.append(torch.tensor(dec[start:start + S], dtype=torch.long))
             self._uid_cache.append(uid)
@@ -420,6 +450,8 @@ class TransformerDataset(Dataset):
         if self._hf[idx] is not None:
             item["holdout_feature"] = self._hf[idx]
             item["holdout_index"] = self._hi[idx]
+        item["inv_init_count"] = self._inv_count[idx]
+        item["inv_init_last"] = self._inv_last[idx]
         if self._camp[idx] is not None:
             item["campaign"] = self._camp[idx]
         return item
@@ -627,4 +659,7 @@ def collate_multistream(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         )
     if "is_inserted" in batch[0]:
         out["is_inserted"] = torch.stack([pad1(b["is_inserted"]) for b in batch])
+    if "inv_init_count" in batch[0]:
+        out["inv_init_count"] = torch.stack([b["inv_init_count"] for b in batch])
+        out["inv_init_last"] = torch.stack([b["inv_init_last"] for b in batch])
     return out
