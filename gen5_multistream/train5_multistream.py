@@ -611,6 +611,13 @@ def main() -> None:
                     help="Stop cleanly after this many minutes and save "
                          "last.pt, so the run ends before PBS kills it. "
                          "Set it a little under the job's walltime.")
+    # --- capacity (EXPERIMENTS.md R22: is the model deep/wide enough?) -------
+    ap.add_argument("--d-model", type=int, default=None, help="Width. Profile default: 128 (hpcc).")
+    ap.add_argument("--n-layers", type=int, default=None,
+                    help="Depth of the sequence model: transformer layers or stacked "
+                         "GRU/LSTM layers. Profile default: 4 (hpcc).")
+    ap.add_argument("--n-heads", type=int, default=None, help="Attention heads. Must divide --d-model.")
+    ap.add_argument("--d-ff", type=int, default=None, help="Feed-forward width. Profile default: 3 x d_model.")
     # --- knobs for the regularisation sweep ---------------------------------
     ap.add_argument("--user-embedding", action="store_true",
                     help="Add a per-customer embedding (off by default). "
@@ -705,7 +712,9 @@ def main() -> None:
     cfg = config5.get_config(args.profile)
     for k, v in (("num_epochs", args.epochs), ("max_events", args.max_events),
                  ("batch_size", args.batch_size), ("max_users", args.max_users),
-                 ("data_file", args.data_file), ("seed", args.seed)):
+                 ("data_file", args.data_file), ("seed", args.seed),
+                 ("d_model", args.d_model), ("N", args.n_layers),
+                 ("num_heads", args.n_heads), ("d_ff", args.d_ff)):
         if v is not None:
             cfg[k] = v
 

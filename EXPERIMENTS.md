@@ -76,6 +76,9 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R19 | Sep 13 2026 | Batch 4: tf_alibi x {plain, do25, do55, noid} and gru_cross, 3 seeds each | Attention + recency + cross-attention beats the GRU by more than seed noise | **No. A tie.** tf_alibi 0.886 +/- 0.006 vs GRU 0.880 +/- 0.008; paired seeds split 1-1 with one identical to 4 d.p. Dropout 0.55 now HURTS (+0.042); attributes-only +0.012; gru_cross 0.889 gains nothing over the plain GRU. Per-class profiles are indistinguishable | Pre-registered rule applies: on ordinal recency, attention buys interpretability, not accuracy |
 | R20 | Sep 13 2026 | Recency measured in HOURS rather than events (batch 5, 6 runs) | Elapsed-time recency beats ordinal recency, because the event index mixes a minutes-scale burst clock with a weeks-scale silence clock | **VOID: label leakage.** 0.706 +/- 0.051, a 0.18-nat "gain" in every cell including calibration. Row t's clock included IPT_t, the gap ending at t, which carries 0.40 nats about y_t (gap 23.5-24.5h => NotBuy 99.3%; gap 0 => NotBuy 0.6%) | Lag the clock one row (now default); rerun as R21. Batch-5 numbers must never be cited |
 | R21 | Sep 14 2026 | Recency in hours, clock lagged one row (batch 6, 3 seeds) | Honest elapsed-time recency beats ordinal recency (0.886) by more than seed noise | **No — it is worse.** 0.9005 +/- 0.008 vs ordinal 0.8860: +0.0145, worse on all 3 paired seeds (sd of the difference 0.002). Trails the GRU by 0.020. Leak confirmed gone (calibration cell 0.981) | Keep the ordinal ruler. Calendar time does not help as an attention kernel; timing goes to the continuous-time model, or a hybrid ruler is tested first |
+| R22 | Sep 15 2026 | Capacity sweep: depth 2/4/8 and width 128/256, transformer + ALiBi and GRU (batch 7, 21 runs) | The behavioural mechanisms are deep, so more layers or width improve prediction | _pending_ | _pending_ |
+| R23 | Sep 15 2026 | Additive inventory slots on both backbones (batch 8) | The gen-5 inventory modules add nothing (−0.009 over a plain GRU) because inventory is mis-specified, not because satiation is unimportant | _pending_ | _pending_ |
+| R24 | Sep 15 2026 | Deep satiation module on additive slots (batch 9) | Satiation needs several layers of offer–inventory computation | _pending_ | _pending_ |
 
 ---
 
@@ -888,3 +891,52 @@ would separate.
 not earn its place as an attention bias on the discrete grid, which strengthens
 the case for handling timing as an outcome in the continuous-time model rather
 than as a feature.
+
+### R22–R24 — pre-registered: capacity, additive inventory, deep satiation
+
+**Why now.** R19 left the transformer tied with the GRU. Three
+specification problems in the gen-5 inventory path were found on 15 Sep,
+by reading the code and measuring the data (`scripts/inventory_dilution_check.py`,
+aggregates only):
+
+1. **Satiation gets one layer of computation.** The offer queries the inventory
+   through a single attention step (no feed-forward, no residual, no stacking),
+   and the 4-layer sequence model after it never re-reads the inventory.
+2. **The inventory is not additive and decays on quiet days.** Acquisitions are
+   pooled per row and passed through a GRU that gates and forgets; 37.9% of
+   rows have an empty obtained block, and the GRU updates on every one.
+3. **The inventory memory is diluted.** At the end of calibration the median
+   customer's satiation attention spans 643 obtained tokens for 13 distinct
+   products (p90: 1,322 for 19) — 50 tokens per product — and 72.7% of tokens
+   are 3-star items. Items obtained before the 1,024-row window are invisible.
+
+**R22 — capacity (batch 7, `scripts/submit_batch7.sh`).** Transformer + ALiBi
+at 2 and 8 layers (width 128), width 256 (4 layers) and 8 × 256; plain GRU at
+2 and 8 layers and width 256. Three seeds; references are `b4_tf_alibi`
+(0.886) and `b2_gru` (0.880).
+Prediction: **every arm within ±0.02 of its 4 × 128 reference.** The deficit
+is in structure (point 1), and depth in the sequence stack cannot reach the
+inventory. Wider or deeper transformers may also select earlier epochs.
+Decision rule: capacity changes are adopted only if they beat the reference by
+more than 0.02 on the three-seed mean.
+
+**R23 — additive inventory slots (batch 8).** Replace the inventory GRU and the
+token memory with one slot per product (at most 44): product embedding plus
+log(1 + cumulative count) and log(1 + occasions since last acquired), counted
+over the FULL history before truncation and lagged to occasion t−1; plus an
+attribute stock (counts × the 34 product attributes). Keep the single-step
+cross-attention, now over slots, so representation is isolated from depth.
+Run on the transformer + ALiBi backbone and the GRU encoder backbone.
+Predictions: (a) the GRU encoder with slots beats the plain GRU (0.880), turning
+the −0.009 into a gain; (b) the transformer with slots beats `b4_tf_alibi`
+(0.886); (c) the causality test passes — perturbing o_(t−1) never moves rows
+before t. Memory falls roughly 230-fold in the cross-attention.
+
+**R24 — deep satiation (batch 9).** On slots: 2 and 4 stacked blocks of
+[offer self-attention → cross-attention to slots → feed-forward], residual and
+norm, keeping one representation per offer slot. Prediction: a further gain
+over R23's single step; if none, satiation is shallow and point 1 was not the
+bottleneck.
+
+**Step 4 (two-timescale campaign memory)** is conditional on R23–R24 leaving
+cross-campaign effects under-captured.
