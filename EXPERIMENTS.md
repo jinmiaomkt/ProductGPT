@@ -858,8 +858,9 @@ selected checkpoints at 22 / 15 / 12. Out-of-sample customers:
 | 3 | 0.8979 | 0.8844 | +0.0135 | 0.8876 | 0.9824 |
 | **mean** | **0.9005 ± 0.0079** | **0.8860** | **+0.0145** | **0.8802** | **0.9808** |
 
-Hit 0.694, macro F1 0.605, macro AUPRC 0.602 — every metric slightly below the
-ordinal arm (0.693 / 0.607 / 0.610 on hit is the one tie).
+Macro F1 0.605 and macro AUPRC 0.602 are below the ordinal arm's 0.607 and
+0.610; hit rate is marginally higher (0.694 vs 0.693). The NLL loss is not
+offset elsewhere.
 
 Against the predictions:
 
