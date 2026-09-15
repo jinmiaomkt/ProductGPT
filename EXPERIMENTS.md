@@ -27,12 +27,15 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
 | 40938–40958 | `b7_*` (21 runs: 7 arms × seeds 1–3, seed 1 of every arm first) | 2026-09-15 | R22: capacity sweep | 40938 running, rest queued (qstat at submission) |
+| 40959–40964 | `b8_*` (6 runs: tf_slots, gru_slots × seeds 1–3) | 2026-09-15 | R23: additive inventory slots | queued (qstat at submission) |
+| 40965–40973 | `b9_*` (9 runs: tf_sat2, tf_sat4, gru_sat2 × seeds 1–3) | 2026-09-15 | R24: deep satiation on slots | queued (qstat at submission) |
 
 Batches 1-4 (40852-40903) are complete and recorded as R16-R19. Batch 5
 (40904-40909) is complete: 40904-40907 void (R20); 40908-40909 ran the lagged
 clock under batch-5 tags and are recorded under R21 as an early read. Batch 6 (40922-40924) is complete and
-recorded as R21. Batch 7 (R22) submitted 2026-09-15; read it with
-`python3 scripts/summarize_batch.py --prefix b7_`.
+recorded as R21. Batches 7–9 (R22–R24) submitted 2026-09-15, 36 jobs; read each with
+`python3 scripts/summarize_batch.py --prefix b7_` (then `b8_`, `b9_`). Batch 9
+is read against batch 8, its single-step control.
 
 **Reading batch-5-tagged runs:** trust `cfg.time_bias_lag_ipt` in `final.json`,
 not the tag. Absent or False = leaky (void); True = lagged (valid).
