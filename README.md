@@ -40,8 +40,12 @@ decided last time.
 - **Evaluation follows Lu & Kannan's 2×2 design**, with checkpoints selected on
   the last calibration campaign so early stopping can see temporal drift
   (section 6).
-- **Status, 14 Sep 2026:** with a recency bias the transformer ties a GRU on the
-  same features; it does not beat it. See ledger rows R17–R21.
+- **Status, 16 Sep 2026:** with a recency bias the transformer ties a GRU on the
+  same features and does not beat it (R17–R19). Measuring recency in calendar
+  hours is worse than counting events (R21). Depth and width do not help either
+  (R22, two of three seeds). Running now: an additive per-product inventory and
+  a deeper satiation module, which target *where* the computation happens
+  rather than how much of it there is (R23–R24).
 
 ---
 

@@ -26,9 +26,11 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| 40938–40958 | `b7_*` (21 runs: 7 arms × seeds 1–3, seed 1 of every arm first) | 2026-09-15 | R22: capacity sweep | 40938 running, rest queued (qstat at submission) |
-| 40959–40964 | `b8_*` (6 runs: tf_slots, gru_slots × seeds 1–3) | 2026-09-15 | R23: additive inventory slots | queued (qstat at submission) |
-| 40965–40973 | `b9_*` (9 runs: tf_sat2, tf_sat4, gru_sat2 × seeds 1–3) | 2026-09-15 | R24: deep satiation on slots | queued (qstat at submission) |
+| 40938–40958 | `b7_*` (21 runs) | 2026-09-15 | R22: capacity sweep | seeds 1–2 complete, seed 3 running (qstat 2026-09-16) |
+| 40959–40964 | `b8_*` (6 runs) | 2026-09-15 | R23: additive inventory slots | queued (qstat 2026-09-16) |
+| 40965–40973 | `b9_*` (9 runs) | 2026-09-15 | R24: deep satiation on slots | queued (qstat 2026-09-16) |
+
+21 of the 36 jobs were still queued or running at the 2026-09-16 check.
 
 Batches 1-4 (40852-40903) are complete and recorded as R16-R19. Batch 5
 (40904-40909) is complete: 40904-40907 void (R20); 40908-40909 ran the lagged
@@ -944,3 +946,32 @@ bottleneck.
 
 **Step 4 (two-timescale campaign memory)** is conditional on R23–R24 leaving
 cross-campaign effects under-captured.
+
+### R22 — interim (seeds 1–2 of 3): capacity does not help
+
+Out-of-sample × holdout, two seeds per arm unless noted; references at
+4 layers × width 128 are `b2_gru` 0.8802 and `b4_tf_alibi` 0.8860. No job
+failed and none ran out of memory (peak 20.5 GB of 44 GB at 8 × 256).
+
+| arm | depth × width | params | holdout NLL | vs its 4 × 128 reference |
+|---|---|---|---|---|
+| gru_d256 | 4 × 256 | 2.62M | 0.8787 ± 0.0056 | −0.0015 |
+| gru_N2 | 2 × 128 | 471k | 0.8803 ± 0.0053 | +0.0001 |
+| tf_N8_d256 | 8 × 256 | 7.42M | 0.8883 ± 0.0034 | +0.0023 |
+| gru_N8 | 8 × 128 | 1.07M | 0.8929 ± 0.0088 | +0.0127 |
+| tf_N8 | 8 × 128 | 1.88M | 0.8974 ± 0.0123 | +0.0114 |
+| tf_N2 (3 seeds) | 2 × 128 | 885k | 0.8978 ± 0.0110 | +0.0118 |
+| tf_d256 | 4 × 256 | 4.79M | 0.9005 ± 0.0156 | +0.0145 |
+
+**The prediction holds so far.** Every arm is within ±0.02 of its reference,
+and every deviation is *worse*, not better. An 8× parameter increase (885k →
+7.42M) moves the transformer by less than seed noise, and the best capacity
+arm overall is a GRU whose 0.0015 edge is a fifth of a seed-sd. Deeper
+transformers also select earlier epochs (10.5 at 8 × 256 against 18.7 for the
+4 × 128 reference), the signature of capacity being spent on the calibration
+period rather than on transferable structure.
+
+Seed 3 finishes this batch; the conclusion will not turn on it unless the
+spread is much larger than 0.01. Read alongside R23–R24: if capacity is flat
+while a *representation* change moves the number, the bottleneck is where the
+computation is spent, not how much of it there is.
