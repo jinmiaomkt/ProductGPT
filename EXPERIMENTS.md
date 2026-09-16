@@ -26,11 +26,11 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| 40938–40958 | `b7_*` (21 runs) | 2026-09-15 | R22: capacity sweep | seeds 1–2 complete, seed 3 running (qstat 2026-09-16) |
+| 40953 | `b7_tf_N8_s3` | 2026-09-15 | R22: capacity sweep | running; the other five seed-3 jobs (40954–40958) were cancelled 2026-09-16 to free the queue |
 | 40959–40964 | `b8_*` (6 runs) | 2026-09-15 | R23: additive inventory slots | queued (qstat 2026-09-16) |
 | 40965–40973 | `b9_*` (9 runs) | 2026-09-15 | R24: deep satiation on slots | queued (qstat 2026-09-16) |
 
-21 of the 36 jobs were still queued or running at the 2026-09-16 check.
+16 jobs remain after the cancellation: 40953, then batches 8 and 9.
 
 Batches 1-4 (40852-40903) are complete and recorded as R16-R19. Batch 5
 (40904-40909) is complete: 40904-40907 void (R20); 40908-40909 ran the lagged
@@ -971,7 +971,13 @@ transformers also select earlier epochs (10.5 at 8 × 256 against 18.7 for the
 4 × 128 reference), the signature of capacity being spent on the calibration
 period rather than on transferable structure.
 
-Seed 3 finishes this batch; the conclusion will not turn on it unless the
-spread is much larger than 0.01. Read alongside R23–R24: if capacity is flat
+**Seed 3 was cancelled for five of the seven arms** (40954–40958, 2026-09-16)
+so that batches 8–9 could start: fixing the representation comes before tuning
+capacity on top of it. R22 therefore rests on two seeds per arm, except
+`tf_N2` and `tf_N8`, which have three. That is enough for the conclusion drawn
+here — every arm within 0.02 and every deviation worse — but not enough to
+rank arms against each other. The cancelled arms can be resubmitted with
+`bash scripts/submit_batch7.sh` once a representation is chosen; the run
+directories are stable per configuration. Read alongside R23–R24: if capacity is flat
 while a *representation* change moves the number, the bottleneck is where the
 computation is spent, not how much of it there is.
