@@ -40,12 +40,14 @@ decided last time.
 - **Evaluation follows Lu & Kannan's 2×2 design**, with checkpoints selected on
   the last calibration campaign so early stopping can see temporal drift
   (section 6).
-- **Status, 16 Sep 2026:** with a recency bias the transformer ties a GRU on the
-  same features and does not beat it (R17–R19). Measuring recency in calendar
-  hours is worse than counting events (R21). Depth and width do not help either
-  (R22, two of three seeds). Running now: an additive per-product inventory and
-  a deeper satiation module, which target *where* the computation happens
-  rather than how much of it there is (R23–R24).
+- **Status, 17 Sep 2026:** with a recency bias the transformer ties a GRU on
+  the same features and does not beat it (R17–R19). Four explanations for the
+  tie have now been tested and rejected: campaign memorisation (R18), recency
+  in calendar hours (R21), model capacity (R22), and the inventory
+  representation — additive per-product counts (R23) and a deeper satiation
+  module (R24), which helps the counts but does not close the gap. Nothing has
+  beaten the plain GRU (0.880). Running now: recurrence combined with
+  attention over past occasions (R25).
 
 ---
 
