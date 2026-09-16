@@ -26,8 +26,7 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| 40965–40973 | `b9_*` (9 runs) | 2026-09-15 | R24: deep satiation on slots | 4 remaining (qstat 2026-09-16) |
-| 40975–40983 | `b10_*` (9 runs: hyb_gate, hyb_stack, hyb_gate_norec × seeds 1–3) | 2026-09-16 | R25: recurrence + attention | queued behind batch 9 |
+| 40975–40983 | `b10_*` (9 runs) | 2026-09-16 | R25: recurrence + attention | 8 remaining; seed 1 of `hyb_gate` done (qstat 2026-09-16) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batch 10 (R25) was submitted 2026-09-16; read it with
@@ -85,7 +84,7 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R21 | Sep 14 2026 | Recency in hours, clock lagged one row (batch 6, 3 seeds) | Honest elapsed-time recency beats ordinal recency (0.886) by more than seed noise | **No — it is worse.** 0.9005 +/- 0.008 vs ordinal 0.8860: +0.0145, worse on all 3 paired seeds (sd of the difference 0.002). Trails the GRU by 0.020. Leak confirmed gone (calibration cell 0.981) | Keep the ordinal ruler. Calendar time does not help as an attention kernel; timing goes to the continuous-time model, or a hybrid ruler is tested first |
 | R22 | Sep 15 2026 | Capacity sweep: depth 2/4/8 and width 128/256, transformer + ALiBi and GRU (batch 7, 21 runs) | The behavioural mechanisms are deep, so more layers or width improve prediction | _pending_ | _pending_ |
 | R23 | Sep 15 2026 | Additive inventory slots on both backbones (batch 8) | The gen-5 inventory modules add nothing (−0.009 over a plain GRU) because inventory is mis-specified, not because satiation is unimportant | **Prediction failed.** Slots are WORSE on the transformer (0.9011 vs 0.8860, 0/3 seeds) and a wash on the GRU encoder (0.8916 vs 0.8889, 1/3). Neither beats the plain GRU (0.8802). The three data problems are real; fixing them buys nothing | The inventory path is not where the missing signal is. Batch 9 tests whether depth on slots changes that; if not, satiation is a small effect on this data |
-| R24 | Sep 15 2026 | Deep satiation module on additive slots (batch 9) | Satiation needs several layers of offer–inventory computation | _pending_ | _pending_ |
+| R24 | Sep 15 2026 | Deep satiation module on additive slots (batch 9) | Satiation needs several layers of offer–inventory computation | **Half held.** Depth beats the single step on slots (0.8908 vs 0.9011, 3/3 seeds) but does not recover the token baseline (0.8860) and never beats the plain GRU (0.8802, 0/3). 4 layers = 2 layers | Depth where the concept lives is real but small; the ceiling holds. Slots are not adopted |
 | R25 | Sep 16 2026 | Recurrence + attention over past occasions (batch 10, 9 runs) | The two memories carry different information: recurrence supplies the decay prior, attention retrieves specific past occasions by content | _pending_ | _pending_ |
 
 ---
@@ -1070,3 +1069,37 @@ reading hard to avoid.
 **Cost note.** A hybrid trains at recurrent speed, so epochs are slower than
 the pure transformer; the attention over 1,024 hidden states is cheap by
 comparison (~67 MB).
+
+### R24 — results: depth helps the slots, but not enough
+
+Three seeds, out-of-sample × holdout:
+
+| arm | holdout NLL | sel. epoch | params | vs its control |
+|---|---|---|---|---|
+| `b9_tf_sat2` (2 satiation layers) | 0.8908 ± 0.0121 | 14.0 | 1.67M | **−0.0103 vs `b8_tf_slots`, 3/3 seeds** |
+| `b9_tf_sat4` (4 layers) | 0.8912 ± 0.0054 | 9.3 | 2.13M | +0.0004 vs `b9_tf_sat2` |
+| `b9_gru_sat2` | 0.8925 ± 0.0037 | 10.0 | 1.40M | +0.0008 vs `b8_gru_slots` |
+| reference `b4_tf_alibi` (tokens, 1 step) | 0.8860 ± 0.0057 | 18.7 | 1.22M | — |
+| reference `b2_gru` | 0.8802 ± 0.0078 | 14.7 | 669k | — |
+
+1. *A further gain over R23's single step* — **held on the transformer**:
+   −0.0103 nats, better on all three seeds. Depth in the offer-inventory
+   computation is real.
+2. But it **does not recover the token baseline** (+0.0048 vs `b4_tf_alibi`,
+   better on only 1 of 3 seeds), and **nothing beats the plain GRU**
+   (+0.0106, 0/3). Two layers and four layers are identical (+0.0004), so the
+   depth that helps is one extra layer, not a stack.
+3. On the GRU encoder depth adds nothing at all (+0.0008).
+
+**Reading.** Splitting R23 and R24 was worth it: the slots representation
+costs about 0.015 and depth on top returns about 0.010 of it. So the two
+diagnoses were both half right — satiation *is* computed too shallowly, and
+the additive representation *does* lose something the token memory had — but
+together they leave the model where it started. The inventory path is not
+where the missing signal is.
+
+**Correction to an interim read.** On 16 Sep the single finished seed of
+`b9_tf_sat2` scored 0.8783, the best transformer number in the project, and
+was reported as such with a one-seed caveat. With three seeds it is
+0.8908 ± 0.0121: the seeds were 0.8783 / 0.9024 / 0.8917. The caveat was the
+operative part; the number was noise.
