@@ -26,11 +26,9 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| 40953 | `b7_tf_N8_s3` | 2026-09-15 | R22: capacity sweep | running; the other five seed-3 jobs (40954–40958) were cancelled 2026-09-16 to free the queue |
-| 40959–40964 | `b8_*` (6 runs) | 2026-09-15 | R23: additive inventory slots | queued (qstat 2026-09-16) |
-| 40965–40973 | `b9_*` (9 runs) | 2026-09-15 | R24: deep satiation on slots | queued (qstat 2026-09-16) |
+| 40965–40973 | `b9_*` (9 runs) | 2026-09-15 | R24: deep satiation on slots | 8 of 9 remaining (qstat 2026-09-16) |
 
-16 jobs remain after the cancellation: 40953, then batches 8 and 9.
+Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 
 Batches 1-4 (40852-40903) are complete and recorded as R16-R19. Batch 5
 (40904-40909) is complete: 40904-40907 void (R20); 40908-40909 ran the lagged
@@ -83,7 +81,7 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R20 | Sep 13 2026 | Recency measured in HOURS rather than events (batch 5, 6 runs) | Elapsed-time recency beats ordinal recency, because the event index mixes a minutes-scale burst clock with a weeks-scale silence clock | **VOID: label leakage.** 0.706 +/- 0.051, a 0.18-nat "gain" in every cell including calibration. Row t's clock included IPT_t, the gap ending at t, which carries 0.40 nats about y_t (gap 23.5-24.5h => NotBuy 99.3%; gap 0 => NotBuy 0.6%) | Lag the clock one row (now default); rerun as R21. Batch-5 numbers must never be cited |
 | R21 | Sep 14 2026 | Recency in hours, clock lagged one row (batch 6, 3 seeds) | Honest elapsed-time recency beats ordinal recency (0.886) by more than seed noise | **No — it is worse.** 0.9005 +/- 0.008 vs ordinal 0.8860: +0.0145, worse on all 3 paired seeds (sd of the difference 0.002). Trails the GRU by 0.020. Leak confirmed gone (calibration cell 0.981) | Keep the ordinal ruler. Calendar time does not help as an attention kernel; timing goes to the continuous-time model, or a hybrid ruler is tested first |
 | R22 | Sep 15 2026 | Capacity sweep: depth 2/4/8 and width 128/256, transformer + ALiBi and GRU (batch 7, 21 runs) | The behavioural mechanisms are deep, so more layers or width improve prediction | _pending_ | _pending_ |
-| R23 | Sep 15 2026 | Additive inventory slots on both backbones (batch 8) | The gen-5 inventory modules add nothing (−0.009 over a plain GRU) because inventory is mis-specified, not because satiation is unimportant | _pending_ | _pending_ |
+| R23 | Sep 15 2026 | Additive inventory slots on both backbones (batch 8) | The gen-5 inventory modules add nothing (−0.009 over a plain GRU) because inventory is mis-specified, not because satiation is unimportant | **Prediction failed.** Slots are WORSE on the transformer (0.9011 vs 0.8860, 0/3 seeds) and a wash on the GRU encoder (0.8916 vs 0.8889, 1/3). Neither beats the plain GRU (0.8802). The three data problems are real; fixing them buys nothing | The inventory path is not where the missing signal is. Batch 9 tests whether depth on slots changes that; if not, satiation is a small effect on this data |
 | R24 | Sep 15 2026 | Deep satiation module on additive slots (batch 9) | Satiation needs several layers of offer–inventory computation | _pending_ | _pending_ |
 
 ---
@@ -981,3 +979,46 @@ rank arms against each other. The cancelled arms can be resubmitted with
 directories are stable per configuration. Read alongside R23–R24: if capacity is flat
 while a *representation* change moves the number, the bottleneck is where the
 computation is spent, not how much of it there is.
+
+### R23 — results: the additive inventory does not help
+
+Out-of-sample × holdout, three seeds, against matched controls from batch 4:
+
+| arm | holdout NLL | control | Δ | seeds won | sel. epoch | calibration cell |
+|---|---|---|---|---|---|---|
+| transformer + ALiBi + slots | 0.9011 ± 0.0071 | `b4_tf_alibi` 0.8860 | **+0.0151** | 0/3 | 7.0 | 0.9936 |
+| GRU encoder + slots | 0.8916 ± 0.0043 | `b4_gru_cross` 0.8889 | +0.0028 | 1/3 | 15.7 | 0.9810 |
+| — | — | plain GRU 0.8802 | +0.011 / +0.021 | 0/3 | — | 0.9811 |
+
+Against the predictions:
+
+1. *The GRU encoder with slots beats the plain GRU, turning −0.009 into a gain*
+   — **failed.** It is 0.0114 worse than the plain GRU, and only 0.003 from the
+   token-based version it replaced: a wash, not a gain.
+2. *The transformer with slots beats `b4_tf_alibi`* — **failed**, and by more
+   than seed noise: +0.0151, worse on every seed.
+3. *The causality test passes* — **held** (checked before submission).
+   Memory fell from 5.1 GB to 0.33 GB at S=1024, as expected.
+
+**What this rules out.** The three data problems behind R23 are real and
+measured — the inventory GRU is not additive and decays on empty rows, the
+token memory spans 643 tokens for 13 distinct products, and truncation hides
+earlier acquisitions. Fixing all three at once does not improve prediction.
+So they were not what limited the model.
+
+**What it points to.** Two readings, not yet separated:
+
+- *The compression loses something.* Slots keep counts and recency per product
+  but discard the ORDER and co-occurrence of acquisitions that the token
+  memory retained. The transformer's selected epoch fell from 18.7 to 7.0 and
+  its calibration-period score worsened too (0.9769 → 0.9936), which is what a
+  less informative input looks like rather than a drift effect.
+- *Satiation is simply a small effect here.* Consistent with R19, where the
+  gen-5 inventory modules added nothing to a GRU backbone, and with the
+  per-class profiles of the leading models agreeing to within 0.03 everywhere.
+
+Batch 9 separates them in part: if depth on slots recovers the gap, the
+representation was adequate and the single step was the limit; if not, the
+inventory path is a small effect on this data whichever way it is written.
+A cheaper follow-up if batch 9 also fails: keep BOTH memories (slots for
+counts, tokens for order) and test whether the combination beats either.
