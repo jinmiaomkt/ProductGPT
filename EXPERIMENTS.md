@@ -1103,3 +1103,11 @@ where the missing signal is.
 was reported as such with a one-seed caveat. With three seeds it is
 0.8908 ± 0.0121: the seeds were 0.8783 / 0.9024 / 0.8917. The caveat was the
 operative part; the number was noise.
+
+**Interim (Sep 16 2026, seed 1 of 3 — not a result).** Holdout NLL, out-of-sample
+customers: `hyb_stack` 0.8776, `hyb_gate` 0.8929, `hyb_gate_norec` 0.9046. Gate
+weight on the recurrent branch climbs from ~0.52 and settles at 0.59 (`hyb_gate`)
+and 0.60 (`hyb_gate_norec`). Only `hyb_stack` is below `b2_gru` (0.8802), but
+`b9_tf_sat2` also read 0.878 on seed 1 and finished at 0.8908 ± 0.0121, so no
+reading is drawn until seeds 2–3 finish. Adoption bar (better parent − 0.02,
+against the 0.8802 benchmark): three-seed mean below 0.8602.
