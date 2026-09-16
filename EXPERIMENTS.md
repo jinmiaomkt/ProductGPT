@@ -83,6 +83,7 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R22 | Sep 15 2026 | Capacity sweep: depth 2/4/8 and width 128/256, transformer + ALiBi and GRU (batch 7, 21 runs) | The behavioural mechanisms are deep, so more layers or width improve prediction | _pending_ | _pending_ |
 | R23 | Sep 15 2026 | Additive inventory slots on both backbones (batch 8) | The gen-5 inventory modules add nothing (−0.009 over a plain GRU) because inventory is mis-specified, not because satiation is unimportant | **Prediction failed.** Slots are WORSE on the transformer (0.9011 vs 0.8860, 0/3 seeds) and a wash on the GRU encoder (0.8916 vs 0.8889, 1/3). Neither beats the plain GRU (0.8802). The three data problems are real; fixing them buys nothing | The inventory path is not where the missing signal is. Batch 9 tests whether depth on slots changes that; if not, satiation is a small effect on this data |
 | R24 | Sep 15 2026 | Deep satiation module on additive slots (batch 9) | Satiation needs several layers of offer–inventory computation | _pending_ | _pending_ |
+| R25 | Sep 16 2026 | Recurrence + attention over past occasions (batch 10, 9 runs) | The two memories carry different information: recurrence supplies the decay prior, attention retrieves specific past occasions by content | _pending_ | _pending_ |
 
 ---
 
@@ -1022,3 +1023,47 @@ representation was adequate and the single step was the limit; if not, the
 inventory path is a small effect on this data whichever way it is written.
 A cheaper follow-up if batch 9 also fails: keep BOTH memories (slots for
 counts, tokens for order) and test whether the combination beats either.
+
+### R25 — pre-registered: recurrence + attention (batch 10)
+
+**Why.** Across 44 completed configurations no transformer has beaten the best
+recurrent model; the honest summary is a tie at a third to a half the
+parameters. The pre-2017 architecture (Bahdanau 2015; Luong 2015) combined
+recurrence with attention rather than replacing one with the other, and that
+combination has never been tested here at the sequence level — `--encoder gru`
+swaps the stack but keeps only the offer-inventory cross-attention.
+
+In this project's terms the two are different memory systems: recurrence is a
+learned exponential decay (Guadagni & Little's loyalty variable with a gate),
+attention is distance-indifferent content retrieval. R18 showed attention
+alone fails without a decay prior; R22 showed more of either alone does
+nothing.
+
+**Arms** (`scripts/submit_batch10.sh`, three seeds, inventory = tokens):
+`hyb_gate` (both branches, learned gate, ALiBi on the attention half),
+`hyb_stack` (interleaved layer by layer), `hyb_gate_norec` (gate, no recency
+bias on the attention half). Controls at the same seeds: `b4_gru_cross`
+(0.8889) and `b4_tf_alibi` (0.8860); `b2_gru` (0.8802) is the benchmark.
+
+**Predictions.**
+
+1. *If the ceiling is information*, all three land within 0.02 of
+   `b4_gru_cross`, and the gate settles above 0.6 on the recurrent branch —
+   the model mostly ignoring retrieval.
+2. *If retrieval carries something recurrence misses*, `hyb_gate` beats both
+   parents by more than 0.02, and the gate sits nearer 0.5.
+3. `hyb_gate_norec` ≈ `hyb_gate` if recurrence already supplies recency,
+   making the bias redundant alongside it. If it is much worse, the attention
+   half needs its own decay prior even next to a GRU.
+4. `hyb_stack` > `hyb_gate` would say composition matters more than blending,
+   and argues for a deeper hybrid.
+
+**Decision rule.** Adopt the hybrid only if it beats the better parent by more
+than 0.02 nats on the three-seed mean. Otherwise record that combining the two
+memories does not help on this data, which — with R22 (capacity), R23
+(inventory) and R21 (calendar time) — would make the information-ceiling
+reading hard to avoid.
+
+**Cost note.** A hybrid trains at recurrent speed, so epochs are slower than
+the pure transformer; the attention over 1,024 hidden states is cheap by
+comparison (~67 MB).

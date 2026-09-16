@@ -667,10 +667,15 @@ def main() -> None:
                     help="First campaign of the late validation block "
                          "(val-mode=late). Default 27: one campaign, about the "
                          "size of the whole holdout block.")
-    ap.add_argument("--encoder", choices=["transformer", "gru"], default=None,
+    ap.add_argument("--encoder", choices=["transformer", "gru", "gru_attn"], default=None,
                     help="Sequence encoder INSIDE the gen-5 model. Unlike "
                          "--arch gru, this keeps the inventory GRU and the "
-                         "offer-inventory cross-attention.")
+                         "offer-inventory cross-attention. gru_attn combines "
+                         "recurrence with attention over past occasions (R25).")
+    ap.add_argument("--fuse", choices=["gate", "stack"], default=None,
+                    help="With --encoder gru_attn: gate = run both branches and "
+                         "blend them with a learned gate; stack = interleave "
+                         "GRU and attention layer by layer.")
     ap.add_argument("--no-cross-attn", action="store_true",
                     help="Drop the offer-inventory cross-attention (z_sat).")
     ap.add_argument("--alibi", action="store_true",
@@ -771,6 +776,8 @@ def main() -> None:
         cfg["arch"] = args.arch
     if args.encoder is not None:
         cfg["encoder"] = args.encoder
+    if args.fuse is not None:
+        cfg["fuse"] = args.fuse
     if args.no_cross_attn:
         cfg["use_offer_inventory_attn"] = False
     if args.alibi:
@@ -851,6 +858,7 @@ def main() -> None:
             time_bias_lag_ipt=cfg.get("time_bias_lag_ipt", True),
             inventory=cfg.get("inventory", "tokens"),
             sat_layers=cfg.get("sat_layers", 0),
+            fuse=cfg.get("fuse", "gate"),
         ).to(device)
 
     n_par = sum(p.numel() for p in model.parameters())
@@ -977,6 +985,13 @@ def main() -> None:
         # only into final.json, where it describes the selected model.
         rec = {"epoch": ep, "train_loss": tr_loss, "secs": dt,
                **{k: val for k, val in v.items() if k != "per_class"}}
+        # Hybrid encoder only: how much weight the fusion gate puts on the
+        # recurrent branch (1.0 = pure recurrence, 0.0 = pure attention).
+        # Diagnostic, never used for selection.
+        gm = getattr(model, "gate_mean", float("nan"))
+        if gm == gm:                      # not NaN
+            rec["gate_mean_recurrent"] = gm
+            print(f"         [hybrid] gate on recurrence: {gm:.3f}", flush=True)
 
         # DIAGNOSTIC ONLY (--track-holdout). Scores the holdout cells every
         # epoch so we can see whether holdout performance degrades as training

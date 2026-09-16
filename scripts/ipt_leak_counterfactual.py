@@ -65,6 +65,7 @@ def main() -> None:
             product_id_embed=cfg.get("product_id_embed", True),
             inventory=cfg.get("inventory", "tokens"),
             sat_layers=cfg.get("sat_layers", 0),
+            fuse=cfg.get("fuse", "gate"),
         ).to(device)
         model.load_state_dict(state["model_state_dict"])
         print(f"\n=== {p.parent.parent.parent.name if p.parent.name == 'hpcc' else p}"

@@ -97,6 +97,7 @@ def main() -> None:
         time_bias_lag_ipt=cfg.get("time_bias_lag_ipt", True),
         inventory=cfg.get("inventory", "tokens"),
         sat_layers=cfg.get("sat_layers", 0),
+        fuse=cfg.get("fuse", "gate"),
     ).to(device)
 
     missing, unexpected = model.load_state_dict(state["model_state_dict"], strict=False)

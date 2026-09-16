@@ -669,6 +669,7 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         time_bias_lag_ipt: bool = True,
         inventory: str = "tokens",
         sat_layers: int = 0,
+        fuse: str = "gate",
     ):
         super().__init__()
         # inventory: "tokens" = the original path (inventory GRU + attention over
@@ -694,9 +695,24 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         # plus a recency-bias arm and a features-only-product arm, so each
         # piece of the architecture can be credited or blamed on its own.
         encoder = str(encoder).lower()
-        if encoder not in ("transformer", "gru"):
-            raise ValueError(f"encoder must be 'transformer' or 'gru', got {encoder!r}")
+        if encoder not in ("transformer", "gru", "gru_attn"):
+            raise ValueError(
+                f"encoder must be 'transformer', 'gru' or 'gru_attn', got {encoder!r}")
         self.encoder_kind = encoder
+        # gru_attn is Bahdanau/Luong in modern dress (EXPERIMENTS.md R25):
+        # recurrence carries the decay prior, attention retrieves specific past
+        # occasions by content. "gate" runs both over the same event
+        # representations and blends them with a learned per-position gate;
+        # "stack" interleaves them layer by layer. The attention half keeps
+        # whatever recency bias the flags ask for, so "does recurrence already
+        # supply recency?" is the bias switched off.
+        self.fuse = str(fuse).lower()
+        if self.fuse not in ("gate", "stack"):
+            raise ValueError(f"fuse must be 'gate' or 'stack', got {fuse!r}")
+        # Diagnostic, not a parameter: the mean gate weight on the recurrent
+        # branch, so we can report how much the model leans on recency vs
+        # retrieval. Updated under no_grad in forward.
+        self.gate_mean = float("nan")
         self.use_offer_inventory_attn = bool(use_offer_inventory_attn)
 
         if ai_rate != lto_len + obtained_len + prev_dec_len:
@@ -793,6 +809,19 @@ class MultiStreamStateSpaceTransformer(nn.Module):
                 for _ in range(n_layers))
             self.event_model_dropout = nn.Dropout(dropout)
             self.event_model_norm = nn.LayerNorm(d_model)
+
+            if self.encoder_kind == "gru_attn":
+                n_attn = n_layers if self.fuse == "stack" else 1
+                self.attn_branch = nn.ModuleList(
+                    CausalEventTransformer(
+                        d_model=d_model, n_layers=1, n_heads=n_heads, d_ff=d_ff,
+                        dropout=dropout, recency_bias=attn_recency_bias,
+                        time_bias=attn_time_bias)
+                    for _ in range(n_attn))
+                if self.fuse == "gate":
+                    # One gate per position and channel, from both branches.
+                    self.fuse_gate = nn.Linear(2 * d_model, d_model)
+                    self.fuse_norm = nn.LayerNorm(d_model)
 
         # num_mix_heads > 0 swaps the final projection for Lu & Kannan's
         # per-customer mixture over H projections. The pre-head MLP is kept
@@ -950,7 +979,7 @@ class MultiStreamStateSpaceTransformer(nn.Module):
                     ipt = torch.cat([torch.zeros_like(ipt[:, :1]), ipt[:, :-1]], dim=1)
                 event_time = ipt.cumsum(dim=1)
             s = self.event_model(r, event_time)                    # (B,S,D)
-        else:
+        elif self.encoder_kind == "gru":
             s = r.contiguous()
             last = len(self.event_model) - 1
             for i, gru in enumerate(self.event_model):
@@ -958,6 +987,37 @@ class MultiStreamStateSpaceTransformer(nn.Module):
                 if i < last:
                     s = self.event_model_dropout(s).contiguous()
             s = self.event_model_norm(s)
+        else:
+            # gru_attn. event_time is only needed by a calendar-time bias.
+            event_time = None
+            if ipt is not None and self.attn_branch[0].time_bias == "time":
+                lag = ipt
+                if self.time_bias_lag_ipt:
+                    lag = torch.cat([torch.zeros_like(ipt[:, :1]), ipt[:, :-1]], dim=1)
+                event_time = lag.cumsum(dim=1)
+
+            if self.fuse == "stack":
+                s = r.contiguous()
+                last = len(self.event_model) - 1
+                for i, gru in enumerate(self.event_model):
+                    s, _ = gru(s)
+                    s = s + self.attn_branch[i](s, event_time)
+                    if i < last:
+                        s = self.event_model_dropout(s).contiguous()
+                s = self.event_model_norm(s)
+            else:
+                h = r.contiguous()
+                last = len(self.event_model) - 1
+                for i, gru in enumerate(self.event_model):
+                    h, _ = gru(h)
+                    if i < last:
+                        h = self.event_model_dropout(h).contiguous()
+                h = self.event_model_norm(h)
+                a = self.attn_branch[0](r, event_time)
+                g = torch.sigmoid(self.fuse_gate(torch.cat([h, a], dim=-1)))
+                with torch.no_grad():
+                    self.gate_mean = float(g.float().mean())
+                s = self.fuse_norm(g * h + (1.0 - g) * a)
 
         # 7. Decision logits.
         h = self.head_trunk(s)
@@ -1025,4 +1085,5 @@ def build_transformer(
         time_bias_lag_ipt=kwargs.get("time_bias_lag_ipt", True),
         inventory=kwargs.get("inventory", "tokens"),
         sat_layers=kwargs.get("sat_layers", 0),
+        fuse=kwargs.get("fuse", "gate"),
     )

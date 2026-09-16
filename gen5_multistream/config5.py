@@ -180,6 +180,9 @@ def _base() -> Dict[str, Any]:
         # sat_layers stacked offer-inventory blocks (0 = one attention step).
         "inventory": "tokens",
         "sat_layers": 0,
+        # Only used by encoder="gru_attn" (R25): "gate" blends a recurrent and
+        # an attention branch; "stack" interleaves them.
+        "fuse": "gate",
 
         # ---------- output ----------
         "run_name": "gen5_multistream",
