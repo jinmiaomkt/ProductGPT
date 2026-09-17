@@ -86,7 +86,7 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R23 | Sep 15 2026 | Additive inventory slots on both backbones (batch 8) | The gen-5 inventory modules add nothing (−0.009 over a plain GRU) because inventory is mis-specified, not because satiation is unimportant | **Prediction failed.** Slots are WORSE on the transformer (0.9011 vs 0.8860, 0/3 seeds) and a wash on the GRU encoder (0.8916 vs 0.8889, 1/3). Neither beats the plain GRU (0.8802). The three data problems are real; fixing them buys nothing | The inventory path is not where the missing signal is. Batch 9 tests whether depth on slots changes that; if not, satiation is a small effect on this data |
 | R24 | Sep 15 2026 | Deep satiation module on additive slots (batch 9) | Satiation needs several layers of offer–inventory computation | **Half held.** Depth beats the single step on slots (0.8908 vs 0.9011, 3/3 seeds) but does not recover the token baseline (0.8860) and never beats the plain GRU (0.8802, 0/3). 4 layers = 2 layers | Depth where the concept lives is real but small; the ceiling holds. Slots are not adopted |
 | R25 | Sep 16 2026 | Recurrence + attention over past occasions (batch 10, 9 runs) | The two memories carry different information: recurrence supplies the decay prior, attention retrieves specific past occasions by content | No gain: best hybrid `hyb_stack` 0.8865 ± 0.0079, level with its better parent (0.8860), above the plain GRU (0.8802) | Not adopted. Combining the memories does not help; with R21–R24, the information-ceiling reading stands |
-| R26 | Sep 17 2026 | Pre-build data checks for the additive attention stock (no GPU) | Copy tiers and substitution have variation to learn | **Checks void: the obtained-products stream appears mis-indexed in the R generator.** Aggregates and a metadata-only simulation agree (details below) | Blocks all inventory work until the author confirms and regenerates. R19/R23/R24 inventory nulls may be artefacts |
+| R26 | Sep 17 2026 | Pre-build data checks for the additive attention stock; then verification of every product-id mapping (no GPU) | Copy tiers and substitution have variation to learn | **Checks void. The obtained-products stream is CONFIRMED corrupted in both gen-4 (`simple6`) and gen-5 (`_IPT`) data:** version-2 `NewProductIndex` codes are decoded with the version-6 table, which renumbered 89 of 122 products. 45 products get the wrong id; two 3-star weapons become Raiden Shogun and Xiao (92% of all "limited-time 5-star" acquisitions). Offers are correct except a campaign-30 A/B swap | Every result that reads the obtained stream is void until regenerated: inventory GRU, satiation attention, slots, deep satiation, Table 1 attribution, and gen-4 inventory results. First confirmed cause (key mismatch) was wrong; see correction below |
 
 ---
 
@@ -1151,51 +1151,56 @@ time), R22 (capacity), R23 (inventory representation), R24 (satiation depth)
 and now R25 (recurrence + attention), six explanations for the transformer–GRU tie have been tested and rejected. The
 plain GRU (0.8802) remains the best model; the architecture queue is empty.
 
-### R26 — the obtained-products stream appears mis-indexed (checks void)
+### R26 — the obtained-products stream is mis-coded (confirmed)
 
-**What was run.** `scripts/copies_substitution_check.py`, approved as the two
-pre-build checks for the additive attention stock S_t(j) = Σ κ(j,p)·g(tier)·φ(Δ):
-(1) copies held of the 39 individually identified limited-time 5-stars;
-(2) pull rate on an unowned featured character by same-element ownership, with
-customer × element and offered-product fixed effects.
+**How it was found.** `scripts/copies_substitution_check.py`, the approved
+pre-build check for the additive attention stock, returned impossible copy
+counts: 92% of limited-time 5-star acquisitions duplicates, 81% beyond the copy
+cap. Aggregates against the game's draw rates: 1.02 limited-time 5-star ids per
+character-banner 10-pull (expected ≈ 0.1); only 13–18% of them equal to the
+product on offer; 3-star weapons 72% of tokens (expected ≈ 85%); 4-stars 12.5%
+(correct). Both checks are void and not reported.
 
-**Why the results are not reported as findings.** Check 1 was implausible: 92%
-of limited-time 5-star "acquisitions" were duplicates, 81% beyond the copy cap,
-and all 5,004 customers held duplicates. Three aggregate diagnostics followed:
+**Correction to the first diagnosis (same day).** The first write-up blamed a key
+mismatch (ProductIndex values looked up in a NewProductIndex-keyed map). That is
+**refuted**: ProductIndex codes for 3-star weapons are 301–313 and would pass
+through unmapped, yet the obtained stream contains no value above 59 in 4.57M
+tokens. The symptom was right; the stated cause was not.
 
-| Diagnostic (aggregate only) | Expected if correct | Observed |
-|---|---|---|
-| Obtained tokens in ids 18–56 per character-banner 10-pull | ≈ 0.1 (5-star rate ≈ 1.6%) | **1.02** (13.9% of tokens) |
-| Share of those equal to a currently offered limited-time product | well over half | **0.13–0.18** |
-| 3-star weapon (`W3`) share of 10-pull tokens | ≈ 0.85 | 0.72 — the missing ~13 points sit in ids 18–56 |
-| 4-star share (`F4` + `W4`) | ≈ 0.13 | 0.125 (as expected) |
+**Confirmed cause** (`scripts/verify_product_index.py`, lookup tables read as
+game metadata, JSON as aggregates):
 
-**Likely cause (code reading, needs author confirmation).** Both the offer
-fields (`Figure5AIndex` …) and `ItemsJustGotIndex` come from
-`product_index_lookup`, which in `GenerateDecisionSequenceRevision2/3*.R` returns
-**ProductIndex**. `GenerateJSON.R` then maps offers with `map_vec_lv6B`
-(keyed by ProductIndex — correct) but obtained items with `map_vec_lv6`
-(keyed by **NewProductIndex**); unmatched values pass through unmapped. The
-same lookup appears in `InsertNotBuy_GenerateJSON_IPT.R`. Simulating both
-lookups on `FigureWeaponIndex6.xlsx` (metadata only): 15 of 124 products map
-identically; 27 pooled 3/4-star items land on limited-time 5-star ids; **none**
-of the limited-time 5-stars lands on its own id. That matches every row of the
-table above. (`GenerateDecisionSequenceCode.R`, the older generator, returned
-NewProductIndex, under which `map_vec_lv6` would be correct — so the question
-is which generator produced the current `ItemsJustGotIndex`.)
+- `GenerateDecisionSequenceCode.R` encodes items with **`FigureWeaponIndex2.xlsx`
+  NewProductIndex**. Version 3 (Mar 2025) inserted two standard 5-star characters
+  (F5-014, F5-036) mid-table, renumbering **89 of 122** products; versions 3–6
+  agree with each other. ProductIndex is identical across all versions.
+- `GenerateJSON.R` and `InsertNotBuy_GenerateJSON_IPT.R` decode the obtained
+  stream with `map_vec_lv6` built from **`FigureWeaponIndex6.xlsx`**. Reading
+  version-2 codes through version 6 mis-codes **45 of 122 products**: 17
+  characters and 23 weapons shift to a neighbour's id, and in particular two
+  3-star weapons (W3-001, W3-002) land on ids 36 and 37 (Raiden Shogun, Xiao).
+- **The sharp prediction held:** ids 36 and 37 hold **91.9%** of all obtained
+  tokens with limited-time ids in `_IPT` and **92.5%** in `simple6` (5.1% if
+  spread evenly). No other explanation predicts those two specific ids.
 
-**Consequences if confirmed.**
-- Both R26 checks are void; rerun after regeneration.
-- Every result that reads inventory from the obtained stream used a corrupted
-  input: the inventory GRU and satiation cross-attention (R19), slots (R23),
-  deep satiation (R24), and the satiation attribution in Table 1. "Inventory
-  adds nothing" may be an artefact. Gen 4 shares `GenerateJSON.R`.
-- Decisions, offers and IPT are unaffected; the recency (R18), validation (R16)
-  and customer-split results stand.
+**Offers are correct.** Offer slots match `CampaignWideIndex.xlsx` on 100% of
+3,017,180 rows (ProductIndex path, stable across versions). Two offer-side
+notes: (1) campaign 30, `Figure5AIndex`/`Figure5BIndex` are swapped relative to
+their names (Kazuha/Klee) — a holdout-period campaign; (2) standard 5-star
+weapons featured on 21 of 60 early weapon-banner slots are pooled into W5 (id 17)
+by design.
 
-**Not a label leak** — noise in an input, not information about y_t.
+**Scope.** Both gen-4 (`simple6`, used by the previous manuscript) and gen-5
+(`_IPT`) data. Void until regenerated: the inventory GRU and satiation
+cross-attention (R19), slots and deep satiation (R23, R24), the satiation
+attribution in Table 1, and any gen-4 claim that depends on obtained products.
+Decisions, offers, IPT, the validation design (R16), recency (R18), the clock
+leak (R20) and the customer split stand, but headline architecture rankings
+should be rerun on corrected data because every arm consumed the corrupted
+stream.
 
-**Next.** Author confirms which generator produced `ItemsJustGotIndex`; if
-ProductIndex, change the obtained mapping to `map_vec_lv6B` in both JSON
-generators and regenerate `_IPT`. Then rerun this script, then the R19/R23/R24
-arms on the corrected data before any new inventory architecture.
+**Fix.** Decode obtained items through ProductID, never through a
+version-specific NewProductIndex: build `v2 NewProductIndex → ProductID →
+v6 NewProductIndex6` in both JSON generators, fix the campaign-30 index swap,
+regenerate `simple6` and `_IPT`, then require `verify_product_index.py` to print
+"signature absent" before any model reads the data.
