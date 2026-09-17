@@ -85,7 +85,7 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R22 | Sep 15 2026 | Capacity sweep: depth 2/4/8 and width 128/256, transformer + ALiBi and GRU (batch 7, 16 of 21 runs) | The behavioural mechanisms are deep, so more layers or width improve prediction | **No.** Every arm within 0.02 of its 4x128 reference and every deviation worse; 8x the parameters (885k to 7.42M) moves the transformer less than seed noise. Deeper transformers peak earlier (epoch 10.5 vs 18.7) | Capacity is not the constraint. Closed at 2 seeds per arm to free the queue for R23-R24 |
 | R23 | Sep 15 2026 | Additive inventory slots on both backbones (batch 8) | The gen-5 inventory modules add nothing (−0.009 over a plain GRU) because inventory is mis-specified, not because satiation is unimportant | **Prediction failed.** Slots are WORSE on the transformer (0.9011 vs 0.8860, 0/3 seeds) and a wash on the GRU encoder (0.8916 vs 0.8889, 1/3). Neither beats the plain GRU (0.8802). The three data problems are real; fixing them buys nothing | The inventory path is not where the missing signal is. Batch 9 tests whether depth on slots changes that; if not, satiation is a small effect on this data |
 | R24 | Sep 15 2026 | Deep satiation module on additive slots (batch 9) | Satiation needs several layers of offer–inventory computation | **Half held.** Depth beats the single step on slots (0.8908 vs 0.9011, 3/3 seeds) but does not recover the token baseline (0.8860) and never beats the plain GRU (0.8802, 0/3). 4 layers = 2 layers | Depth where the concept lives is real but small; the ceiling holds. Slots are not adopted |
-| R25 | Sep 16 2026 | Recurrence + attention over past occasions (batch 10, 9 runs) | The two memories carry different information: recurrence supplies the decay prior, attention retrieves specific past occasions by content | _pending_ | _pending_ |
+| R25 | Sep 16 2026 | Recurrence + attention over past occasions (batch 10, 9 runs) | The two memories carry different information: recurrence supplies the decay prior, attention retrieves specific past occasions by content | No gain: best hybrid `hyb_stack` 0.8865 ± 0.0079, level with its better parent (0.8860), above the plain GRU (0.8802) | Not adopted. Combining the memories does not help; with R21–R24, the information-ceiling reading stands |
 
 ---
 
@@ -1112,3 +1112,38 @@ and 0.60 (`hyb_gate_norec`). Only `hyb_stack` is below `b2_gru` (0.8802), but
 reading is drawn until seeds 2–3 finish. Pre-registered adoption bar: better
 parent (`b4_tf_alibi`, 0.8860) − 0.02 = three-seed mean below 0.8660. Beating the
 plain GRU benchmark by the same margin would need below 0.8602.
+
+**Result (Sep 17 2026, 3 seeds, all 9 runs finished).** Out-of-sample customers ×
+holdout period, at the validation-selected epoch:
+
+| Arm | Params | NLL | F1 macro | AUPRC | Revenue MAE | Gate on GRU (final, per seed) |
+|---|---|---|---|---|---|---|
+| `hyb_stack` | 1.61M | **0.8865 ± 0.0079** | 0.608 | **0.613** | **1.107** | — |
+| `hyb_gate` | 1.15M | 0.8909 ± 0.0030 | 0.606 | 0.610 | 1.147 | 0.591 / 0.572 / 0.588 |
+| `hyb_gate_norec` | 1.15M | 0.8960 ± 0.0086 | 0.609 | 0.608 | 1.164 | 0.601 / 0.594 / 0.602 |
+| *parent* `b4_tf_alibi` | 1.22M | 0.8860 | | | | |
+| *parent* `b4_gru_cross` | 0.95M | 0.8889 | | | | |
+| *benchmark* `b2_gru` | 0.67M | 0.8802 | | | | |
+
+Against the predictions:
+
+1. **Ceiling (prediction 1) — holds on fit.** All three arms land within 0.01 of
+   both parents; none clears the pre-registered bar (three-seed mean below
+   0.8660). The gate settled at 0.57–0.60, just under the 0.6 predicted for a
+   model ignoring retrieval: attention is used, but using it buys no likelihood.
+2. **Retrieval carries new information (prediction 2) — rejected.** `hyb_gate`
+   beats neither parent.
+3. **Recency redundant next to a GRU (prediction 3) — mostly.** Dropping the
+   bias costs 0.0051, under one seed sd; the gate barely moves.
+4. **Composition over blending (prediction 4) — not established.** `hyb_stack`
+   leads `hyb_gate` by 0.0043 (2/3 paired seeds), well inside noise, at 40% more
+   parameters. It does have the best revenue error of the batch (1.107).
+
+**The seed-1 lesson repeated.** `hyb_stack` read 0.8776 on seed 1 and finished at
+0.8865 — the same regression `b9_tf_sat2` showed (0.8783 → 0.8908). Single-seed
+leads in this project have not survived twice; interim readings stay unreported.
+
+**Decision.** Not adopted. With R21 (calendar time), R22 (capacity), R23–R24
+(inventory representation) and now R25 (recurrence + attention), six
+explanations for the transformer–GRU tie have been tested and rejected. The
+plain GRU (0.8802) remains the best model; the architecture queue is empty.

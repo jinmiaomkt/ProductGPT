@@ -45,9 +45,9 @@ decided last time.
   tie have now been tested and rejected: campaign memorisation (R18), recency
   in calendar hours (R21), model capacity (R22), and the inventory
   representation — additive per-product counts (R23) and a deeper satiation
-  module (R24), which helps the counts but does not close the gap. Nothing has
-  beaten the plain GRU (0.880). Running now: recurrence combined with
-  attention over past occasions (R25).
+  module (R24), which helps the counts but does not close the gap. Nor does
+  combining recurrence with attention over past occasions (R25: best hybrid
+  0.8865). Nothing has beaten the plain GRU (0.880).
 
 ---
 
