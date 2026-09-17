@@ -1176,8 +1176,8 @@ game metadata, JSON as aggregates):
   agree with each other. ProductIndex is identical across all versions.
 - `GenerateJSON.R` and `InsertNotBuy_GenerateJSON_IPT.R` decode the obtained
   stream with `map_vec_lv6` built from **`FigureWeaponIndex6.xlsx`**. Reading
-  version-2 codes through version 6 mis-codes **45 of 122 products**: 17
-  characters and 23 weapons shift to a neighbour's id, and in particular two
+  version-2 codes through version 6 mis-codes **45 of 122 entries**: 17
+  characters, 25 weapons and 3 special tokens shift to a neighbour's id; two
   3-star weapons (W3-001, W3-002) land on ids 36 and 37 (Raiden Shogun, Xiao).
 - **The sharp prediction held:** ids 36 and 37 hold **91.9%** of all obtained
   tokens with limited-time ids in `_IPT` and **92.5%** in `simple6` (5.1% if
