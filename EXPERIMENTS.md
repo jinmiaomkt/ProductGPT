@@ -26,11 +26,11 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| 40975–40983 | `b10_*` (9 runs) | 2026-09-16 | R25: recurrence + attention | 8 remaining; seed 1 of `hyb_gate` done (qstat 2026-09-16) |
+| 41008–41022 | `b11_*` (15 runs) | 2026-09-17 | R27: core replication on corrected data (R26) | 41008 running, 14 queued (qstat 2026-09-17) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
-Batch 10 (R25) was submitted 2026-09-16; read it with
-`python3 scripts/summarize_batch.py --prefix b10_`.
+Batch 10 (R25) is complete. Batch 11 (R27) was submitted 2026-09-17 on the
+corrected data; read it with `python3 scripts/summarize_batch.py --prefix b11_`.
 
 Batches 1-4 (40852-40903) are complete and recorded as R16-R19. Batch 5
 (40904-40909) is complete: 40904-40907 void (R20); 40908-40909 ran the lagged
