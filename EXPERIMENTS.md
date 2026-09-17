@@ -1204,3 +1204,59 @@ version-specific NewProductIndex: build `v2 NewProductIndex → ProductID →
 v6 NewProductIndex6` in both JSON generators, fix the campaign-30 index swap,
 regenerate `simple6` and `_IPT`, then require `verify_product_index.py` to print
 "signature absent" before any model reads the data.
+
+### R26 — fix applied, `_IPT` regenerated and verified (Sep 17 2026)
+
+**Direct confirmation of the input encoding.** `FullDecisionSequenceInt` has no raw
+item-id column, but carries cumulative per-product counts (`Cum<ProductID>`). Row
+increments identify which product each `ItemsJustGotIndex` code stands for: in 80
+sampled files, **111 of 111** products carry the FigureWeaponIndex2
+`NewProductIndex` code (v6: 31/111; ProductIndex: 8/111).
+
+**Fix.** Both generators (`GenerateJSON.R`, `InsertNotBuy_GenerateJSON_IPT.R`) now
+decode obtained items as v2 code → ProductID → NewProductIndex6 (`map_obtained`,
+with `stopifnot` on missing codes). Committed in the OneDrive `Code` repo, which
+is now under git with a `.gitignore` for secrets, session state, data and knitted
+outputs.
+
+**Regeneration.** R 4.6.1 installed locally (per-user). Stage 2 of the IPT script
+rerun from `FullDecisionSequence_IPT` through a local runner that reads OneDrive
+and writes only to `PRODUCTGPT_DATA/regen_r26/`. One runner-only guard:
+`PlayerSummary_IPT.xlsx` already contains the `player_index` columns, so the merge
+is skipped when present (a second merge would suffix the columns and fail).
+
+**Verification** (`scripts/compare_regenerated_json.py`, `verify_product_index.py`):
+
+| Check | Result |
+|---|---|
+| Customers | 5,004 = 5,004, identical uid sets |
+| Sequence lengths, offers, previous decisions, all other fields | identical |
+| IPT | 4,351 customers differ only by −0.01 h on 0.49% of values (`sprintf` halfway rounding, macOS vs Windows) |
+| Obtained tokens | 97.64% unchanged; 2.36% changed, **every one** exactly as the fix predicts; 0 unexpected |
+| Bug signature (ids 36/37 share of limited-time ids) | 0.919 → 0.149: "signature absent" |
+| Copy check | 43,086 limited-time 5-star acquisitions (was 644,393); beyond cap 0.12% (was 81%); no character above 7 copies |
+
+The corrected file replaces `clean_list_int_wide4_simple6_IPT.json` in the laptop's
+`PRODUCTGPT_DATA`; the original is kept as `..._pre_r26.json`. **HPCC still has the
+old file**, and the OneDrive `Data` copy is untouched.
+
+**Gen-4 `simple6` not fixed.** The current `GenerateJSON.R` no longer reproduces
+the April 2025 file (5 fields dropped, 4,952 customers vs 5,291), and the buggy
+mapping is many-to-one, so the old JSON cannot be repaired in place. The
+regenerated file is quarantined as `UNFAITHFUL_do_not_use_*`.
+
+**Substitution check on corrected data — provisional, NOT a finding.** Raw: owners
+of a same-element character pull MORE on an unowned featured character (0.33 vs
+0.25). Within customer × element with offered-product fixed effects: −0.107
+(t = −30), −0.164 with controls. But the design has a mechanical confound that
+must be removed before any reading: before a customer's first character of an
+element is acquired, the "not owned" observations include the occasions spent
+chasing that very character (high pull rate), which ends when it is acquired.
+Next version: exclude, for each customer, the banners of characters they
+eventually acquire, or use an event study on other-element banners as control.
+
+**Consequence for the architecture ledger.** Every gen-5 run to date (R1–R25)
+consumed the corrupted obtained stream. Rankings that do not depend on inventory
+(recency, validation, the customer split) are unlikely to move, but the headline
+arms and all inventory arms (R19, R23, R24) must be rerun on the corrected file
+before any inventory or architecture claim is written.

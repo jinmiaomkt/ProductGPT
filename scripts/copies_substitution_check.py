@@ -35,10 +35,11 @@ unshifted data), so "owned before t" uses rows < t only.
 Aggregate statistics only -- never uids, token values or per-customer records.
 
 USAGE
-    python scripts/copies_substitution_check.py
+    python scripts/copies_substitution_check.py [--data-file regen_r26/clean_list_int_wide4_simple6_IPT.json]
 """
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 from collections import Counter, defaultdict
@@ -79,6 +80,10 @@ def demean(df, cols, groups, iters=30):
 
 
 def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--data-file", default="clean_list_int_wide4_simple6_IPT.json",
+                    help="relative to PRODUCTGPT_DATA")
+    args = ap.parse_args()
     root = os.environ.get("PRODUCTGPT_DATA")
     if not root:
         sys.exit("PRODUCTGPT_DATA is not set")
@@ -86,7 +91,7 @@ def main() -> None:
     lto_ids = [p for p in range(LTO_LO, LTO_HI + 1) if p in fig]
     cap = {p: 7 if fig[p] else 5 for p in lto_ids}
 
-    recs = load_json_dataset(str(Path(root) / "clean_list_int_wide4_simple6_IPT.json"))
+    recs = load_json_dataset(str(Path(root) / args.data_file))
 
     # ---------------------------------------------------------------- check 1
     holdings = Counter()          # copies-held bucket -> number of customer x product holdings
