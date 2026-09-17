@@ -1143,7 +1143,7 @@ Against the predictions:
 0.8865 — the same regression `b9_tf_sat2` showed (0.8783 → 0.8908). Single-seed
 leads in this project have not survived twice; interim readings stay unreported.
 
-**Decision.** Not adopted. With R21 (calendar time), R22 (capacity), R23–R24
-(inventory representation) and now R25 (recurrence + attention), six
-explanations for the transformer–GRU tie have been tested and rejected. The
+**Decision.** Not adopted. With R18 (campaign memorisation), R21 (calendar
+time), R22 (capacity), R23 (inventory representation), R24 (satiation depth)
+and now R25 (recurrence + attention), six explanations for the transformer–GRU tie have been tested and rejected. The
 plain GRU (0.8802) remains the best model; the architecture queue is empty.
