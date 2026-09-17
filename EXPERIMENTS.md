@@ -87,6 +87,7 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R24 | Sep 15 2026 | Deep satiation module on additive slots (batch 9) | Satiation needs several layers of offer–inventory computation | **Half held.** Depth beats the single step on slots (0.8908 vs 0.9011, 3/3 seeds) but does not recover the token baseline (0.8860) and never beats the plain GRU (0.8802, 0/3). 4 layers = 2 layers | Depth where the concept lives is real but small; the ceiling holds. Slots are not adopted |
 | R25 | Sep 16 2026 | Recurrence + attention over past occasions (batch 10, 9 runs) | The two memories carry different information: recurrence supplies the decay prior, attention retrieves specific past occasions by content | No gain: best hybrid `hyb_stack` 0.8865 ± 0.0079, level with its better parent (0.8860), above the plain GRU (0.8802) | Not adopted. Combining the memories does not help; with R21–R24, the information-ceiling reading stands |
 | R26 | Sep 17 2026 | Pre-build data checks for the additive attention stock; then verification of every product-id mapping (no GPU) | Copy tiers and substitution have variation to learn | **Checks void. The obtained-products stream is CONFIRMED corrupted in both gen-4 (`simple6`) and gen-5 (`_IPT`) data:** version-2 `NewProductIndex` codes are decoded with the version-6 table, which renumbered 89 of 122 products. 45 products get the wrong id; two 3-star weapons become Raiden Shogun and Xiao (92% of all "limited-time 5-star" acquisitions). Offers are correct except a campaign-30 A/B swap | Every result that reads the obtained stream is void until regenerated: inventory GRU, satiation attention, slots, deep satiation, Table 1 attribution, and gen-4 inventory results. First confirmed cause (key mismatch) was wrong; see correction below |
+| R27 | Sep 17 2026 | Batch 11: core replication on the corrected obtained stream (15 runs) | The architecture ranking and the value of reading inventory survive the R26 correction | _pending_ | _pending_ |
 
 ---
 
@@ -1260,3 +1261,44 @@ consumed the corrupted obtained stream. Rankings that do not depend on inventory
 (recency, validation, the customer split) are unlikely to move, but the headline
 arms and all inventory arms (R19, R23, R24) must be rerun on the corrected file
 before any inventory or architecture claim is written.
+
+### R27 — pre-registered: core replication on corrected data (batch 11)
+
+**Data.** `clean_list_int_wide4_simple6_IPT.json` regenerated under R26 (sha256
+`be6f52fe1355524e…`), identical on laptop and HPCC; the pre-fix file is kept as
+`_pre_r26.json` in both places. Before submission: obtained-block leak check
+"ok (block describes t−1)"; smoke test 6/6; time-bias causality PASS. Labels,
+offers and timing are unchanged, so any movement is attributable to the
+corrected inventory.
+
+**Arms** (`scripts/submit_batch11.sh`; S=1024, late validation, 40 epochs, no
+customer embedding, seeds 1–3; pre-fix references in brackets):
+
+| Arm | Inventory read? | Pre-fix |
+|---|---|---|
+| `gru` — plain GRU baseline | outcome pooling only | 0.8802 ± 0.0078 |
+| `gru_cross` — gen-5 GRU encoder | inventory GRU + offer–inventory attention | 0.8889 |
+| `gru_nocross` | inventory GRU, no attention | 0.9137 (1 seed) |
+| `tf_alibi` — transformer + ordinal recency | offer–inventory attention | 0.8860 ± 0.0057 |
+| `tf_alibi_nocross` | none | new |
+
+**Predictions and decision rules** (three-seed means, out-of-sample customers ×
+holdout period; 0.02 nats is the adoption margin, seed sd ≈ 0.008):
+
+1. *Ranking.* If `tf_alibi` and `gru` stay within 0.02, the tie (findings 5–7)
+   carries over with corrected numbers. If either leads by more than 0.02, the
+   architecture conclusion is reopened and the leader becomes the new baseline.
+2. *Inventory value.* Define the attention gain as `*_nocross − *` on each
+   encoder. If the attention gain exceeds 0.02 on either encoder, **or**
+   `gru_cross` / `tf_alibi` beats the plain GRU by more than 0.02, inventory
+   carries information the corrupted stream hid → run Phase 2 (slots, deep
+   satiation, best hybrid, one capacity and one calendar-time arm).
+   Otherwise R19/R23/R24's reading stands on corrected data and Phase 2 is
+   skipped except where the paper reports a number.
+3. *Direction.* Correct product identities should not make inventory-reading
+   arms worse. If `gru_cross` or `tf_alibi` loses more than 0.02 against its
+   pre-fix value while the plain GRU does not, stop and investigate the data
+   before interpreting anything.
+
+**Afterwards (not in this batch).** R28: one id per product (118 products,
+attributes for all); substitution check with the chasing confound removed.
