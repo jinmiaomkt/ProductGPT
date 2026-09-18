@@ -26,7 +26,7 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| 41008–41022 | `b11_*` (15 runs) | 2026-09-17 | R27: core replication on corrected data (R26) | 41008 running, 14 queued (qstat 2026-09-17) |
+| — | — | — | — | Queue empty (qstat 2026-09-18); batch 11 complete |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batch 10 (R25) is complete. Batch 11 (R27) was submitted 2026-09-17 on the
@@ -87,7 +87,7 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R24 | Sep 15 2026 | Deep satiation module on additive slots (batch 9) | Satiation needs several layers of offer–inventory computation | **Half held.** Depth beats the single step on slots (0.8908 vs 0.9011, 3/3 seeds) but does not recover the token baseline (0.8860) and never beats the plain GRU (0.8802, 0/3). 4 layers = 2 layers | Depth where the concept lives is real but small; the ceiling holds. Slots are not adopted |
 | R25 | Sep 16 2026 | Recurrence + attention over past occasions (batch 10, 9 runs) | The two memories carry different information: recurrence supplies the decay prior, attention retrieves specific past occasions by content | No gain: best hybrid `hyb_stack` 0.8865 ± 0.0079, level with its better parent (0.8860), above the plain GRU (0.8802) | Not adopted. Combining the memories does not help; with R21–R24, the information-ceiling reading stands |
 | R26 | Sep 17 2026 | Pre-build data checks for the additive attention stock; then verification of every product-id mapping (no GPU) | Copy tiers and substitution have variation to learn | **Checks void. The obtained-products stream is CONFIRMED corrupted in both gen-4 (`simple6`) and gen-5 (`_IPT`) data:** version-2 `NewProductIndex` codes are decoded with the version-6 table, which renumbered 89 of 122 products. 45 products get the wrong id; two 3-star weapons become Raiden Shogun and Xiao (92% of all "limited-time 5-star" acquisitions). Offers are correct except a campaign-30 A/B swap | Every result that reads the obtained stream is void until regenerated: inventory GRU, satiation attention, slots, deep satiation, Table 1 attribution, and gen-4 inventory results. First confirmed cause (key mismatch) was wrong; see correction below |
-| R27 | Sep 17 2026 | Batch 11: core replication on the corrected obtained stream (15 runs) | The architecture ranking and the value of reading inventory survive the R26 correction | _pending_ | _pending_ |
+| R27 | Sep 17 2026 | Batch 11: core replication on the corrected obtained stream (15 runs) | The architecture ranking and the value of reading inventory survive the R26 correction | **Ranking survives, inventory does not.** GRU 0.8892 ± 0.0172 vs transformer 0.9083 ± 0.0055 (gap 0.0191, GRU wins 3/3 paired seeds); the offer-inventory attention now adds NOTHING on either encoder (−0.0041 GRU, +0.0005 transformer). Everything is worse than pre-fix, the transformer most (+0.0223) | Phase 2 skipped per rule 2. Safety rule 3 fired and is explained: correcting the stream cut its entropy 1.050 → 0.601 nats, because two common 3-star weapons lost their own ids. Next test is R28 (one id per product) |
 
 ---
 
@@ -1302,3 +1302,55 @@ holdout period; 0.02 nats is the adoption margin, seed sd ≈ 0.008):
 
 **Afterwards (not in this batch).** R28: one id per product (118 products,
 attributes for all); substitution check with the chasing confound removed.
+
+### R27 — results: the ranking survives, the inventory signal does not
+
+All 15 runs finished. Job logs confirm the corrected file (278,720,977 bytes,
+Sep 17) was the one read. Out-of-sample customers × holdout period:
+
+| Arm | Pre-fix | Corrected | Δ |
+|---|---|---|---|
+| `gru` | 0.8802 ± 0.0078 | **0.8892 ± 0.0172** | +0.0090 |
+| `gru_nocross` | 0.9137 (1 seed) | 0.8929 ± 0.0107 | −0.0208 |
+| `gru_cross` | 0.8889 | 0.8970 ± 0.0075 | +0.0081 |
+| `tf_alibi` | 0.8860 ± 0.0057 | 0.9083 ± 0.0055 | **+0.0223** |
+| `tf_alibi_nocross` | — | 0.9088 ± 0.0037 | — |
+
+**Rule 1 — ranking.** The gap between the plain GRU and the transformer is
+0.0191, just inside the 0.02 margin, so the pre-registered "tie" verdict stands
+by the letter of the rule. But it has grown from 0.006 to 0.019 and the GRU now
+wins **3 of 3 paired seeds**. Read it as: the tie is weaker, and the transformer
+is not ahead on corrected data.
+
+**Rule 2 — inventory value.** The offer-inventory attention is worth nothing
+once product ids are correct: −0.0041 on the GRU encoder (i.e. dropping it is
+slightly BETTER) and +0.0005 on the transformer, both inside seed noise. Neither
+inventory-reading arm beats the plain GRU. **Phase 2 is skipped**, as
+pre-registered. R19/R23/R24's conclusion — the inventory path is not where the
+missing signal is — survives the correction, and is now cleaner: on corrupted
+data the attention looked worth 0.034; it is worth zero.
+
+**Rule 3 — safety check fired, and here is why.** `tf_alibi` lost 0.0223 while
+the plain GRU lost 0.0090. The mis-mapping was a deterministic relabelling, so
+it did not add information — but it did change RESOLUTION. Two very common
+3-star weapons (W3-001, W3-002) previously carried their own ids (36, 37: 13% of
+obtained tokens); correcting them merges them into the pooled 3-star id, which
+now holds 85% of tokens. Measured on the obtained stream: **entropy falls from
+1.050 to 0.601 nats** with the same 44 distinct ids. The corrupted stream was
+accidentally a finer-grained record of recent pull volume, which is predictive.
+The transformer lost most because its satiation attention reads that memory
+directly; the plain GRU only pools it.
+
+So the degradation is a loss of token resolution, not a defect in the corrected
+data, and it makes a testable prediction for **R28 (one id per product)**: giving
+all 13 three-star weapons, 27 four-star weapons and 25 four-star characters their
+own ids restores — and exceeds — the lost resolution. If the corrupted-data
+advantage was resolution, R28 should recover roughly the 0.02 nats lost here.
+
+**Calibration period is flat.** All five arms score 0.971–0.974 there, within
+0.003 of each other. The architecture differences live entirely in the holdout
+period, as before.
+
+**Seed spread.** The plain GRU's seeds are 0.8715 / 0.8902 / 0.9057 (sd 0.0172),
+twice the usual. Any future comparison against it needs three seeds; single-seed
+reads of the GRU are unusable.
