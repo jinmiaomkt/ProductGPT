@@ -130,6 +130,9 @@ D_FF="${D_FF:-}"
 #   INVENTORY=slots  additive per-product inventory (R23); SAT_LAYERS=2 stacked
 #                    offer-inventory blocks on top of it (R24)
 INVENTORY="${INVENTORY:-}"
+#   VOCAB_LEVEL=7   one token per product (118 ids) instead of 44 pooled
+#                   tokens; also switches the data file and feature table (R28)
+VOCAB_LEVEL="${VOCAB_LEVEL:-}"
 SAT_LAYERS="${SAT_LAYERS:-}"
 #   ENCODER=gru_attn FUSE=gate|stack   recurrence + attention over past
 #                    occasions (R25)
@@ -255,6 +258,7 @@ args=(
 [[ -n "$N_HEADS" ]] && args+=(--n-heads "$N_HEADS")
 [[ -n "$D_FF" ]] && args+=(--d-ff "$D_FF")
 [[ -n "$INVENTORY" ]] && args+=(--inventory "$INVENTORY")
+[[ -n "$VOCAB_LEVEL" ]] && args+=(--vocab-level "$VOCAB_LEVEL")
 [[ -n "$SAT_LAYERS" ]] && args+=(--sat-layers "$SAT_LAYERS")
 [[ -n "$FUSE" ]] && args+=(--fuse "$FUSE")
 

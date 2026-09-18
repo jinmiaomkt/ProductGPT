@@ -44,11 +44,9 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+import model_multistream_state_space as _mss
 from model_multistream_state_space import (
-    FIRST_PROD_ID,
-    LAST_PROD_ID,
     PAD_ID,
-    UNK_PROD_ID,
     AttentionPool,
     SpecialPlusFeatureLookup,
 )
@@ -75,7 +73,8 @@ class RecurrentBaseline(nn.Module):
             raise ValueError(f"cell must be 'gru' or 'lstm', got {cell!r}")
         self.cell = cell
 
-        product_ids = list(range(FIRST_PROD_ID, LAST_PROD_ID + 1)) + [UNK_PROD_ID]
+        # R28: read the range now, so a vocabulary switch before construction applies
+        product_ids = list(range(_mss.FIRST_PROD_ID, _mss.LAST_PROD_ID + 1)) + [_mss.UNK_PROD_ID]
         self.product_embed = SpecialPlusFeatureLookup(
             d_model=d_model, feature_tensor=feature_tensor,
             product_ids=product_ids, vocab_size_src=vocab_size_src,

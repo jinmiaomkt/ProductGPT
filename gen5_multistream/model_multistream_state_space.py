@@ -15,6 +15,18 @@ N_PRODUCTS = LAST_PROD_ID - FIRST_PROD_ID + 1   # 44 inventory slots
 UNK_PROD_ID = 59
 
 
+def set_product_range(first: int, last: int, unk: int) -> None:
+    """R28: switch to a per-product vocabulary (13-130, UNK 133).
+
+    Modules read these when a model is BUILT, so call this before
+    build_transformer / build_recurrent_baseline. Built models keep the
+    range they were constructed with.
+    """
+    global FIRST_PROD_ID, LAST_PROD_ID, N_PRODUCTS, UNK_PROD_ID
+    FIRST_PROD_ID, LAST_PROD_ID, UNK_PROD_ID = int(first), int(last), int(unk)
+    N_PRODUCTS = LAST_PROD_ID - FIRST_PROD_ID + 1
+
+
 class SpecialPlusFeatureLookup(nn.Module):
     """
     Token embedding + product-feature projection.
@@ -244,9 +256,11 @@ def additive_inventory(obtained_ids: torch.Tensor,
     """
     B, S, _ = obtained_ids.shape
     dev = obtained_ids.device
-    valid = (obtained_ids >= FIRST_PROD_ID) & (obtained_ids <= LAST_PROD_ID)
-    idx = (obtained_ids - FIRST_PROD_ID).clamp(0, N_PRODUCTS - 1)
-    per_row = torch.zeros(B, S, N_PRODUCTS, device=dev, dtype=torch.float32)
+    first, last = FIRST_PROD_ID, LAST_PROD_ID
+    n_products = last - first + 1
+    valid = (obtained_ids >= first) & (obtained_ids <= last)
+    idx = (obtained_ids - first).clamp(0, n_products - 1)
+    per_row = torch.zeros(B, S, n_products, device=dev, dtype=torch.float32)
     per_row.scatter_add_(2, idx, valid.to(torch.float32))
 
     count = per_row.cumsum(dim=1)
@@ -254,7 +268,7 @@ def additive_inventory(obtained_ids: torch.Tensor,
         count = count + init_count.to(dev, torch.float32)[:, None, :]
 
     never = -1.0e6
-    pos = torch.arange(S, device=dev, dtype=torch.float32)[None, :, None].expand(B, S, N_PRODUCTS)
+    pos = torch.arange(S, device=dev, dtype=torch.float32)[None, :, None].expand(B, S, n_products)
     last = torch.where(per_row > 0, pos, torch.full_like(pos, never))
     last = torch.cummax(last, dim=1).values
     if init_last is not None:

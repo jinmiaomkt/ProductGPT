@@ -52,6 +52,19 @@ def _base() -> Dict[str, Any]:
         "vocab_size_src": VOCAB_SRC,
         "vocab_size_tgt": VOCAB_TGT,
 
+        # ---------- vocabulary level (R28) ----------
+        # 6: products pooled into 44 tokens (13-56), the layout every run
+        #    up to R27 used.
+        # 7: one token per product (118 products, 13-130), so 3-stars,
+        #    4-stars and standard 5-stars stop sharing an id. R27 showed
+        #    token resolution is worth about 0.02 nats.
+        "vocab_level": 6,
+        "first_prod_id": 13,
+        "last_prod_id": 56,
+        "unk_prod_id": 59,
+        "feature_file": None,          # None = SelectedFigureWeaponEmbeddingIndex.xlsx
+        "feature_id_column": None,     # None = NewProductIndex6
+
         # ---------- event block layout ----------
         "ai_rate": AI_RATE,
         "lto_len": LTO_LEN,
@@ -232,6 +245,34 @@ def get_config(profile: str = "pilot") -> Dict[str, Any]:
         raise ValueError(f"unknown profile {profile!r}; use 'pilot' or 'hpcc'")
 
     return cfg
+
+
+VOCAB_LEVELS: Dict[int, Dict[str, Any]] = {
+    6: {},
+    7: {
+        "data_file": "perproduct/clean_list_int_wide4_simple7_IPT.json",
+        "feature_file": "perproduct/ProductVocab7.xlsx",
+        "feature_id_column": "NewProductIndex7",
+        "first_prod_id": 13,
+        "last_prod_id": 130,
+        "unk_prod_id": 133,
+        "vocab_size_src": 134,
+    },
+}
+
+
+def apply_vocab_level(cfg: Dict[str, Any], level: int) -> Dict[str, Any]:
+    """Switch the whole token layout (ids, vocab size, data and feature file)."""
+    if int(level) not in VOCAB_LEVELS:
+        raise ValueError(f"vocab_level must be one of {sorted(VOCAB_LEVELS)}, got {level!r}")
+    cfg["vocab_level"] = int(level)
+    cfg.update(VOCAB_LEVELS[int(level)])
+    return cfg
+
+
+def feature_file_path(cfg: Dict[str, Any]) -> Path:
+    name = cfg.get("feature_file")
+    return _paths.data_file(name) if name else feature_path()
 
 
 def data_path(cfg: Dict[str, Any]) -> Path:

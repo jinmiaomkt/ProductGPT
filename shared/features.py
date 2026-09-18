@@ -119,7 +119,10 @@ def _resolve_columns(df_columns, wanted: list[str]) -> tuple[list[str], list[tup
     return resolved, substitutions
 
 
-def load_feature_tensor(xls_path: str | Path) -> torch.Tensor:
+def load_feature_tensor(xls_path: str | Path, *, id_column: str | None = None,
+                        first_prod_id: int | None = None,
+                        last_prod_id: int | None = None,
+                        max_token_id: int | None = None) -> torch.Tensor:
     """
     Build the product-level feature table.
 
@@ -130,6 +133,12 @@ def load_feature_tensor(xls_path: str | Path) -> torch.Tensor:
     trainers, which is the tensor actually passed to `build_transformer`.
     """
     df = pd.read_excel(xls_path, sheet_name=0)
+    # R28: a per-product vocabulary uses a different id column and a wider
+    # product block. Defaults reproduce the 60-token layout exactly.
+    id_col = id_column or PRODUCT_ID_COLUMN
+    lo = FIRST_PROD_ID if first_prod_id is None else int(first_prod_id)
+    hi = LAST_PROD_ID if last_prod_id is None else int(last_prod_id)
+    top = MAX_TOKEN_ID if max_token_id is None else int(max_token_id)
 
     cols, subs = _resolve_columns(df.columns, FEATURE_COLS)
     for canonical, actual in subs:
@@ -147,10 +156,10 @@ def load_feature_tensor(xls_path: str | Path) -> torch.Tensor:
                   f"coerced to 0.0 -- fix the spreadsheet for production runs")
     numeric = numeric.fillna(0.0)
 
-    arr = np.zeros((MAX_TOKEN_ID + 1, FEATURE_DIM), dtype=np.float32)
-    for i, row_id in enumerate(df[PRODUCT_ID_COLUMN]):
+    arr = np.zeros((top + 1, FEATURE_DIM), dtype=np.float32)
+    for i, row_id in enumerate(df[id_col]):
         token_id = int(row_id)
-        if FIRST_PROD_ID <= token_id <= LAST_PROD_ID:
+        if lo <= token_id <= hi:
             arr[token_id] = numeric.iloc[i].to_numpy(dtype=np.float32)
 
     return torch.from_numpy(arr)

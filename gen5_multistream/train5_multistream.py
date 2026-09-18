@@ -34,6 +34,8 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 
 import config5
+import dataset_multistream
+import model_multistream_state_space
 from dataset_multistream import (
     TemporalRoleView,
     TransformerDataset,
@@ -615,6 +617,10 @@ def main() -> None:
     ap.add_argument("--batch-size", type=int, default=None)
     ap.add_argument("--max-users", type=int, default=None)
     ap.add_argument("--data-file", default=None)
+    ap.add_argument("--vocab-level", type=int, default=None, choices=[6, 7],
+                    help="6 = 44 pooled product tokens (default); 7 = one token per "
+                         "product (118 ids, R28). Sets the data file, feature table, "
+                         "id range and vocab size together.")
     ap.add_argument("--resume", action="store_true",
                     help="Resume from last.pt in the output dir if present. "
                          "Use this on HPCC so a job killed by the walltime "
@@ -734,6 +740,16 @@ def main() -> None:
     args = ap.parse_args()
 
     cfg = config5.get_config(args.profile)
+    if args.vocab_level is not None:
+        config5.apply_vocab_level(cfg, args.vocab_level)
+    # R28: the product id range lives in two modules; set it before any
+    # dataset or model is built.
+    dataset_multistream.set_product_range(cfg["first_prod_id"], cfg["last_prod_id"])
+    model_multistream_state_space.set_product_range(
+        cfg["first_prod_id"], cfg["last_prod_id"], cfg["unk_prod_id"])
+    print(f"[vocab] level={cfg['vocab_level']} products={cfg['first_prod_id']}-"
+          f"{cfg['last_prod_id']} unk={cfg['unk_prod_id']} vocab_src={cfg['vocab_size_src']} "
+          f"data={cfg['data_file']}")
     for k, v in (("num_epochs", args.epochs), ("max_events", args.max_events),
                  ("batch_size", args.batch_size), ("max_users", args.max_users),
                  ("data_file", args.data_file), ("seed", args.seed),
@@ -813,7 +829,11 @@ def main() -> None:
     cfg["uids_dir"] = str(uids_dir) if uids_dir else None
     train_dl, val_dl, test_dl, num_users = build_loaders(cfg, uids_dir=uids_dir)
 
-    feat = load_feature_tensor(config5.feature_path())
+    feat = load_feature_tensor(config5.feature_file_path(cfg),
+                               id_column=cfg.get("feature_id_column"),
+                               first_prod_id=cfg["first_prod_id"],
+                               last_prod_id=cfg["last_prod_id"],
+                               max_token_id=cfg["vocab_size_src"] - 1)
     arch = cfg.get("arch", "transformer")
     if arch != "transformer":
         if cfg.get("num_mix_heads", 0):

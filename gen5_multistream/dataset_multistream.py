@@ -50,6 +50,16 @@ FIRST_PROD_ID = 13
 LAST_PROD_ID = 56
 
 
+def set_product_range(first: int, last: int) -> None:
+    """R28: switch to a per-product vocabulary (13-130) before building datasets.
+
+    Called once at start-up by the trainer. Datasets read these at load time,
+    so set it BEFORE constructing any dataset.
+    """
+    global FIRST_PROD_ID, LAST_PROD_ID
+    FIRST_PROD_ID, LAST_PROD_ID = int(first), int(last)
+
+
 # ─────────────────────────────── loading ───────────────────────────────
 def load_json_dataset(
     path: str,
