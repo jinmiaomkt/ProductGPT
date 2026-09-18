@@ -26,7 +26,7 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| — | — | — | — | Queue empty (qstat 2026-09-18); batch 11 complete |
+| 41065–41073 | `b12_*` (9 runs) | 2026-09-18 | R28: one token per product | submitted, queued (qstat 2026-09-18) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batch 10 (R25) is complete. Batch 11 (R27) was submitted 2026-09-17 on the
