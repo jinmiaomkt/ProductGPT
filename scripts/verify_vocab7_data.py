@@ -40,6 +40,7 @@ def main() -> None:
     collapse = {int(k): int(v) for k, v in zip(tab.NewProductIndex7, tab.NewProductIndex6)}
     last7 = int(tab.NewProductIndex7.max())
     collapse.update({0: 0, last7 + 1: 57, last7 + 2: 58, last7 + 3: 59})  # specials
+    collapse[12] = 12  # [UNK]: the R export writes literal NA for a handful of items
 
     uid = lambda r: str(r["uid"][0] if isinstance(r["uid"], list) else r["uid"])
     d6 = {uid(r): r for r in load_json_dataset(str(root / a.v6))}
@@ -59,7 +60,9 @@ def main() -> None:
         if len(a6) != len(a7):
             len_diff += 1
             continue
-        for x, y in zip(a6, a7):
+        for i, (x, y) in enumerate(zip(a6, a7)):
+            if i % R >= LTO_W + OBT_W:
+                continue          # previous-decision slot: a decision id, not a product
             c = collapse.get(y)
             if c is None:
                 unmapped[y] += 1
