@@ -26,7 +26,7 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| 41065–41073 | `b12_*` (9 runs) | 2026-09-18 | R28: one token per product | submitted, queued (qstat 2026-09-18) |
+| — | — | — | — | Queue empty (qstat 2026-09-20); batch 12 complete |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batch 10 (R25) is complete. Batch 11 (R27) was submitted 2026-09-17 on the
@@ -88,7 +88,7 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R25 | Sep 16 2026 | Recurrence + attention over past occasions (batch 10, 9 runs) | The two memories carry different information: recurrence supplies the decay prior, attention retrieves specific past occasions by content | No gain: best hybrid `hyb_stack` 0.8865 ± 0.0079, level with its better parent (0.8860), above the plain GRU (0.8802) | Not adopted. Combining the memories does not help; with R21–R24, the information-ceiling reading stands |
 | R26 | Sep 17 2026 | Pre-build data checks for the additive attention stock; then verification of every product-id mapping (no GPU) | Copy tiers and substitution have variation to learn | **Checks void. The obtained-products stream is CONFIRMED corrupted in both gen-4 (`simple6`) and gen-5 (`_IPT`) data:** version-2 `NewProductIndex` codes are decoded with the version-6 table, which renumbered 89 of 122 products. 45 products get the wrong id; two 3-star weapons become Raiden Shogun and Xiao (92% of all "limited-time 5-star" acquisitions). Offers are correct except a campaign-30 A/B swap | Every result that reads the obtained stream is void until regenerated: inventory GRU, satiation attention, slots, deep satiation, Table 1 attribution, and gen-4 inventory results. First confirmed cause (key mismatch) was wrong; see correction below |
 | R27 | Sep 17 2026 | Batch 11: core replication on the corrected obtained stream (15 runs) | The architecture ranking and the value of reading inventory survive the R26 correction | **Ranking survives, inventory does not.** GRU 0.8892 ± 0.0172 vs transformer 0.9083 ± 0.0055 (gap 0.0191, GRU wins 3/3 paired seeds); the offer-inventory attention now adds NOTHING on either encoder (−0.0041 GRU, +0.0005 transformer). Everything is worse than pre-fix, the transformer most (+0.0223) | Phase 2 skipped per rule 2. Safety rule 3 fired and is explained: correcting the stream cut its entropy 1.050 → 0.601 nats, because two common 3-star weapons lost their own ids. Next test is R28 (one id per product) |
-| R28 | Sep 18 2026 | Batch 12: one token per product, 118 ids (9 runs) | Token resolution is what the pooled vocabulary was costing: per-product ids recover the ~0.02 nats R27 lost | _pending_ | _pending_ |
+| R28 | Sep 18 2026 | Batch 12: one token per product, 118 ids (9 runs) | Token resolution is what the pooled vocabulary was costing: per-product ids recover the ~0.02 nats R27 lost | **Neither prediction. A CROSSOVER.** Per-product ids HURT the GRU (0.8892 → 0.9096) and HELP the transformer (0.9083 → 0.8985). At level 7 the transformer beats the GRU by 0.0111, 3/3 paired seeds — the first time any transformer has led | Rule 3 fired: product identity is something attention exploits and recurrence cannot. The architecture question is reopened in the transformer's favour; batch 13 widens the level-7 comparison |
 
 ---
 
@@ -1404,3 +1404,46 @@ level 6 is bit-for-bit unchanged.
 two dimensions and check whether 3-stars, 4-stars and 5-stars separate, and
 whether same-element characters cluster. That is the perception map; it is a
 figure for the paper, not a selection criterion.
+
+### R28 — results: the vocabulary decides which architecture wins
+
+Nine runs, three seeds per arm, paired with their batch-11 twins (same seeds,
+same customers, same labels; only token resolution differs).
+
+| Arm | Level 6 (44 tokens) | Level 7 (118 tokens) | Δ level 7 − level 6 |
+|---|---|---|---|
+| `gru` | 0.8892 ± 0.0172 | 0.9096 ± 0.0022 | **+0.0204 (worse)** |
+| `gru_cross` | 0.8970 ± 0.0075 | 0.9126 ± 0.0078 | +0.0156 (worse) |
+| `tf_alibi` | 0.9083 ± 0.0055 | **0.8985 ± 0.0016** | **−0.0098 (better)** |
+
+**Neither pre-registered prediction held.** Not "everything improves" (rule 1),
+not "nothing changes" (rule 2). **Rule 3 fired**: the transformer gained
+0.030 nats relative to the GRU, well past the 0.02 margin.
+
+**The crossover.** At level 7 the transformer beats the plain GRU by 0.0111 with
+3/3 paired seeds (transformer seeds 0.8980 / 0.9004 / 0.8972; GRU 0.9071 /
+0.9113 / 0.9106). This is the first time in 60+ configurations that a
+transformer has led, and the seed spread collapsed (sd 0.0016 vs the GRU's 0.017
+at level 6), so the comparison is unusually clean.
+
+**Reading.** Giving every product its own token adds 74 ids, most of them rare.
+The GRU pools the offer and outcome tokens into a single vector per occasion, so
+finer ids mostly dilute that pooled average — and its selected epoch fell to 10.7
+from 22.0, i.e. it starts over-fitting sooner. The transformer reads products
+through attention, which can select among ids instead of averaging them, so the
+extra identity is usable. Product identity is exactly the kind of information
+attention is supposed to be good at, and this is the first evidence in the
+project that it is.
+
+**Inventory, again.** `gru_cross` is still no better than the plain GRU at level 7
+(+0.0030). Whatever the transformer gains from product identity, it is not coming
+through the offer-inventory attention.
+
+**Calibration period.** `gru` degrades there too (0.9896 vs 0.9737 at level 6)
+while `gru_cross` and `tf_alibi` are flat, so the GRU's loss is not drift.
+
+**What this does NOT yet establish.** One decision-level transformer against one
+recurrent baseline at one width. Before any claim: batch 13 widens the level-7
+comparison (LSTM, GRU encoder without cross-attention, transformer without the
+recency prior, the stacked hybrid) and adds a GRU at matched capacity, since the
+transformer has 1.8× the parameters.
