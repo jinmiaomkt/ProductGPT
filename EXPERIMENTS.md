@@ -26,11 +26,13 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| — | — | — | — | Queue empty (qstat 2026-09-20); batch 12 complete |
+| 41123–41194 | `b13_*` (72 runs) | 2026-09-20 | R29: vocabulary × decision × stock factorial | 41123 running, 71 queued (qstat 2026-09-20) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
-Batch 10 (R25) is complete. Batch 11 (R27) was submitted 2026-09-17 on the
-corrected data; read it with `python3 scripts/summarize_batch.py --prefix b11_`.
+Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
+2026-09-20: 72 runs, seed-major, read with
+`python3 scripts/summarize_batch.py --prefix b13_`. Tags are
+`b13_v{6,7}_<decision>[_<stock>]_s<seed>`.
 
 Batches 1-4 (40852-40903) are complete and recorded as R16-R19. Batch 5
 (40904-40909) is complete: 40904-40907 void (R20); 40908-40909 ran the lagged
