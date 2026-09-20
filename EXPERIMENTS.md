@@ -89,6 +89,7 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R26 | Sep 17 2026 | Pre-build data checks for the additive attention stock; then verification of every product-id mapping (no GPU) | Copy tiers and substitution have variation to learn | **Checks void. The obtained-products stream is CONFIRMED corrupted in both gen-4 (`simple6`) and gen-5 (`_IPT`) data:** version-2 `NewProductIndex` codes are decoded with the version-6 table, which renumbered 89 of 122 products. 45 products get the wrong id; two 3-star weapons become Raiden Shogun and Xiao (92% of all "limited-time 5-star" acquisitions). Offers are correct except a campaign-30 A/B swap | Every result that reads the obtained stream is void until regenerated: inventory GRU, satiation attention, slots, deep satiation, Table 1 attribution, and gen-4 inventory results. First confirmed cause (key mismatch) was wrong; see correction below |
 | R27 | Sep 17 2026 | Batch 11: core replication on the corrected obtained stream (15 runs) | The architecture ranking and the value of reading inventory survive the R26 correction | **Ranking survives, inventory does not.** GRU 0.8892 ± 0.0172 vs transformer 0.9083 ± 0.0055 (gap 0.0191, GRU wins 3/3 paired seeds); the offer-inventory attention now adds NOTHING on either encoder (−0.0041 GRU, +0.0005 transformer). Everything is worse than pre-fix, the transformer most (+0.0223) | Phase 2 skipped per rule 2. Safety rule 3 fired and is explained: correcting the stream cut its entropy 1.050 → 0.601 nats, because two common 3-star weapons lost their own ids. Next test is R28 (one id per product) |
 | R28 | Sep 18 2026 | Batch 12: one token per product, 118 ids (9 runs) | Token resolution is what the pooled vocabulary was costing: per-product ids recover the ~0.02 nats R27 lost | **Neither prediction. A CROSSOVER.** Per-product ids HURT the GRU (0.8892 → 0.9096) and HELP the transformer (0.9083 → 0.8985). At level 7 the transformer beats the GRU by 0.0111, 3/3 paired seeds — the first time any transformer has led | Rule 3 fired: product identity is something attention exploits and recurrence cannot. The architecture question is reopened in the transformer's favour; batch 13 widens the level-7 comparison |
+| R29 | Sep 20 2026 | Batch 13: full factorial, vocabulary × decision memory × stock memory (24 configs, 72 runs) | The R28 crossover is an interaction between vocabulary and decision-level memory, not a capacity artefact, and per-product counts finally make the stock path pay | _pending_ | _pending_ |
 
 ---
 
@@ -1447,3 +1448,57 @@ recurrent baseline at one width. Before any claim: batch 13 widens the level-7
 comparison (LSTM, GRU encoder without cross-attention, transformer without the
 recency prior, the stacked hybrid) and adds a GRU at matched capacity, since the
 transformer has 1.8× the parameters.
+
+### R29 — pre-registered: the full factorial (batch 13)
+
+**Why.** R28's crossover rests on three arms at one vocabulary each. A reviewer
+will ask three questions immediately: is it capacity (the transformer has 1.8×
+the parameters), does it survive other stock-level choices, and does product
+identity simply substitute for the recency prior? This batch crosses the design
+so the interaction is measured rather than inferred.
+
+**Design** (`scripts/submit_batch13.sh`; 3 seeds; 24 configurations; 72 runs;
+seed-major, so a complete first pass lands in roughly a third of the time):
+
+| Dimension | Levels |
+|---|---|
+| Vocabulary | 6 (118 products share 44 tokens) · 7 (one token per product) |
+| Decision-level memory | `gru` (d=128) · `gruw` (d=176, **1.25M params, matched to the transformer's 1.22M**) · `gru_enc` · `tf` (+ALiBi) · `tf_norec` · `hyb` (GRU and attention interleaved) |
+| Stock-level memory | `nostock` · `tokens` (inventory GRU + offer-inventory attention) · `slots2` (additive per-product counts + 2 satiation layers) |
+
+Crossed: {`gru_enc`,`tf`,`hyb`} × {`nostock`,`tokens`,`slots2`} × {6,7} = 18;
+plus {`gru`,`gruw`} × {6,7} = 4; plus `tf_norec` × `tokens` × {6,7} = 2.
+Six cells repeat batch 11/12 configurations at the same seeds, which doubles as
+a reproducibility check on those numbers.
+
+**Hypotheses and decision rules** (three-seed means, out-of-sample × holdout;
+0.02 nats is the adoption margin, seed sd ≈ 0.002–0.017):
+
+1. **The crossover is an interaction, not an artefact.** Predicted: at level 6
+   the recurrent arms lead; at level 7 `tf` leads; the difference-in-differences
+   (tf − gru at level 7) − (tf − gru at level 6) exceeds 0.02 in at least 2 of
+   the 3 stock variants. If it appears in 0 or 1, R28 was a single-cell result
+   and must be reported as such.
+2. **Capacity is not the explanation.** Predicted: `gruw` at level 7 closes less
+   than half the transformer's 0.011 lead. If the width-matched GRU closes it,
+   the finding is capacity, not attention, and the paper says so.
+3. **Per-product counts finally make the stock path pay.** At level 7, `slots2`
+   counts real products rather than pools. Predicted: `slots2` beats `tokens` by
+   more than 0.02 at level 7 but not at level 6. If it fails at both, the stock
+   path is not where the signal is, on any representation tried, and the
+   additive-stock programme is justified on theory and interpretability only —
+   not on fit.
+4. **Identity does not substitute for recency.** Predicted: `tf_norec` stays far
+   behind `tf` at both levels (pre-fix gap was ~0.13). If level 7 closes that
+   gap substantially, product identity is doing part of what the recency prior
+   did, which would be a finding in itself.
+5. **The hybrid.** With attention now earning its place at level 7, predicted:
+   `hyb` ≥ `tf` − 0.02 (i.e. no real gain). Adopt the hybrid only if it beats
+   `tf` by more than 0.02 at level 7.
+
+**Cost.** 72 runs at roughly 1.5 h each, two GPUs: about 2 days wall clock.
+
+**Analysis plan, fixed now.** Report the 2 × 6 × 3 table of three-seed means; the
+difference-in-differences for rule 1 with its paired-seed count; and the
+per-class profile for the best cell at each vocabulary. The perception map of
+the 118 learned product embeddings is a figure, not a selection criterion.
