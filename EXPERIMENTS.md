@@ -93,6 +93,7 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R27 | Sep 17 2026 | Batch 11: core replication on the corrected obtained stream (15 runs) | The architecture ranking and the value of reading inventory survive the R26 correction | **Ranking survives, inventory does not.** GRU 0.8892 ± 0.0172 vs transformer 0.9083 ± 0.0055 (gap 0.0191, GRU wins 3/3 paired seeds); the offer-inventory attention now adds NOTHING on either encoder (−0.0041 GRU, +0.0005 transformer). Everything is worse than pre-fix, the transformer most (+0.0223) | Phase 2 skipped per rule 2. Safety rule 3 fired and is explained: correcting the stream cut its entropy 1.050 → 0.601 nats, because two common 3-star weapons lost their own ids. Next test is R28 (one id per product) |
 | R28 | Sep 18 2026 | Batch 12: one token per product, 118 ids (9 runs) | Token resolution is what the pooled vocabulary was costing: per-product ids recover the ~0.02 nats R27 lost | **Neither prediction. A CROSSOVER.** Per-product ids HURT the GRU (0.8892 → 0.9096) and HELP the transformer (0.9083 → 0.8985). At level 7 the transformer beats the GRU by 0.0111, 3/3 paired seeds — the first time any transformer has led | Rule 3 fired: product identity is something attention exploits and recurrence cannot. The architecture question is reopened in the transformer's favour; batch 13 widens the level-7 comparison |
 | R29 | Sep 20 2026 | Batch 13: full factorial, vocabulary × decision memory × stock memory (24 configs, 72 runs) | The R28 crossover is an interaction between vocabulary and decision-level memory, not a capacity artefact, and per-product counts finally make the stock path pay | _pending_ | _pending_ |
+| R31 | Sep 21 2026 | Customer-level test of the vocabulary × architecture crossover, and where it lives (inference only, no training) | The crossover is product RETRIEVAL: real at the customer level, concentrated on offers of already-owned products, absent on the placebo | _pending_ | _pending_ |
 
 ---
 
@@ -1591,3 +1592,64 @@ Total ≈ 235 runs, ≈ 90 GPU-hours, ≈ 2 days wall on two GPUs.
 **What this costs us if skipped.** Any reviewer can ask "did you tune the
 baseline?" and today the answer is no. R29 shows the answer matters: the GRU
 gained 0.015 from a single width change.
+
+### R31 — pre-registered: is the crossover real, and where does it live? (prioritised over R30)
+
+**Why.** R28's crossover rests on three seeds per cell, and R29 localises it to
+the token-inventory configuration. Two questions can be answered from existing
+checkpoints, without training, and are more urgent than tuning:
+
+- **A1 — power.** Every model is scored on the same out-of-sample customers, so
+  their per-occasion losses can be PAIRED. A cluster bootstrap over customers
+  replaces n = 3 seeds with n ≈ 2,500 customers.
+- **C — mechanism.** If the transformer's level-7 advantage is retrieval of
+  specific past products, it must concentrate where that matters, and vanish on
+  a placebo.
+
+**Method** (`scripts/eval_per_occasion.py`, `scripts/r31_analysis.py`,
+`scripts/r31_eval.pbs`). Each checkpoint's best.pt is rebuilt and scored on
+every occasion of the out-of-sample × holdout cell. Seed-averaged per-occasion
+NLL per model; statistic
+
+    DiD = (A7 − B7) − (A6 − B6),   negative = crossover in A's favour
+
+with a 2,000-draw cluster bootstrap over customers (one shared set of draws for
+all subgroups, so subgroup contrasts are paired draw by draw). Subgroup tags are
+computed in the level-6 id space for every model, so level-6 and level-7 models
+put each occasion in the same subgroup. **Integrity gates:** every model must
+score the identical occasions with identical labels, and each file's mean NLL
+must match its run's recorded test-cell NLL to 5e-4 — otherwise that comparison
+is not analysed.
+
+**Comparisons.** Primary: transformer vs GRU encoder, token inventory (batches
+11/12, 3 seeds each). Secondary: transformer vs plain GRU; the SAME contrast
+with per-product counts (batch 13); transformer vs width-matched GRU.
+
+**Subgroups (fixed now).** Purchase decisions (1–8) vs NotBuy (9). Offer
+includes a limited 5-star the customer ALREADY OWNS vs limited offer, none owned
+(**placebo**). Distinct limited 5-stars owned: ≤3, 4–8, ≥9. (Smoke test: every
+held-out occasion offers at least one limited 5-star, so owned + placebo cover
+all occasions.)
+
+**Predictions and rules.**
+
+1. **A1:** primary DiD over all occasions is negative with a 95% CI excluding 0.
+   If the CI includes 0, R28's crossover is not established at the customer
+   level and is reported as such.
+2. **C, location:** DiD on owned-offer occasions is more negative than on the
+   placebo; the owned-minus-placebo contrast has a CI excluding 0, and the
+   placebo's own CI includes 0.
+3. **C, decision type:** DiD is larger in magnitude on purchase decisions than on
+   NotBuy.
+4. **C, dose:** DiD grows in magnitude with the number of limited 5-stars owned
+   (≤3 → 4–8 → ≥9).
+5. **Contrast:** with per-product counts, the DiD CI includes 0 (R29 predicts no
+   interaction there).
+6. **Capacity:** against the width-matched GRU the DiD shrinks; if its CI
+   includes 0, the crossover is capacity-dependent and the paper says so.
+
+Predictions 2–4 all passing with 1 is the mechanism story. 1 passing with 2–4
+failing means a real but unlocalised effect. 1 failing ends the crossover claim.
+
+**Priority.** User decision (Sep 21): R31 runs before R30. Batch 13's and
+batch 14's queued jobs are held while the evaluation jobs run, then released.
