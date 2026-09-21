@@ -1504,3 +1504,27 @@ a reproducibility check on those numbers.
 difference-in-differences for rule 1 with its paired-seed count; and the
 per-class profile for the best cell at each vocabulary. The perception map of
 the 118 learned product embeddings is a figure, not a selection criterion.
+
+**R29 interim (Sep 21 2026, 45 of 72 runs, mostly 2 seeds — NOT a result).**
+Holdout NLL, out-of-sample customers. Level 6 / level 7: plain GRU 0.8809 /
+0.9092; width-matched GRU (d=176) 0.8911 / **0.8943**; GRU encoder + counts
+0.8979 / 0.8949; transformer + tokens 0.9052 / 0.8992; transformer + counts
+0.9016 / 0.8995; hybrid + counts 0.8911 / 0.8888 (1 seed).
+
+- **Rule 1 (crossover is an interaction): failing.** The difference-in-differences
+  (transformer − GRU encoder, level 7 − level 6) is −0.0301 with the token
+  inventory, +0.0078 with no stock path and +0.0008 with per-product counts.
+  It appears in 1 of 3 stock variants, not the 2 required — i.e. only in the
+  configuration batch 12 happened to run.
+- **Rule 2 (capacity is not the explanation): failing.** At level 7 the
+  width-matched GRU beats the transformer (0.8943 vs 0.8992) and gains 0.0148
+  over the d=128 GRU. R28's "first transformer lead" looks like a comparison
+  against an undersized recurrent model.
+- **Rule 3 (per-product counts pay at level 7): supported on the recurrent
+  encoder.** Counts beat the token path by 0.0218 at level 7 and lose 0.0053 at
+  level 6 — the predicted interaction, and the first time the inventory path has
+  earned anything since the data fix.
+- **Rule 4 (identity does not replace recency): holds.** Dropping the recency
+  prior costs 0.128 (level 6) and 0.113 (level 7).
+
+Nothing is adopted on two seeds; seed 3 lands tonight.
