@@ -658,6 +658,14 @@ def main() -> None:
                          "Encodes the prior that inventory is a set, not a "
                          "sequence.")
     ap.add_argument("--dropout", type=float, default=None)
+    # R30 tuning knobs: optimiser settings were config-only until now, so no
+    # run has ever varied them. Defaults keep every earlier run reproducible.
+    ap.add_argument("--lr", type=float, default=None, help="Peak learning rate (default 3e-4).")
+    ap.add_argument("--weight-decay", type=float, default=None, help="AdamW weight decay (default 0.01).")
+    ap.add_argument("--grad-accum", type=int, default=None,
+                    help="Gradient accumulation steps; effective batch = batch_size x this.")
+    ap.add_argument("--warmup-frac", type=float, default=None,
+                    help="Fraction of total steps spent warming up (default 0.05).")
     ap.add_argument("--patience", type=int, default=None)
     ap.add_argument("--seed", type=int, default=None,
                     help="Training seed: initialisation and data order. The "
@@ -754,7 +762,9 @@ def main() -> None:
                  ("batch_size", args.batch_size), ("max_users", args.max_users),
                  ("data_file", args.data_file), ("seed", args.seed),
                  ("d_model", args.d_model), ("N", args.n_layers),
-                 ("num_heads", args.n_heads), ("d_ff", args.d_ff)):
+                 ("num_heads", args.n_heads), ("d_ff", args.d_ff),
+                 ("lr", args.lr), ("weight_decay", args.weight_decay),
+                 ("grad_accum", args.grad_accum), ("warmup_frac", args.warmup_frac)):
         if v is not None:
             cfg[k] = v
 

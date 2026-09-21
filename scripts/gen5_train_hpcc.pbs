@@ -133,6 +133,12 @@ INVENTORY="${INVENTORY:-}"
 #   VOCAB_LEVEL=7   one token per product (118 ids) instead of 44 pooled
 #                   tokens; also switches the data file and feature table (R28)
 VOCAB_LEVEL="${VOCAB_LEVEL:-}"
+#   LR=2e-4 WD=0.05 GRAD_ACCUM=8 WARMUP=0.1   optimiser knobs for the R30
+#                   tuning stages; empty = the config defaults every run so far used
+LR="${LR:-}"
+WD="${WD:-}"
+GRAD_ACCUM="${GRAD_ACCUM:-}"
+WARMUP="${WARMUP:-}"
 SAT_LAYERS="${SAT_LAYERS:-}"
 #   ENCODER=gru_attn FUSE=gate|stack   recurrence + attention over past
 #                    occasions (R25)
@@ -259,6 +265,10 @@ args=(
 [[ -n "$D_FF" ]] && args+=(--d-ff "$D_FF")
 [[ -n "$INVENTORY" ]] && args+=(--inventory "$INVENTORY")
 [[ -n "$VOCAB_LEVEL" ]] && args+=(--vocab-level "$VOCAB_LEVEL")
+[[ -n "$LR" ]] && args+=(--lr "$LR")
+[[ -n "$WD" ]] && args+=(--weight-decay "$WD")
+[[ -n "$GRAD_ACCUM" ]] && args+=(--grad-accum "$GRAD_ACCUM")
+[[ -n "$WARMUP" ]] && args+=(--warmup-frac "$WARMUP")
 [[ -n "$SAT_LAYERS" ]] && args+=(--sat-layers "$SAT_LAYERS")
 [[ -n "$FUSE" ]] && args+=(--fuse "$FUSE")
 
