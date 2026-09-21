@@ -26,7 +26,8 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| 41123–41194 | `b13_*` (72 runs) | 2026-09-20 | R29: vocabulary × decision × stock factorial | 41123 running, 71 queued (qstat 2026-09-20) |
+| 41123–41194 | `b13_*` (72 runs) | 2026-09-20 | R29: vocabulary × decision × stock factorial | 45 done, 27 left (qstat 2026-09-21) |
+| 41207–41254 | `b14_*` (48 runs) | 2026-09-21 | R30 stage 1: capacity frontier, level 7 | queued behind batch 13 (qstat 2026-09-21) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -1529,7 +1530,7 @@ Holdout NLL, out-of-sample customers. Level 6 / level 7: plain GRU 0.8809 /
 
 Nothing is adopted on two seeds; seed 3 lands tonight.
 
-### R30 — PROPOSED: the tuning and model-comparison programme
+### R30 — the tuning and model-comparison programme (stage 1 submitted)
 
 **Why now.** Nothing in this project has ever been tuned. Width, depth, heads,
 dropout, learning rate, batch size and weight decay have been identical since
@@ -1563,7 +1564,7 @@ each family's capacity curve.
 | Stage | Batch | Content | Runs |
 |---|---|---|---|
 | 0 ✅ | — | Expose `--lr`, `--weight-decay`, `--grad-accum`, `--warmup-frac`; validation-only summarizer | 0 |
-| 1 | 14 | **Capacity frontier**, level 7: 4 families × d ∈ {96,128,176,256} × N ∈ {2,4,6}, 1 seed | 48 |
+| 1 ▶ | 14 | **Capacity frontier** (submitted 2026-09-21, jobs 41207–41254), level 7: 4 families × d ∈ {96,128,176,256} × N ∈ {2,4,6}, 1 seed | 48 |
 | 2 | 15 | **Random search** per family around its stage-1 best: lr log-uniform [1e-4, 1.2e-3], dropout {0.05,0.1,0.2,0.3}, weight decay {0,0.01,0.05,0.1}, effective batch {8,16,32}, d_ff ratio {2,3,4}, warmup {0.02,0.05,0.1}; 24 configs × 4 families, 1 seed | 96 |
 | 3 | 16 | **Confirmation**: top 3 per family × 3 fresh seeds; each family's config frozen by validation mean | 36 |
 | 4 | 17 | **Final comparison**, holdout opened once: frozen config per family × 5 seeds × vocabulary {6,7}; plus stock-path ablation on the winner at level 7 | 55 |
