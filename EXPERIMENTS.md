@@ -1528,3 +1528,65 @@ Holdout NLL, out-of-sample customers. Level 6 / level 7: plain GRU 0.8809 /
   prior costs 0.128 (level 6) and 0.113 (level 7).
 
 Nothing is adopted on two seeds; seed 3 lands tonight.
+
+### R30 — PROPOSED: the tuning and model-comparison programme
+
+**Why now.** Nothing in this project has ever been tuned. Width, depth, heads,
+dropout, learning rate, batch size and weight decay have been identical since
+gen 4, inherited from a transformer sweep on different data. Tuning was blocked
+in R12–R13 (validation ranked models backwards) and never resumed after R16
+fixed it. R29's interim result shows the cost: one extra width on the GRU
+(d=176) moved it 0.0148 at level 7 and overturned R28's headline. Every
+architecture comparison we have made is a comparison at one arbitrary point on
+each family's capacity curve.
+
+**Protocol (fixed before any run).**
+
+- **P1. Selection on campaign-27 validation only.** Search stages read
+  `scripts/summarize_search.py`, which never opens a test cell. The holdout is
+  opened once, at stage 4, with the configurations already frozen.
+- **P2. Equal budget per family.** Same number of sampled configurations, same
+  search space dimensions, same seeds.
+- **P3. Seeds by stage.** Search 1 seed; confirmation 3 FRESH seeds (11, 12, 13)
+  to blunt the winner's curse; final comparison 5 seeds (1–5).
+- **P4. Search on the cheap stock path** (per-product counts, ~20× cheaper than
+  the token inventory). The stock path is re-tested on the winner at stage 4.
+- **P5. Frozen, not tuned:** the 2×2 evaluation design, campaign-27 validation,
+  `split_seed=33`, `max_events=1024`, 40-epoch cap with patience 5, class
+  weighting, and the recency prior (architectural — tested separately).
+- **P6. Report the frontier, not a point:** every table carries parameters and
+  minutes per epoch beside NLL.
+- **P7. No single-seed result is ever reported.** Two have evaporated already.
+
+**Stages.**
+
+| Stage | Batch | Content | Runs |
+|---|---|---|---|
+| 0 ✅ | — | Expose `--lr`, `--weight-decay`, `--grad-accum`, `--warmup-frac`; validation-only summarizer | 0 |
+| 1 | 14 | **Capacity frontier**, level 7: 4 families × d ∈ {96,128,176,256} × N ∈ {2,4,6}, 1 seed | 48 |
+| 2 | 15 | **Random search** per family around its stage-1 best: lr log-uniform [1e-4, 1.2e-3], dropout {0.05,0.1,0.2,0.3}, weight decay {0,0.01,0.05,0.1}, effective batch {8,16,32}, d_ff ratio {2,3,4}, warmup {0.02,0.05,0.1}; 24 configs × 4 families, 1 seed | 96 |
+| 3 | 16 | **Confirmation**: top 3 per family × 3 fresh seeds; each family's config frozen by validation mean | 36 |
+| 4 | 17 | **Final comparison**, holdout opened once: frozen config per family × 5 seeds × vocabulary {6,7}; plus stock-path ablation on the winner at level 7 | 55 |
+| 5 | — | Diagnostics: per-class profiles, calibration cell, efficiency table, product-embedding perception map, substitution check | 0 |
+
+Families: plain GRU · GRU encoder · transformer + recency · stacked hybrid.
+Total ≈ 235 runs, ≈ 90 GPU-hours, ≈ 2 days wall on two GPUs.
+
+**Decision rules for stage 4.**
+
+1. **Family winner.** Best-of-family A beats B only if Δ > 0.02 nats on the
+   five-seed holdout mean AND A wins at least 4 of 5 paired seeds.
+2. **Vocabulary interaction.** The R28 crossover is real only if
+   (A − B at level 7) − (A − B at level 6) > 0.02 with consistent sign in at
+   least two families. R29 already shows it in 1 of 3 stock variants, so the
+   prior is against it.
+3. **Efficiency.** Parameters and runtime are reported whatever the NLL says. A
+   tie at half the parameters is a result, and is the honest form of the
+   "attention buys interpretability, not accuracy" claim.
+4. **Ceiling.** If all four families land within 0.02 of each other at their own
+   optima, the information-ceiling reading is reported WITH the tuning budget as
+   evidence — that is a far stronger version of the claim than the untuned one.
+
+**What this costs us if skipped.** Any reviewer can ask "did you tune the
+baseline?" and today the answer is no. R29 shows the answer matters: the GRU
+gained 0.015 from a single width change.
