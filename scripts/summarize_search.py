@@ -47,6 +47,8 @@ def main() -> None:
         if not vals:
             continue
         best_nll, best_ep = min(vals, key=lambda t: t[0])
+        if not (hist.parent / "final.json").exists():
+            tag += "  (RUNNING)"   # still training: partial curve, not comparable yet
         key = re.sub(r"_s\d+$", "", tag) if a.group else tag
         runs[key].append((best_nll, best_ep, len(rows)))
 

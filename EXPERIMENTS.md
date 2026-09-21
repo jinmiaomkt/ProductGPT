@@ -1722,7 +1722,7 @@ reproduce it; the seed-level signs are the evidence for the latter.
 
 ### R29 — results: capacity explains the lead; the interaction survives, narrowly
 
-69 of 72 runs (missing: level-7 seed 3 of `tf_norec`, `hyb_tokens`, `hyb_slots2`).
+All 72 runs (the last three level-7 seeds landed Sep 22; table updated).
 Holdout NLL, out-of-sample customers, mean ± sd over seeds:
 
 | Configuration | Params (L6) | 44 tokens | 118 tokens |
@@ -1731,14 +1731,14 @@ Holdout NLL, out-of-sample customers, mean ± sd over seeds:
 | GRU d=176 (width-matched) | 1.25M | **0.8880** ± 0.0063 | 0.8967 ± 0.0078 |
 | GRU encoder, no stock | 0.82M | 0.8929 | 0.9083 |
 | GRU encoder + token inventory | 0.95M | 0.8970 | 0.9126 |
-| GRU encoder + per-product counts | 1.40M | 0.8995 | 0.8928 |
+| GRU encoder + per-product counts | 1.40M | 0.8995 | **0.8928** |
 | Transformer, no stock | 1.08M | 0.9088 | 0.9148 |
 | Transformer + token inventory | 1.22M | 0.9083 | 0.8986 |
 | Transformer + per-product counts | 1.67M | 0.8954 | 0.8996 |
-| Transformer, no recency prior | 1.22M | 1.0239 | 1.0351 (2) |
+| Transformer, no recency prior | 1.22M | 1.0239 | 1.0301 |
 | Hybrid, no stock | 1.48M | 0.8984 | 0.8948 |
-| Hybrid + token inventory | 1.61M | 0.8950 | 0.9123 (2) |
-| Hybrid + per-product counts | 2.06M | 0.8905 | **0.8901** (2) |
+| Hybrid + token inventory | 1.61M | 0.8950 | 0.9114 |
+| Hybrid + per-product counts | 2.06M | 0.8905 | 0.8938 |
 
 **Reproducibility.** The six cells repeating batches 11/12 reproduce them to four
 decimals (e.g. level-6 GRU 0.8891 vs 0.8892; level-7 transformer 0.8986 vs 0.8985).
@@ -1778,3 +1778,10 @@ supportable. What is: product identity helps attention more than recurrence
 (the interaction, R28/R29/R31), but a properly sized recurrent model matches the
 transformer, and per-product counts are the stock representation that pays —
 for recurrent models.
+
+**R29 final seeds (Sep 22).** The third level-7 seed of the hybrid with counts
+came in at 0.9012, moving the cell from 0.8901 (2 seeds) to **0.8938**. The best
+level-7 cell is therefore the **GRU encoder with per-product counts, 0.8928**,
+not the hybrid — the third time in this project that a lead visible on one or
+two seeds has shrunk on the next. Rule 5 with counts is now −0.0058 (hybrid vs
+transformer), not adopted. No other rule outcome changes.
