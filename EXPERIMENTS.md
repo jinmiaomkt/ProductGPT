@@ -93,7 +93,7 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R27 | Sep 17 2026 | Batch 11: core replication on the corrected obtained stream (15 runs) | The architecture ranking and the value of reading inventory survive the R26 correction | **Ranking survives, inventory does not.** GRU 0.8892 ± 0.0172 vs transformer 0.9083 ± 0.0055 (gap 0.0191, GRU wins 3/3 paired seeds); the offer-inventory attention now adds NOTHING on either encoder (−0.0041 GRU, +0.0005 transformer). Everything is worse than pre-fix, the transformer most (+0.0223) | Phase 2 skipped per rule 2. Safety rule 3 fired and is explained: correcting the stream cut its entropy 1.050 → 0.601 nats, because two common 3-star weapons lost their own ids. Next test is R28 (one id per product) |
 | R28 | Sep 18 2026 | Batch 12: one token per product, 118 ids (9 runs) | Token resolution is what the pooled vocabulary was costing: per-product ids recover the ~0.02 nats R27 lost | **Neither prediction. A CROSSOVER.** Per-product ids HURT the GRU (0.8892 → 0.9096) and HELP the transformer (0.9083 → 0.8985). At level 7 the transformer beats the GRU by 0.0111, 3/3 paired seeds — the first time any transformer has led | Rule 3 fired: product identity is something attention exploits and recurrence cannot. The architecture question is reopened in the transformer's favour; batch 13 widens the level-7 comparison |
 | R29 | Sep 20 2026 | Batch 13: full factorial, vocabulary × decision memory × stock memory (24 configs, 72 runs) | The R28 crossover is an interaction between vocabulary and decision-level memory, not a capacity artefact, and per-product counts finally make the stock path pay | _pending_ | _pending_ |
-| R31 | Sep 21 2026 | Customer-level test of the vocabulary × architecture crossover, and where it lives (inference only, no training) | The crossover is product RETRIEVAL: real at the customer level, concentrated on offers of already-owned products, absent on the placebo | _pending_ | _pending_ |
+| R31 | Sep 21 2026 | Customer-level test of the vocabulary × architecture crossover, and where it lives (inference only, no training) | The crossover is product RETRIEVAL: real at the customer level, concentrated on offers of already-owned products, absent on the placebo | **Crossover real; retrieval mechanism REJECTED.** DiD −0.0253 [−0.0269, −0.0239], negative on 3/3 matched seeds. But it concentrates on the PLACEBO (not-owned offers, −0.0377) rather than owned offers (−0.0108), and shrinks as holdings grow. It lives on purchase decisions (−0.0554); NotBuy goes the other way (+0.0186) | The level-7 transformer advantage is real but is not memory of holdings. Candidate mechanism to test: identity of recently obtained 3/4-stars marks WHICH banner a customer pulled on. Absent with per-product counts; shrinks by a third against the width-matched GRU |
 
 ---
 
@@ -1653,3 +1653,69 @@ failing means a real but unlocalised effect. 1 failing ends the crossover claim.
 
 **Priority.** User decision (Sep 21): R31 runs before R30. Batch 13's and
 batch 14's queued jobs are held while the evaluation jobs run, then released.
+
+### R31 — results: the crossover is real, but it is not retrieval of holdings
+
+**Integrity gates: all passed.** 32 checkpoints rescored; every recomputed
+test-cell NLL matches its training run's record to four decimals, and every
+model scores the identical 217,303 occasions from 1,611 out-of-sample customers
+with identical labels. (1,611, not 2,502: only customers with holdout-period
+occasions enter this cell.)
+
+**Primary — transformer vs GRU encoder, token inventory** (3 seeds per cell;
+DiD = (A7−B7) − (A6−B6), negative = crossover favours the transformer; 95% CI
+from 2,000 customer-cluster bootstrap draws):
+
+| Subgroup | Occasions | DiD | 95% CI |
+|---|---|---|---|
+| All | 217,303 | **−0.0253** | [−0.0269, −0.0239] |
+| Purchase decisions | 128,936 | **−0.0554** | [−0.0583, −0.0525] |
+| NotBuy | 88,367 | +0.0186 | [+0.0164, +0.0208] |
+| Offer includes an OWNED limited 5-star | 100,094 | −0.0108 | [−0.0133, −0.0084] |
+| Limited offer, none owned (placebo) | 117,209 | **−0.0377** | [−0.0399, −0.0356] |
+| Owns ≤3 / 4–8 / ≥9 limited 5-stars | | −0.0301 / −0.0263 / −0.0197 | all exclude 0 |
+| Owned minus placebo | | **+0.0269** | [+0.0236, +0.0303] |
+
+Seed-level check (the bootstrap holds the trained models fixed, so it measures
+customer-sampling uncertainty, NOT retraining variability): the DiD computed
+within each matched seed triple is −0.0356, −0.0245, −0.0159 — negative on all
+three.
+
+**Against the pre-registered predictions.**
+
+1. **A1 — passes.** Negative with the CI excluding 0, and negative on 3/3 seeds.
+2. **Location — fails, REVERSED.** The effect is three times larger on the
+   placebo than on owned-product offers; the owned-minus-placebo contrast is
+   positive with its CI excluding 0.
+3. **Decision type — passes.** Concentrated on purchases; NotBuy moves the
+   other way.
+4. **Dose — fails, REVERSED.** The magnitude falls as holdings grow.
+5. **Contrast (per-product counts) — near zero.** DiD +0.0025 [+0.0013,
+   +0.0036]: the CI excludes 0 by the letter, but it is a tenth of the primary
+   effect and its sign differs across the two seed pairs (−0.0008, +0.0025). No
+   interaction there, as R29 found.
+6. **Capacity — shrinks but survives.** Against the width-matched GRU the DiD is
+   −0.0161 [−0.0175, −0.0148], a third smaller (level-7 GRU has 2 seeds; both
+   seed-level DiDs negative, −0.0149 and −0.0035). Notably, against the wider
+   GRU the gain moves entirely onto NotBuy (−0.0458) and vanishes on purchases
+   (+0.0042).
+
+**Verdict by the pre-registered rule:** 1 passing with 2 and 4 failing means a
+real effect whose mechanism is NOT the one proposed. The level-7 transformer's
+advantage is not memory of what the customer owns: it is largest when the offer
+is something they do NOT own, and among customers who own little.
+
+**Candidate mechanism (a hypothesis, untested).** Level 7 changes nothing about
+the offers — limited 5-stars had their own ids at both levels — it only makes
+the OBTAINED 3- and 4-star items individually identifiable. The 4-star rate-ups
+are banner-specific, so a customer's recent individual 4-stars reveal which
+banner they have been pulling on: a behavioural engagement signal, not a
+satiation signal. That would explain why the gain sits on purchase decisions,
+on new offers, and among light holders. Testable next: attributes-only ids
+(`PROD_ID=0`) at level 7, and a vocabulary that individualises 4-stars but
+pools 3-stars.
+
+**Inference caveat for the paper.** Customer-level CIs here are tight partly
+because they condition on three trained models per cell. They establish that
+the difference is consistent across customers, not that retraining would
+reproduce it; the seed-level signs are the evidence for the latter.
