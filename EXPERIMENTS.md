@@ -92,7 +92,7 @@ the GPU queue sets no `resources_max.walltime`, and `max_run_res.ngpus` is
 | R26 | Sep 17 2026 | Pre-build data checks for the additive attention stock; then verification of every product-id mapping (no GPU) | Copy tiers and substitution have variation to learn | **Checks void. The obtained-products stream is CONFIRMED corrupted in both gen-4 (`simple6`) and gen-5 (`_IPT`) data:** version-2 `NewProductIndex` codes are decoded with the version-6 table, which renumbered 89 of 122 products. 45 products get the wrong id; two 3-star weapons become Raiden Shogun and Xiao (92% of all "limited-time 5-star" acquisitions). Offers are correct except a campaign-30 A/B swap | Every result that reads the obtained stream is void until regenerated: inventory GRU, satiation attention, slots, deep satiation, Table 1 attribution, and gen-4 inventory results. First confirmed cause (key mismatch) was wrong; see correction below |
 | R27 | Sep 17 2026 | Batch 11: core replication on the corrected obtained stream (15 runs) | The architecture ranking and the value of reading inventory survive the R26 correction | **Ranking survives, inventory does not.** GRU 0.8892 ± 0.0172 vs transformer 0.9083 ± 0.0055 (gap 0.0191, GRU wins 3/3 paired seeds); the offer-inventory attention now adds NOTHING on either encoder (−0.0041 GRU, +0.0005 transformer). Everything is worse than pre-fix, the transformer most (+0.0223) | Phase 2 skipped per rule 2. Safety rule 3 fired and is explained: correcting the stream cut its entropy 1.050 → 0.601 nats, because two common 3-star weapons lost their own ids. Next test is R28 (one id per product) |
 | R28 | Sep 18 2026 | Batch 12: one token per product, 118 ids (9 runs) | Token resolution is what the pooled vocabulary was costing: per-product ids recover the ~0.02 nats R27 lost | **Neither prediction. A CROSSOVER.** Per-product ids HURT the GRU (0.8892 → 0.9096) and HELP the transformer (0.9083 → 0.8985). At level 7 the transformer beats the GRU by 0.0111, 3/3 paired seeds — the first time any transformer has led | Rule 3 fired: product identity is something attention exploits and recurrence cannot. The architecture question is reopened in the transformer's favour; batch 13 widens the level-7 comparison |
-| R29 | Sep 20 2026 | Batch 13: full factorial, vocabulary × decision memory × stock memory (24 configs, 72 runs) | The R28 crossover is an interaction between vocabulary and decision-level memory, not a capacity artefact, and per-product counts finally make the stock path pay | _pending_ | _pending_ |
+| R29 | Sep 20 2026 | Batch 13: full factorial, vocabulary × decision memory × stock memory (24 configs, 72 runs) | The R28 crossover is an interaction between vocabulary and decision-level memory, not a capacity artefact, and per-product counts finally make the stock path pay | **Levels: capacity. Interaction: survives, narrowly.** A width-matched GRU ties the transformer at level 7 (0.8967 vs 0.8986), so the level-7 'lead' was capacity. But the vocabulary × architecture interaction survives against it (DiD −0.018, 3/3 seeds) — only with the token inventory. Counts pay for recurrent encoders at level 7 (−0.020 to −0.022). Best cells within ~0.01 at both vocabularies | Crossover claim narrowed to: finer product identity helps attention MORE than recurrence, but the best model at each vocabulary is a recurrent one. Rules 1–2 fail as written; 3 holds for recurrent encoders only; 4 holds |
 | R31 | Sep 21 2026 | Customer-level test of the vocabulary × architecture crossover, and where it lives (inference only, no training) | The crossover is product RETRIEVAL: real at the customer level, concentrated on offers of already-owned products, absent on the placebo | **Crossover real; retrieval mechanism REJECTED.** DiD −0.0253 [−0.0269, −0.0239], negative on 3/3 matched seeds. But it concentrates on the PLACEBO (not-owned offers, −0.0377) rather than owned offers (−0.0108), and shrinks as holdings grow. It lives on purchase decisions (−0.0554); NotBuy goes the other way (+0.0186) | The level-7 transformer advantage is real but is not memory of holdings. Candidate mechanism to test: identity of recently obtained 3/4-stars marks WHICH banner a customer pulled on. Absent with per-product counts; shrinks by a third against the width-matched GRU |
 
 ---
@@ -1719,3 +1719,62 @@ pools 3-stars.
 because they condition on three trained models per cell. They establish that
 the difference is consistent across customers, not that retraining would
 reproduce it; the seed-level signs are the evidence for the latter.
+
+### R29 — results: capacity explains the lead; the interaction survives, narrowly
+
+69 of 72 runs (missing: level-7 seed 3 of `tf_norec`, `hyb_tokens`, `hyb_slots2`).
+Holdout NLL, out-of-sample customers, mean ± sd over seeds:
+
+| Configuration | Params (L6) | 44 tokens | 118 tokens |
+|---|---|---|---|
+| GRU d=128 | 0.67M | 0.8891 ± 0.0171 | 0.9097 ± 0.0023 |
+| GRU d=176 (width-matched) | 1.25M | **0.8880** ± 0.0063 | 0.8967 ± 0.0078 |
+| GRU encoder, no stock | 0.82M | 0.8929 | 0.9083 |
+| GRU encoder + token inventory | 0.95M | 0.8970 | 0.9126 |
+| GRU encoder + per-product counts | 1.40M | 0.8995 | 0.8928 |
+| Transformer, no stock | 1.08M | 0.9088 | 0.9148 |
+| Transformer + token inventory | 1.22M | 0.9083 | 0.8986 |
+| Transformer + per-product counts | 1.67M | 0.8954 | 0.8996 |
+| Transformer, no recency prior | 1.22M | 1.0239 | 1.0351 (2) |
+| Hybrid, no stock | 1.48M | 0.8984 | 0.8948 |
+| Hybrid + token inventory | 1.61M | 0.8950 | 0.9123 (2) |
+| Hybrid + per-product counts | 2.06M | 0.8905 | **0.8901** (2) |
+
+**Reproducibility.** The six cells repeating batches 11/12 reproduce them to four
+decimals (e.g. level-6 GRU 0.8891 vs 0.8892; level-7 transformer 0.8986 vs 0.8985).
+
+**Rules.**
+
+1. **Interaction in ≥2 of 3 stock variants — FAILS (1 of 3).** DiD (transformer −
+   GRU encoder): token inventory −0.0253 (seeds −0.036/−0.025/−0.016); no stock
+   −0.0094 (seeds +0.013/+0.003/−0.044, driven by one seed); counts +0.0110.
+2. **Capacity not the explanation — FAILS for levels, holds for the interaction.**
+   The width-matched GRU gains 0.0130 over d=128 at level 7 (3/3) and TIES the
+   transformer (0.8967 vs 0.8986; transformer better on 2/3 seeds). But the
+   DiD against it is still −0.0184 (−0.015/−0.004/−0.037): moving from 44 to 118
+   tokens helps the transformer more than the wider GRU. The level-7 "lead" was
+   capacity; the vocabulary × architecture interaction is not.
+3. **Counts pay at level 7 — holds for recurrent encoders only.** GRU encoder
+   −0.0198 (vs +0.0026 at level 6); hybrid −0.0222 (2 seeds); transformer +0.0010.
+4. **Identity does not replace recency — holds.** +0.116 (L6), +0.136 (L7).
+5. **Hybrid adopted only if it beats the transformer by >0.02 at level 7 —
+   borderline.** −0.0200 with no stock path (3/3), −0.0094 with counts (2/2),
+   +0.0131 with the token inventory.
+
+**What the factorial says overall.**
+
+- **The best model at each vocabulary is recurrent or hybrid, not a pure
+  transformer**: width-matched GRU 0.8880 at level 6; hybrid + counts 0.8901 (2
+  seeds) and GRU encoder + counts 0.8928 (3) at level 7.
+- **Finer vocabulary does not improve the best achievable model**: the best cells
+  are 0.888 at level 6 and 0.890 at level 7.
+- **The top five cells at each level sit within ~0.01.** The ceiling reading
+  stands, now across three dimensions of design.
+- **The recency prior is the single largest effect in the matrix** (0.12–0.14),
+  an order of magnitude beyond any architecture or vocabulary choice.
+
+**For the paper:** "the transformer wins with product identity" is not
+supportable. What is: product identity helps attention more than recurrence
+(the interaction, R28/R29/R31), but a properly sized recurrent model matches the
+transformer, and per-product counts are the stock representation that pays —
+for recurrent models.
