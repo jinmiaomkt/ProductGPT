@@ -1,0 +1,45 @@
+#!/bin/bash
+# ============================================================================
+# R31: score every held-out occasion for a set of finished runs, then run the
+# customer-level analysis. Inference only -- no training.
+#
+#   qsub -v STEMS="b11_tf_alibi b11_gru_cross",ANALYSE=1 scripts/r31_eval.pbs
+#
+# STEMS  run-tag stems; every finished seed (<stem>_s1, _s2, ...) is scored
+# ANALYSE=1  run scripts/r31_analysis.py at the end
+# Outputs: $PBS_O_WORKDIR/results/r31/<tag>.npz (git-ignored). Only aggregate
+# counts and statistics reach the job log.
+# ============================================================================
+#PBS -N r31_eval
+#PBS -l select=1:ncpus=8:ngpus=1:mem=64GB
+#PBS -q GPU
+#PBS -l walltime=06:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+
+set -eo pipefail
+module purge
+module load python/3.11.4 cuda/12.5
+cd "$PBS_O_WORKDIR"
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
+source "$PBS_O_WORKDIR/env.sh"
+export PYTHONUNBUFFERED=1
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+RUNS=/storage/home/jinmiao/ProductGPT/runs
+OUT="$PBS_O_WORKDIR/results/r31"
+mkdir -p "$OUT"
+
+echo "PBS job: $PBS_JOBID on $(hostname)"
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+for stem in ${STEMS:?set STEMS}; do
+  for ck in "$RUNS"/*_b4_"${stem}"_s[0-9]/gen5_multistream/hpcc/best.pt; do
+    [[ -f "$ck" ]] || { echo "[r31] no finished run for $stem"; continue; }
+    tag=$(basename "$(dirname "$(dirname "$(dirname "$ck")")")"); tag=${tag#*_b4_}
+    if [[ -f "$OUT/$tag.npz" ]]; then echo "[r31] $tag already scored"; continue; fi
+    python scripts/eval_per_occasion.py --ckpt "$ck" --out-dir "$OUT" 2>&1 | grep -E "^\[r31\]|Error|Traceback|mismatch"
+  done
+done
+if [[ "${ANALYSE:-0}" == "1" ]]; then
+  python scripts/r31_analysis.py --res-dir "$OUT" --runs-root "$RUNS"
+fi
