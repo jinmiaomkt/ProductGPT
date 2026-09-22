@@ -26,8 +26,7 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| 41123–41194 | `b13_*` (72 runs) | 2026-09-20 | R29: vocabulary × decision × stock factorial | 45 done, 27 left (qstat 2026-09-21) |
-| 41207–41254 | `b14_*` (48 runs) | 2026-09-21 | R30 stage 1: capacity frontier, level 7 | queued behind batch 13 (qstat 2026-09-21) |
+| 41296–41391 | `b15_*` (96 runs) | 2026-09-22 | R30 stage 2: random search around each family's stage-1 frontier | 1 running, 95 queued (qstat 2026-09-22) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -1531,7 +1530,7 @@ Holdout NLL, out-of-sample customers. Level 6 / level 7: plain GRU 0.8809 /
 
 Nothing is adopted on two seeds; seed 3 lands tonight.
 
-### R30 — the tuning and model-comparison programme (stage 1 submitted)
+### R30 — the tuning and model-comparison programme (stage 1 done, stage 2 submitted)
 
 **Why now.** Nothing in this project has ever been tuned. Width, depth, heads,
 dropout, learning rate, batch size and weight decay have been identical since
@@ -1565,14 +1564,38 @@ each family's capacity curve.
 | Stage | Batch | Content | Runs |
 |---|---|---|---|
 | 0 ✅ | — | Expose `--lr`, `--weight-decay`, `--grad-accum`, `--warmup-frac`; validation-only summarizer | 0 |
-| 1 ▶ | 14 | **Capacity frontier** (submitted 2026-09-21, jobs 41207–41254), level 7: 4 families × d ∈ {96,128,176,256} × N ∈ {2,4,6}, 1 seed | 48 |
-| 2 | 15 | **Random search** per family around its stage-1 best: lr log-uniform [1e-4, 1.2e-3], dropout {0.05,0.1,0.2,0.3}, weight decay {0,0.01,0.05,0.1}, effective batch {8,16,32}, d_ff ratio {2,3,4}, warmup {0.02,0.05,0.1}; 24 configs × 4 families, 1 seed | 96 |
+| 1 ✅ | 14 | **Capacity frontier** (done 2026-09-22, 48/48), level 7: 4 families × d ∈ {96,128,176,256} × N ∈ {2,4,6}, 1 seed | 48 |
+| 2 ▶ | 15 | **Random search** (submitted 2026-09-22, jobs 41296–41391) per family around its stage-1 best and runner-up: lr log-uniform [1e-4, 1.2e-3], dropout {0.05,0.1,0.2,0.3}, weight decay {0,0.01,0.05,0.1}, effective batch {8,16,32}, d_ff ratio {2,3,4}, warmup {0.02,0.05,0.1}; 24 configs × 4 families, 1 seed | 96 |
 | 3 | 16 | **Confirmation**: top 3 per family × 3 fresh seeds; each family's config frozen by validation mean | 36 |
 | 4 | 17 | **Final comparison**, holdout opened once: frozen config per family × 5 seeds × vocabulary {6,7}; plus stock-path ablation on the winner at level 7 | 55 |
 | 5 | — | Diagnostics: per-class profiles, calibration cell, efficiency table, product-embedding perception map, substitution check | 0 |
 
 Families: plain GRU · GRU encoder · transformer + recency · stacked hybrid.
 Total ≈ 235 runs, ≈ 90 GPU-hours, ≈ 2 days wall on two GPUs.
+
+**Stage 1 result (validation NLL, 1 seed — a search signal, not a finding; P7).**
+All 48 runs finished. Each family's best and runner-up (width, depth):
+
+| Family | Best | Runner-up | Default cell d128 N4 |
+|---|---|---|---|
+| stacked hybrid | d96 N6 0.8722 | d128 N4 0.8731 | 0.8731 |
+| transformer + recency | d256 N6 0.8772 | d96 N6 0.8879 | 0.8900 |
+| GRU encoder | d256 N6 0.8838 | d256 N2 0.8848 | 0.8918 |
+| plain GRU | d176 N4 0.8893 | d256 N2 0.8902 | 0.8945 |
+
+Two readings to carry, not conclusions: (i) the curve is ragged within a family
+(hybrid d96: N2 0.8870, N4 0.8917, N6 0.8722), so single-seed noise is of order
+0.01 and stage 3's fresh seeds are essential; (ii) the widest models stop early
+(best epoch 4–8, early-stopped by 11–14), which points to a learning rate too
+high for their size — stage 2's learning-rate range tests exactly that.
+Stage-1 runs cost 0.03–0.7 GPU-hours each (median ≈ 0.3).
+
+**Stage 2 as drawn.** `scripts/r30_stage2_sample.py` read the table above and
+drew 24 configurations per family (12 at the best cell, 12 at the runner-up),
+RNG seeded per family (3001–3004), so the draw is reproducible. Tags
+`b15_<family>_c00…c23`. Stage-3 candidates are the top 3 per family by
+validation across stage 1 AND stage 2 (the stage-1 default-hyperparameter
+points stay eligible). Expected wall time ≈ 15–20 h on two GPUs.
 
 **Decision rules for stage 4.**
 
