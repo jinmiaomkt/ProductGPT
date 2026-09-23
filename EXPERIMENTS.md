@@ -1808,3 +1808,152 @@ level-7 cell is therefore the **GRU encoder with per-product counts, 0.8928**,
 not the hybrid — the third time in this project that a lead visible on one or
 two seeds has shrunk on the next. Rule 5 with counts is now −0.0058 (hybrid vs
 transformer), not adopted. No other rule outcome changes.
+
+---
+
+## Coauthor comments, 2026-09-23 — three extensions
+
+Raised by the coauthor at the weekly meeting, documented here before any code
+moves. All three are "if time permits" except the identification study, which
+gates the second one.
+
+### R32 — hybrid designs: WHICH way of combining recurrence and attention?
+
+**The comment.** There is more than one hybrid. We have tested two and written
+"the hybrid" as if it were one architecture.
+
+**What exists.** `ENCODER=gru_attn` with `FUSE=gate` (both branches run on the
+same input, a learned gate mixes them) and `FUSE=stack` (GRU and attention
+interleaved layer by layer). Both combine the two mechanisms WITHIN a layer, on
+the same input. The stacked variant is the stage-1 leader (0.8722).
+
+**What is missing.** Three designs, each making a different claim about what
+memory does. They are not a zoo; each is a sentence in the paper.
+
+| Tag | Design | The claim it embodies |
+|---|---|---|
+| `FUSE=seq_ra` | GRU over the whole sequence first, attention over its hidden states | recurrence BUILDS the state; attention RETRIEVES among states |
+| `FUSE=seq_ar` | transformer layers first, a GRU reads out the contextualised sequence | attention builds context; recurrence CARRIES the accumulated propensity |
+| `FUSE=block` | attention within a block of K occasions, recurrence across block summaries | two time scales: within-campaign retrieval, across-campaign carryover |
+
+`seq_ra` is the classical encoder–decoder attention arrangement; `seq_ar` is its
+mirror and the one closest to a marketing state variable (a propensity updated
+occasion by occasion). `block` is also the only design that makes
+`max_events > 1024` affordable: cost is O(S·K), not O(S²).
+
+**Budget and rule.** Equal treatment or it does not count: each design gets 4
+capacity cells + 8 sampled hyperparameter configurations (the R30 stage-2
+space), 1 seed = 36 runs, about 13 GPU-hours. A design replaces the incumbent
+hybrid only by the 0.02 rule on validation, then confirmed on 3 fresh seeds.
+Runs after R30 stage 3.
+
+### R33 — the attention (QKV) inventory: stock as a learned kernel
+
+**The comment.** The inventory has two implementations (recurrent unit, item
+counts); the attention-based one was designed but never built.
+
+**What the slots path actually does today.** Worth stating precisely, because
+the gap is narrower and sharper than "we have no attention inventory":
+
+- the READ is already attention — offers attend to the 44 product slots
+  (`SatiationBlock`, `sat_layers`);
+- the STOCK is not. `additive_inventory` increments slot p and only slot p when
+  product p is acquired (an identity kernel), counts NEVER decay, and the
+  attribute-level stock `count @ feat_std` uses a FIXED attribute matrix.
+
+So the missing object is a learned kernel on the WRITE side:
+
+    S_t(j) = sum_{tau < t}  kappa(j, p_tau) * g(tier_tau) * phi(t - tau)
+
+with kappa a learned product–product similarity (query = slot j, key = acquired
+item embedding: QKV), phi a decay kernel, g a tier weight for duplicate copies.
+
+**Nesting ladder.** Each rung nests the one above, is one flag, and has a
+classical referent (see the lineage table below). That is what makes the result
+interpretable whichever way it comes out.
+
+| Rung | Flags | kappa | phi | g |
+|---|---|---|---|---|
+| L0 (control, current) | `INVENTORY=slots` | identity | 1 | 1 |
+| L1 | `INVENTORY=kernel,KERNEL=attr` | fixed by the attribute table | 1 | 1 |
+| L2 | `KERNEL=learned` | learned QKV over product embeddings | 1 | 1 |
+| L3 | `DECAY=exp` / `DECAY=mix` | learned | one half-life / mixture | 1 |
+| L4 | `TIER=1` | learned | learned | tier weight on duplicates |
+
+**Implementation.** A new `InventoryKernel` module beside `InventorySlots`; the
+existing path untouched, so L0 stays a true control. Cost is O(S·44·D) plus a
+44×44 (level 6) or 118×118 (level 7) kernel — cheap, and no S² term.
+
+**Rule.** A rung is adopted only if it beats the rung above by 0.02 on
+validation at equal budget. If no rung clears it, the finding is "substitution
+structure adds nothing beyond per-product counts" — publishable, and consistent
+with R27 (inventory attention worth ~0) and R29 (counts are what pays).
+
+**Gate.** No cluster time on L2+ until R34 shows kappa is recoverable. Budget
+after the gate: 4 rungs × 6 configs + 4 × 3 confirmation seeds = 36 runs, ~13
+GPU-hours.
+
+**By-product.** kappa IS the perception map the project has wanted since the
+level-7 vocabulary went in: an estimated substitution matrix over products,
+readable as a picture, with 3-star items expected to collapse together.
+
+### R34 — simulation study: is the kernel identified? (gates R33)
+
+**The comment.** Ideally a simulation-based study should verify identification
+of the kernel approach. Agreed, and it is also the cheapest item here: it runs
+on the laptop, competes for no GPU queue, and it is the honest answer to the
+reviewer question "how do you know that matrix is substitution and not
+heterogeneity?" — the question R31 already ran into once (the crossover is real
+but the retrieval mechanism was rejected).
+
+**DGP.** Synthetic customers on the REAL campaign calendar (so the offer
+rotation matches ours), a known kernel kappa*, decay phi* with half-life h*,
+tier weights g*, and customer heterogeneity from a known distribution;
+decisions drawn from a logit over the 9 classes.
+
+| # | Question | Design | Statistic |
+|---|---|---|---|
+| S1 | Recovery | fit L2/L3 to L2/L3 data | rank correlation of off-diagonal kappa-hat vs kappa*; Procrustes error of the implied product map; estimated vs true half-life; all as a power curve in N customers and sequence length |
+| S2 | **False positive** | DGP with stable-taste heterogeneity and NO substitution (kappa* = identity) | does kappa-hat invent off-diagonal structure? if so, is it removed by a customer (or customer×element) fixed effect? |
+| S3 | Reverse | DGP with substitution, homogeneous customers | a heterogeneity-only model must fit worse — the two stories must be separable in our design |
+| S4 | Offer schedule | real rotating schedule vs randomised schedule | does identification depend on the banner rotation? its strength is an empirical fact about our data, not an assumption |
+
+**Deliverable.** A recovery table, a true-vs-estimated kappa heatmap, and the
+power curve. **Rule:** R33 L2+ proceeds on real data only if S1 recovers kappa
+(rank correlation > 0.6 at our N) AND S2's false-positive kernel is absent or
+removable by a customer fixed effect. If S2 fails, the paper reports the kernel
+as descriptive, not structural — a finding about gacha data, not a defeat.
+
+### The marketing lineage of the kernel (coauthor's point 3)
+
+Each rung of R33 generalises something the marketing literature has estimated
+for forty years. This table is the skeleton of the modelling section.
+**Citations to be verified against the library before they enter the
+manuscript.**
+
+| Component | Classical referent | What we generalise |
+|---|---|---|
+| phi, exponential decay | Guadagni & Little (1983): loyalty as an exponentially smoothed average of past purchases | learn the half-life instead of fixing the smoothing constant |
+| phi, distributed lag | Seetharaman (2004): multiple sources of state dependence via a distributed lag | a non-parametric lag profile estimated jointly with choice |
+| kappa over attributes | McAlister (1982) attribute satiation; Lattin & McAlister (1985), which derives substitutes and complements from exactly this kind of attribute inventory | kappa LEARNED rather than imposed by the attribute table; the estimated matrix is the output, not the input |
+| stock as consumption pressure | Ailawadi & Neslin (1998); Gupta (1988) on when–what–how much | our stock enters the timing decision (NotBuy) as well as the choice among banners |
+| g(tier) on duplicates | depth-of-holding / quantity arguments | duplicates are not variety: tier weighting separates "another copy" from "another product" |
+| identification | Heckman (1981) initial conditions; Keane (1997); Dubé, Hitsch & Rossi (2010) on state dependence vs heterogeneity | R34's S2/S3 is that literature's test applied to a LEARNED kernel |
+| alternative dynamics to position against | Erdem & Keane (1996) learning; Netzer, Lattin & Srinivasan (2008) hidden Markov | ours is a memory kernel, not a belief state or a latent stage |
+
+The one-sentence version for the paper: **the attention inventory is a learned
+Guadagni–Little smoothing with a learned McAlister substitution matrix**, and
+the simulation study is what licenses reading the matrix as substitution.
+
+### Sequencing and cost
+
+| When | Item | Where it runs | Cost |
+|---|---|---|---|
+| now, in parallel with batch 15 | R34 simulation harness (S1–S4) | laptop | no queue |
+| after R30 stage 3 | R32 hybrid designs (36 runs) | HPCC | ~13 GPU-h |
+| after R34 passes its gate | R33 kernel ladder (36 runs) | HPCC | ~13 GPU-h |
+| R30 stage 4 | frozen comparison | HPCC | as planned |
+
+R30 stage 4 is unaffected: a new design or rung joins the final comparison only
+if it has cleared its own equal-budget search first. Otherwise the paper reports
+the four frozen families and these extensions appear as robustness.
