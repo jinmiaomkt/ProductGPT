@@ -124,17 +124,23 @@ def s3_separability(quick: bool) -> dict:
 def s4_schedule(quick: bool) -> dict:
     """Does identification depend on the banner rotation? Compare the real
     campaign-style rotation with offers redrawn every occasion."""
+    grid = ([(False, 15, "campaign len 15"), (True, 15, "randomised offers")] if quick else
+            [(False, 30, "campaign len 30"), (False, 15, "campaign len 15"),
+             (False, 5, "campaign len 5"), (True, 15, "randomised offers")])
     rows = []
-    for randomized, label in ((False, "campaign rotation"), (True, "randomised offers")):
-        cfg = replace(base_cfg(quick), randomized_schedule=randomized, seed=400)
+    for randomized, clen, label in grid:
+        cfg = replace(base_cfg(quick), randomized_schedule=randomized,
+                      campaign_len=clen, seed=400)
         d = simulate(cfg)
         r = run_fit(d, quick, kernel="learned", seed=1)
         m = kernel_metrics(r["kappa_hat"], d.kappa_true, d.elem_of)
-        rows.append({"schedule": label, "spearman": m["spearman_offdiag"],
+        rows.append({"schedule": label, "campaign_len": clen,
+                     "spearman": m["spearman_offdiag"],
                      "elem_lift": m["same_elem_lift"], "half_life_hat": r["half_life_hat"]})
         print(f"  {label:<20} spearman {m['spearman_offdiag']:+.3f}  "
-              f"lift {m['same_elem_lift']:.2f}")
-    report("S4 offer schedule", rows, ["schedule", "spearman", "elem_lift", "half_life_hat"])
+              f"lift {m['same_elem_lift']:.2f}", flush=True)
+    report("S4 offer schedule (how fast must offers rotate for kappa to be identified?)",
+           rows, ["schedule", "spearman", "elem_lift", "half_life_hat"])
     return {"rows": rows}
 
 
