@@ -26,8 +26,7 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| 41296–41391 | `b15_*` (96 runs) | 2026-09-22 | R30 stage 2: random search around each family's stage-1 frontier | 58 done, 1 running, 37 queued (qstat 2026-09-23) |
-| 41419 | `r34_sim` (1 job) | 2026-09-23 | R34 s4 re-run: rotation-speed sweep | running on the CPU queue (qstat 2026-09-23) |
+| 41296–41391 | `b15_*` (96 runs) | 2026-09-22 | R30 stage 2: random search around each family's stage-1 frontier | 74 done, 2 running, 20 queued (qstat 2026-09-23) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -2007,8 +2006,24 @@ it is the rotation: when the same products are offered for many consecutive
 occasions, a customer is rarely offered product j shortly after acquiring a
 DIFFERENT product in j's element, and that contrast is the only thing that
 separates kappa(j,p) from kappa(j,j). Our data has a campaign rotation, and its
-campaigns are LONGER in occasions than the 15 simulated here. Job 41419 sweeps
-campaign length (5 / 15 / 30 / randomised) to turn this into a dose-response.
+campaigns are LONGER in occasions than the 15 simulated here.
+
+**The rotation sweep (job 41419) makes this sharper: it is a cliff, not a
+slope.**
+
+| Offer schedule | Spearman with the true kernel | half-life |
+|---|---|---|
+| campaign length 30 | −0.015 | 29.2 |
+| campaign length 15 | 0.007 | 29.6 |
+| campaign length 5 | 0.072 | 28.8 |
+| randomised every occasion | **0.648** | 29.0 |
+
+Rotating six times faster than the baseline — far faster than our real
+campaigns — buys almost nothing. Only full randomisation identifies the kernel.
+So the managerial implication is not "rotate faster", it is "randomise": a
+partial speed-up does not rescue identification. The half-life is recovered
+under every schedule (28.8–29.6 against a true 30), so the decay rung is safe
+whatever the offer design.
 
 **Consequences for R33.**
 
