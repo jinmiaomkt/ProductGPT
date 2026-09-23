@@ -27,7 +27,7 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
 | 41296–41391 | `b15_*` (96 runs) | 2026-09-22 | R30 stage 2: random search around each family's stage-1 frontier | 58 done, 1 running, 37 queued (qstat 2026-09-23) |
-| 41414–41418 | `r34_sim` (5 jobs) | 2026-09-23 | R34 identification simulation, experiments s0–s4 | all 5 running on the CPU queue (qstat 2026-09-23) |
+| 41419 | `r34_sim` (1 job) | 2026-09-23 | R34 s4 re-run: rotation-speed sweep | running on the CPU queue (qstat 2026-09-23) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -1974,3 +1974,61 @@ the simulation study is what licenses reading the matrix as substitution.
 R30 stage 4 is unaffected: a new design or rung joins the final comparison only
 if it has cleared its own equal-budget search first. Otherwise the paper reports
 the four frozen families and these extensions appear as robustness.
+
+### R34 — results: the decay is identified, the substitution kernel is not (under our offer design)
+
+Five CPU jobs, 2026-09-23, ~3.5 CPU-hours. Synthetic panels: 24 products, 6
+elements, 1,000 customers, 300 occasions, 600 epochs per fit.
+
+**The pre-registered gate FAILED.** R33's learned-kernel rungs (L2 and above)
+do not proceed to real data as a structural claim.
+
+| # | Question | Result |
+|---|---|---|
+| s0 | How much is knowing the true kernel worth? | **+0.000 to +0.001 nats** over an identity kernel, at every satiation strength (lam 0.5 → 4) |
+| s1 | Can kappa be recovered? | Spearman **0.06, 0.01, 0.08, 0.10** at N = 250, 500, 1000, 2000 — gate was 0.6, and more customers do not help |
+| s1 | Can the decay be recovered? | **Yes**: half-life 30.7 / 28.5 / 29.7 / 30.8 against a true 30, at every N |
+| s2 | Does kappa invent structure when there is none? | **Yes.** True kernel = identity, yet estimated off-diagonal mass 0.46–0.70 and element lift up to 2.1. A customer fixed effect does NOT remove it (lift 1.08 → 2.12) |
+| s3 | Can a heterogeneity-only model mimic substitution? | The question does not arise: learned kernel and identity kernel give the **identical** held-out NLL (1.536 both). The customer FE fits training better (1.502) and generalises worse (1.554) |
+| s4 | Does identification depend on the offer schedule? | **Decisively.** Randomised offers recover kappa (Spearman **0.648**, above the gate); a campaign rotation does not (**0.007**) |
+
+**What this means.** Satiation itself is strongly identified and strongly
+consequential — raising lam from 0.5 to 4 moves the NotBuy share from 0.49 to
+0.76 and the NLL from 1.59 to 0.90. What is NOT identified is the CROSS-PRODUCT
+structure: which product substitutes for which. An identity kernel reproduces
+the behaviour of the true kernel almost exactly, so the likelihood has nothing
+to say about the off-diagonal, and the estimate drifts wherever initialisation
+takes it. That is why s2's false positive appears and why the customer fixed
+effect cannot cure it: the problem is non-identification, not confounding.
+
+s4 locates the cause. The kernel IS identifiable in principle — under
+randomised offers the same estimator recovers it at Spearman 0.65. What blocks
+it is the rotation: when the same products are offered for many consecutive
+occasions, a customer is rarely offered product j shortly after acquiring a
+DIFFERENT product in j's element, and that contrast is the only thing that
+separates kappa(j,p) from kappa(j,j). Our data has a campaign rotation, and its
+campaigns are LONGER in occasions than the 15 simulated here. Job 41419 sweeps
+campaign length (5 / 15 / 30 / randomised) to turn this into a dose-response.
+
+**Consequences for R33.**
+
+1. **L3 (learned decay) proceeds.** The half-life is recovered cleanly at every
+   sample size — this is the Guadagni–Little / Seetharaman rung, and it is the
+   one our data can support.
+2. **L1 (kernel fixed by the attribute table) proceeds.** It imposes the
+   substitution structure rather than estimating it, so it is not exposed to
+   this failure; it is a restriction to be tested, not an estimate to be read.
+3. **L2 (learned kernel) does NOT proceed as a structural claim.** If it is run
+   at all, it is a fit-improvement test, and the estimated matrix is NOT
+   reported as a perception map or a substitution matrix. The earlier hope that
+   kappa would give us the product map does not survive this simulation.
+4. **The negative result is itself a contribution.** "A learned attention
+   inventory cannot identify substitution under a live-service rotation
+   schedule, though it identifies the decay" is a methodological finding, with
+   the randomised-offer arm as proof that the estimator is sound and the design
+   is the binding constraint. It also tells a platform what experiment WOULD
+   identify substitution: randomise the banner line-up.
+
+**Still to do.** Re-run s4 with the REAL campaign calendar (offer sets per
+campaign — product metadata only, no customer data) so the statement is about
+our dataset and not a stylised rotation.
