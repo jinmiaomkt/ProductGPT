@@ -26,7 +26,8 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| 41296–41391 | `b15_*` (96 runs) | 2026-09-22 | R30 stage 2: random search around each family's stage-1 frontier | 1 running, 95 queued (qstat 2026-09-22) |
+| 41296–41391 | `b15_*` (96 runs) | 2026-09-22 | R30 stage 2: random search around each family's stage-1 frontier | 58 done, 1 running, 37 queued (qstat 2026-09-23) |
+| 41414–41418 | `r34_sim` (5 jobs) | 2026-09-23 | R34 identification simulation, experiments s0–s4 | all 5 running on the CPU queue (qstat 2026-09-23) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -1923,6 +1924,22 @@ power curve. **Rule:** R33 L2+ proceeds on real data only if S1 recovers kappa
 (rank correlation > 0.6 at our N) AND S2's false-positive kernel is absent or
 removable by a customer fixed effect. If S2 fails, the paper reports the kernel
 as descriptive, not structural — a finding about gacha data, not a defeat.
+
+
+**Where R34 runs (2026-09-23).** The `short`/`long` CPU queues on OMEGA are
+idle while batch 15 holds both GPU slots, and the simulation panels are small
+and sequential in time, so `scripts/r34_sim.pbs` requests `ncpus=8` with no
+GPU. Five jobs, one per experiment, started immediately. User's suggestion;
+it costs nothing against the GPU limit.
+
+**s0, added before s1–s4.** A weak kernel estimate has two possible causes and
+they need opposite responses. `s0` separates them: it trains the identity
+kernel and the TRUE kernel at equal budget and reports the gap between them,
+across satiation strengths lam ∈ {0.5, 1, 2, 4}. If the oracle cannot beat the
+identity, the panel holds no information about kappa, and the honest conclusion
+is that the design cannot identify it — no estimator improvement would help.
+The first smoke run (small panel, tiny budget) showed a gap of +0.001 nats,
+which is why the full sweep exists.
 
 ### The marketing lineage of the kernel (coauthor's point 3)
 
