@@ -1,0 +1,41 @@
+#!/bin/bash
+# ============================================================================
+# R34: the kernel identification simulation, on CPU nodes.
+#
+# Deliberately NOT a GPU job. The panels are small (tens of products, hundreds
+# of occasions) and the loop is sequential in time, so a CPU node is the right
+# size -- and the CPU queues are idle while batch 15 occupies both GPU slots.
+#
+#   qsub -v EXP=s0 scripts/r34_sim.pbs
+#   qsub -v EXP=s1,EPOCHS=600 scripts/r34_sim.pbs
+#
+# EXP     s0 | s1 | s2 | s3 | s4 | all   (s0 first: it gates the rest)
+# EPOCHS  training budget override
+# QUICK=1 small panels
+# Writes results/r34/<exp>.json in $PBS_O_WORKDIR (git-ignored). Synthetic data
+# only -- this job reads nothing from PRODUCTGPT_DATA.
+# ============================================================================
+#PBS -N r34_sim
+#PBS -l select=1:ncpus=8:mem=32GB
+#PBS -q short
+#PBS -l walltime=12:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+
+set -eo pipefail
+module purge
+module load python/3.11.4
+cd "$PBS_O_WORKDIR"
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
+export PYTHONUNBUFFERED=1
+export OMP_NUM_THREADS=8
+export MKL_NUM_THREADS=8
+
+echo "PBS job: $PBS_JOBID on $(hostname)  EXP=${EXP:?set EXP}"
+python -c "import torch, numpy; print('torch', torch.__version__, 'numpy', numpy.__version__)"
+
+args=(--experiment "$EXP" --threads 8)
+[[ -n "${EPOCHS:-}" ]] && args+=(--epochs "$EPOCHS")
+[[ "${QUICK:-0}" == "1" ]] && args+=(--quick)
+python simulation/run_sim_study.py "${args[@]}"
