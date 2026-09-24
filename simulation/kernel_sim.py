@@ -347,6 +347,8 @@ def fit(data: SimData, kernel: str = "learned", customer_fe: bool = False,
             "lam_hat": float(F.softplus(model.log_lam)),
             "tier_hat": model.tier().cpu().numpy().tolist(),
             "history": hist,
+            "attr_self": float(model.attr_self) if kernel == "attr" else None,
+            "attr_same": float(model.attr_same) if kernel == "attr" else None,
             "model": model,
             "device": str(dev),
         }
@@ -375,6 +377,8 @@ def held_out_nll(model: KernelModel, data: SimData, t_lo: int,
 # recovery metrics
 # --------------------------------------------------------------------------
 def spearman(a: np.ndarray, b: np.ndarray) -> float:
+    if np.ptp(a) < 1e-12 or np.ptp(b) < 1e-12:
+        return float("nan")      # a constant off-diagonal (e.g. the identity) has no ranking
     ra, rb = a.argsort().argsort().astype(float), b.argsort().argsort().astype(float)
     ra, rb = ra - ra.mean(), rb - rb.mean()
     denom = np.sqrt((ra ** 2).sum() * (rb ** 2).sum())

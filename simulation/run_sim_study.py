@@ -257,8 +257,55 @@ def s0_diagnostic(quick: bool) -> dict:
             "oracle_gap": gap, "lam_used": best["lam"]}
 
 
+def s5_parametric(quick: bool) -> dict:
+    """THE follow-up to s4. The free kernel failed because it asks the data for
+    P-squared similarities it does not contain. A PARAMETRIC kernel asks for two
+    numbers instead:
+
+        kappa(j,p)  proportional to  exp(theta_self * 1[j=p] + theta_attr * 1[same element])
+
+    Same substitution story, same marketing content (McAlister's attribute
+    satiation), 2 free parameters instead of 24x24. If the design supports that,
+    the answer to "can we model substitution?" is yes-with-structure rather than
+    no. Truth: theta_self = kappa_self, theta_attr = kappa_same_elem.
+
+    Run under BOTH schedules, so the parametric kernel is judged where the free
+    one failed (campaign rotation) and where it succeeded (randomised).
+    """
+    rows = []
+    for randomized, label in ((False, "campaign rotation"), (True, "randomised offers")):
+        cfg = replace(base_cfg(quick), randomized_schedule=randomized, campaign_len=15,
+                      seed=500)
+        d = simulate(cfg)
+        split = int(0.7 * cfg.n_occasions)
+        for kern in ("identity", "attr", "learned"):
+            r = run_fit(d, quick, kernel=kern, t_hi=split, seed=1)
+            m = kernel_metrics(r["kappa_hat"], d.kappa_true, d.elem_of)
+            row = {"schedule": label, "kernel": kern, "free_params":
+                   {"identity": 0, "attr": 2, "learned": cfg.n_products ** 2}[kern],
+                   "held_out_nll": r["held_out_nll"], "spearman": m["spearman_offdiag"],
+                   "elem_lift": m["same_elem_lift"], "half_life_hat": r["half_life_hat"],
+                   "tier_hat": [round(x, 3) for x in r["tier_hat"]]}
+            if kern == "attr":
+                row["theta_self_hat"], row["theta_self_true"] = r["attr_self"], cfg.kappa_self
+                row["theta_attr_hat"], row["theta_attr_true"] = r["attr_same"], cfg.kappa_same_elem
+                print(f"  {label:<20} attr    theta_self {r['attr_self']:.2f} "
+                      f"(true {cfg.kappa_self})  theta_attr {r['attr_same']:.2f} "
+                      f"(true {cfg.kappa_same_elem})  held-out {r['held_out_nll']:.4f}",
+                      flush=True)
+            else:
+                print(f"  {label:<20} {kern:<7} held-out {r['held_out_nll']:.4f}  "
+                      f"spearman {m['spearman_offdiag']:+.3f}", flush=True)
+            rows.append(row)
+    report("S5 parametric kernel vs free kernel (held-out NLL; lower is better)", rows,
+           ["schedule", "kernel", "free_params", "held_out_nll", "spearman", "elem_lift"])
+    print("  true tier weights:", list(base_cfg(quick).tier_weights),
+          "-- compare with tier_hat in the json (are duplicate weights identified?)")
+    return {"rows": rows, "tier_true": list(base_cfg(quick).tier_weights)}
+
+
 EXPERIMENTS = {"s0": s0_diagnostic, "s1": s1_recovery, "s2": s2_false_positive,
-               "s3": s3_separability, "s4": s4_schedule}
+               "s3": s3_separability, "s4": s4_schedule, "s5": s5_parametric}
 
 
 def main() -> None:
