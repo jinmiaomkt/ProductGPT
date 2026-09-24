@@ -26,7 +26,7 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| 41421–41456 | `b16_*` (36 runs) | 2026-09-24 | R30 stage 3: top 3 per family on fresh seeds 11/12/13 | 2 running, 34 queued (qstat 2026-09-24) |
+| 41465–41519 | `b17_*` (55 runs) | 2026-09-24 | R30 stage 4: frozen configs x 5 seeds x vocab {6,7} + stock ablation — OPENS THE HOLDOUT | 2 running, 53 queued (qstat 2026-09-24) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -1566,8 +1566,8 @@ each family's capacity curve.
 | 0 ✅ | — | Expose `--lr`, `--weight-decay`, `--grad-accum`, `--warmup-frac`; validation-only summarizer | 0 |
 | 1 ✅ | 14 | **Capacity frontier** (done 2026-09-22, 48/48), level 7: 4 families × d ∈ {96,128,176,256} × N ∈ {2,4,6}, 1 seed | 48 |
 | 2 ✅ | 15 | **Random search** (submitted 2026-09-22, jobs 41296–41391) per family around its stage-1 best and runner-up: lr log-uniform [1e-4, 1.2e-3], dropout {0.05,0.1,0.2,0.3}, weight decay {0,0.01,0.05,0.1}, effective batch {8,16,32}, d_ff ratio {2,3,4}, warmup {0.02,0.05,0.1}; 24 configs × 4 families, 1 seed | 96 |
-| 3 ▶ | 16 | **Confirmation** (submitted 2026-09-24, jobs 41421–41456): top 3 per family × 3 fresh seeds; each family's config frozen by validation mean | 36 |
-| 4 | 17 | **Final comparison**, holdout opened once: frozen config per family × 5 seeds × vocabulary {6,7}; plus stock-path ablation on the winner at level 7 | 55 |
+| 3 ✅ | 16 | **Confirmation** (done 2026-09-24, 36 runs): top 3 per family × 3 fresh seeds; each family's config frozen by validation mean | 36 |
+| 4 ▶ | 17 | **Final comparison** (submitted 2026-09-24, jobs 41465–41519), holdout opened once: frozen config per family × 5 seeds × vocabulary {6,7}; plus stock-path ablation on the winner at level 7 | 55 |
 | 5 | — | Diagnostics: per-class profiles, calibration cell, efficiency table, product-embedding perception map, substitution check | 0 |
 
 Families: plain GRU · GRU encoder · transformer + recency · stacked hybrid.
@@ -2078,3 +2078,66 @@ whatever the offer design.
 **Still to do.** Re-run s4 with the REAL campaign calendar (offer sets per
 campaign — product metadata only, no customer data) so the statement is about
 our dataset and not a stylised rotation.
+
+### R30 stage 3 — results: the search's leads were mostly the winner's curse
+
+36 runs, three FRESH seeds (11, 12, 13) per configuration, validation only.
+
+| Family | Frozen configuration | Stage 2 (1 seed) | Stage 3 (3 seeds) | Regression |
+|---|---|---|---|---|
+| stacked hybrid | `b15_hyb_c14` | 0.8547 (c18) | **0.8727 ± 0.0088** | +0.018 |
+| transformer + recency | `b14_tf_d256_N6` | 0.8764 | **0.8831 ± 0.0109** | +0.007 |
+| GRU encoder | `b15_gru_enc_c17` | 0.8716 | **0.8916 ± 0.0017** | +0.020 |
+| plain GRU | `b15_gru_c20` | 0.8803 | **0.8921 ± 0.0071** | +0.012 |
+
+- **The winner's curse, measured.** The top of a 144-configuration search
+  regressed by 0.007–0.020 on fresh seeds — as large as the entire adoption
+  margin. This is the fourth time a single-seed lead has faded here, and the
+  reason P3 (fresh seeds at confirmation) was pre-registered.
+- **A four-way near-tie.** The hybrid leads the transformer by 0.0104 and plain
+  GRU by 0.0194 — both inside 0.02. Stage 2's "the hybrid clears the margin"
+  does not survive.
+- **For two families the frozen configuration is the UNTUNED one** (`tf` and,
+  as runner-up, the hybrid's stage-1 cell at 0.8754 ± 0.0018), so tuning's net
+  contribution after honest re-estimation is small.
+
+**Stage 4 as submitted (jobs 41465–41519).** Frozen by stage-3 validation mean;
+no further selection. 4 families × 5 seeds × vocabulary {6,7} = 40, plus the
+leading family (hybrid) × stock variants {counts sat0, token inventory, no stock
+path} × 5 seeds = 15. Read with `summarize_batch.py`, not `summarize_search.py`.
+
+### R34 s5 — how much structure can the design support?
+
+A free kernel asks for P² similarities; a parametric one asks for two
+(`kappa ∝ exp(theta_self·1[j=p] + theta_attr·1[same element])`), keeping
+McAlister's attribute-satiation content. 600 epochs, held-out occasions.
+
+| Schedule | Kernel | free params | theta_self (true 3.0) | theta_attr (true 1.5) | recovery |
+|---|---|---|---|---|---|
+| campaign rotation | parametric | 2 | 3.28 | **0.89** | 0.15 |
+| campaign rotation | free | 576 | — | — | 0.05 |
+| randomised offers | parametric | 2 | 3.05 | 1.40 | **1.00** |
+| randomised offers | free | 576 | — | — | 0.64 |
+
+- **Structure buys identification, but only partly under our design.** The
+  parametric kernel is perfectly recovered with randomised offers and beats the
+  free kernel under a rotation, but its cross-attribute coefficient is
+  attenuated ~40% (0.89 vs 1.5).
+- **Duplicate weights ARE identified**: [1.0, 0.61, 0.36] against a true
+  [1.0, 0.6, 0.35], under both schedules. With the decay half-life, that is two
+  of the three kernel components recovered.
+- **Correction.** A smoke run (25 epochs) suggested 0.53 recovery under the
+  rotation and was reported here as provisional; the full run gives 0.15. The
+  smoke number was noise.
+
+**The real calendar (job 41462, aggregates only).** 30 campaigns, 49 distinct
+products offered, **3–4 products per campaign**, median **45 occasions per
+customer per campaign** — longer than the 30 tested as s4's worst case. Our data
+sits past the flat end of the identification curve, so the negative result holds
+a fortiori; a real-calendar re-run of s4 is now confirmatory rather than
+decisive.
+
+**The model R33 should build**: per-product counts (keep) + learned decay
+(build) + duplicate weights (build) + a few attribute coefficients (build, with
+the attenuation caveat). About seven free parameters, not fourteen thousand. The
+free QKV kernel is not reported as substitution.
