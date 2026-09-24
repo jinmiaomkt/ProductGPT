@@ -26,7 +26,7 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| 41296–41391 | `b15_*` (96 runs) | 2026-09-22 | R30 stage 2: random search around each family's stage-1 frontier | 74 done, 2 running, 20 queued (qstat 2026-09-23) |
+| 41421–41456 | `b16_*` (36 runs) | 2026-09-24 | R30 stage 3: top 3 per family on fresh seeds 11/12/13 | 2 running, 34 queued (qstat 2026-09-24) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -1565,8 +1565,8 @@ each family's capacity curve.
 |---|---|---|---|
 | 0 ✅ | — | Expose `--lr`, `--weight-decay`, `--grad-accum`, `--warmup-frac`; validation-only summarizer | 0 |
 | 1 ✅ | 14 | **Capacity frontier** (done 2026-09-22, 48/48), level 7: 4 families × d ∈ {96,128,176,256} × N ∈ {2,4,6}, 1 seed | 48 |
-| 2 ▶ | 15 | **Random search** (submitted 2026-09-22, jobs 41296–41391) per family around its stage-1 best and runner-up: lr log-uniform [1e-4, 1.2e-3], dropout {0.05,0.1,0.2,0.3}, weight decay {0,0.01,0.05,0.1}, effective batch {8,16,32}, d_ff ratio {2,3,4}, warmup {0.02,0.05,0.1}; 24 configs × 4 families, 1 seed | 96 |
-| 3 | 16 | **Confirmation**: top 3 per family × 3 fresh seeds; each family's config frozen by validation mean | 36 |
+| 2 ✅ | 15 | **Random search** (submitted 2026-09-22, jobs 41296–41391) per family around its stage-1 best and runner-up: lr log-uniform [1e-4, 1.2e-3], dropout {0.05,0.1,0.2,0.3}, weight decay {0,0.01,0.05,0.1}, effective batch {8,16,32}, d_ff ratio {2,3,4}, warmup {0.02,0.05,0.1}; 24 configs × 4 families, 1 seed | 96 |
+| 3 ▶ | 16 | **Confirmation** (submitted 2026-09-24, jobs 41421–41456): top 3 per family × 3 fresh seeds; each family's config frozen by validation mean | 36 |
 | 4 | 17 | **Final comparison**, holdout opened once: frozen config per family × 5 seeds × vocabulary {6,7}; plus stock-path ablation on the winner at level 7 | 55 |
 | 5 | — | Diagnostics: per-class profiles, calibration cell, efficiency table, product-embedding perception map, substitution check | 0 |
 
@@ -1596,6 +1596,37 @@ RNG seeded per family (3001–3004), so the draw is reproducible. Tags
 `b15_<family>_c00…c23`. Stage-3 candidates are the top 3 per family by
 validation across stage 1 AND stage 2 (the stage-1 default-hyperparameter
 points stay eligible). Expected wall time ≈ 15–20 h on two GPUs.
+
+**Stage 2 result (validation NLL, 1 seed each; 96 runs, complete 2026-09-24).**
+Training hyperparameters were worth as much as architecture, and more than
+capacity was in stage 1.
+
+| Family | Stage-1 best | Stage-2 best | Gain | Winning configuration |
+|---|---|---|---|---|
+| stacked hybrid | 0.8722 | **0.8547** (`hyb_c18`) | −0.0175 | d96, d_ff 288, N6, lr 5.6e-4, dropout 0.1, wd 0.05, eff. batch 8, warmup 0.05 |
+| GRU encoder | 0.8838 | **0.8716** (`gru_enc_c19`) | −0.0122 | d256, d_ff 512, N2, lr 4.6e-4, dropout 0.1, wd 0.1, eff. batch 32, warmup 0.1 |
+| transformer + recency | 0.8772 | **0.8764** (`tf_c18`) | −0.0008 | d256, d_ff 768, N6, lr 1.3e-4, dropout 0.05, wd 0.05, eff. batch 16 |
+| plain GRU | 0.8893 | **0.8803** (`gru_c17`) | −0.0090 | d256, d_ff 1024, N2, lr 1.4e-4, dropout 0.2, wd 0.1, eff. batch 8 |
+
+Three readings, all still single-seed:
+
+- **The hybrid's gain is the largest and the least likely to be noise.** Its two
+  best configurations (0.8547 and 0.8698) are the SAME architecture — d96,
+  d_ff 288, N6, dropout 0.1, wd 0.05, effective batch 8 — differing only in
+  learning rate (5.6e-4 vs 2.2e-4) and warmup. A coherent neighbourhood, not a
+  lucky corner.
+- **The hybrid now clears the 0.02 margin over plain GRU** on validation
+  (0.8547 vs 0.8803 = 0.0256) and nearly over the transformer (0.0217). If
+  stage 3 holds, this is the first architecture result in the project that is
+  frontier-to-frontier AND beyond the adoption margin.
+- **The transformer gained almost nothing from tuning** (−0.0008) — its stage-1
+  capacity point was already near its optimum. That weakens any story in which
+  attention was merely under-tuned.
+
+**Stage 3 as submitted.** Top 3 per family across BOTH stages by validation;
+for the transformer and the hybrid the third slot is a stage-1 (default
+hyperparameter) configuration, which is the honest outcome of ranking the two
+stages together. 36 runs, jobs 41421–41456.
 
 **Decision rules for stage 4.**
 
