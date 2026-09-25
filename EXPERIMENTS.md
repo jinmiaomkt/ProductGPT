@@ -26,7 +26,8 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| 41465–41519 | `b17_*` (55 runs) | 2026-09-24 | R30 stage 4: frozen configs x 5 seeds x vocab {6,7} + stock ablation — OPENS THE HOLDOUT | 2 running, 53 queued (qstat 2026-09-24) |
+| 41465–41516 | `b17_*` (40 valid + 12 VOID) | 2026-09-24 | R30 stage 4: frozen configs x 5 seeds x vocab {6,7} | 40 family arms done and valid; stock arms void (see below) |
+| 41521–41535 | `b18_*` (15 runs) | 2026-09-25 | R30 stage 4b: stock-path ablation, re-run after a tagging bug | 2 running, 13 queued (qstat 2026-09-25) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -2175,3 +2176,31 @@ future batch — and it halves the cost of every batch from here.
 
 No runs were cancelled: at the time of the decision the only queued jobs were
 the hybrid's no-stock ablation, which is level 7 by construction.
+
+### Bug (2026-09-25): the stage-4 stock ablation ran three copies of one arm
+
+**Symptom.** `hyb_stock_counts0` and `hyb_stock_tokens` reported identical means
+AND identical standard deviations (0.8998 +/- 0.0075), which cannot happen for
+two different configurations.
+
+**Cause.** In `r30_stage4_select.py` the ablation flags were appended AFTER the
+`TAG=` assignment, and the tag was then rewritten with `re.sub(r"TAG=\S+", ...)`.
+`\S+` matches commas, so it consumed the flags that followed. All three arms
+therefore ran the frozen hybrid minus its stock flags: `inventory=tokens,
+sat_layers=0, cross_attn=on` — verified in each run's recorded cfg, with
+identical per-seed losses (0.9011, 0.9021, ...).
+
+**Blast radius.** The 40 family x vocabulary runs are UNAFFECTED: nothing was
+appended after `TAG=` on that path, and their recorded cfgs differ correctly.
+Every number reported for gru/gru_enc/tf/hyb at levels 6 and 7 stands. Only the
+12 finished stock-ablation runs are void (3 more were cancelled mid-flight).
+
+**Fix.** `TAG=[^,]+` in both the stage-3 and stage-4 selectors, and the ablation
+string now rewrites the tag BEFORE appending flags. Re-submitted as batch 18
+(jobs 41521–41535) with the three arms verified distinct in a dry run:
+`INVENTORY=slots,SAT_LAYERS=0` / no inventory flags (tokens) / `CROSS_ATTN=0`.
+
+**Lesson for the ledger.** Two arms agreeing to four decimals on both mean and
+sd is not a coincidence to note in passing — it is a configuration bug until
+proven otherwise. The recorded cfg in `final.json` is what settles it, and it
+should be checked before any ablation table is reported.
