@@ -1568,7 +1568,7 @@ each family's capacity curve.
 | 2 ✅ | 15 | **Random search** (submitted 2026-09-22, jobs 41296–41391) per family around its stage-1 best and runner-up: lr log-uniform [1e-4, 1.2e-3], dropout {0.05,0.1,0.2,0.3}, weight decay {0,0.01,0.05,0.1}, effective batch {8,16,32}, d_ff ratio {2,3,4}, warmup {0.02,0.05,0.1}; 24 configs × 4 families, 1 seed | 96 |
 | 3 ✅ | 16 | **Confirmation** (done 2026-09-24, 36 runs): top 3 per family × 3 fresh seeds; each family's config frozen by validation mean | 36 |
 | 4 ✅ | 17+18 | **Final comparison** (done 2026-09-25), holdout opened once: frozen config per family × 5 seeds × vocabulary {6,7}; plus stock-path ablation on the winner at level 7 | 55 |
-| 5 | — | Diagnostics: per-class profiles, calibration cell, efficiency table, product-embedding perception map, substitution check | 0 |
+| 5 ✅ | — | Diagnostics (done 2026-09-25, job 41552): per-class, calibration, efficiency. Embedding map still open | 0 |
 
 Families: plain GRU · GRU encoder · transformer + recency · stacked hybrid.
 Total ≈ 235 runs, ≈ 90 GPU-hours, ≈ 2 days wall on two GPUs.
@@ -2258,3 +2258,64 @@ R27's "inventory attention worth ~0" on the holdout, at five seeds, after tuning
 accuracy — nothing in the stock path buys accuracy. It is justified by
 interpretation: a decay half-life and duplicate weights that are identified
 (R34) and readable as marketing quantities. That is the honest framing.
+
+### R30 stage 5 — RESULTS: the stage-4 tie is compositional, not real
+
+Inference only, on the frozen stage-4 checkpoints, 5 seeds per configuration,
+out-of-sample x holdout cell (job 41552).
+
+**Per-class NLL, purchases vs NotBuy** (NotBuy is 40.7% of occasions):
+
+| Configuration | purchase classes 1–8 | NotBuy | gap |
+|---|---|---|---|
+| transformer, level 7 | **1.0220** | 0.7035 | +0.3185 |
+| hybrid, level 7 | 1.0313 | 0.6991 | +0.3322 |
+| hybrid, NO stock path | 1.0427 | 0.6985 | +0.3442 |
+| plain GRU, level 6 | 1.0644 | **0.6246** | +0.4398 |
+| GRU encoder, level 7 | 1.0742 | 0.6321 | +0.4420 |
+| plain GRU, level 7 | 1.0809 | 0.6442 | +0.4367 |
+
+**The aggregate tie hides a clean trade-off.** On the eight purchase classes the
+transformer beats the best recurrent model by **0.042**; on NotBuy the plain GRU
+beats the transformer by **0.079**. Purchases are 59.3% of occasions and NotBuy
+40.7%, so the weighted average is a near-tie — an artefact of the class mix, not
+an equivalence of models. Stage 4's "no family wins" stands as an aggregate
+statement and is misleading as a scientific one.
+
+**It is concentrated in the Figure-B banner classes** (7.9% of occasions):
+
+| Class | transformer | hybrid | GRU encoder | plain GRU (L6) | hybrid, no stock |
+|---|---|---|---|---|---|
+| Buy1 FigB | 0.797 | **0.776** | 0.864 | 1.043 | 0.964 |
+| Buy10 FigB | 1.336 | **1.335** | 1.588 | 2.286 | 1.923 |
+
+The ordering follows how much attention an architecture carries. This is the
+same pattern R31 found (purchases −0.0554 for attention, NotBuy +0.0186 against
+it), now confirmed on the holdout at five seeds and localised to specific
+classes.
+
+**The stock path earns its keep exactly where theory says it should.** Dropping
+it costs 0.19 (Buy1 FigB) and 0.59 (Buy10 FigB) but GAINS 0.08 on Buy1 Regular
+— the limited-banner classes are where holdings matter, and the Regular banner
+is where they do not. Weighted, those cancel to the 0.0065 aggregate difference.
+Three revisions of inventory work are worth ~0.02 nats on 8% of occasions, and
+about nothing elsewhere.
+
+**Calibration: all models are usable as probabilities.** ECE 0.010–0.019,
+Brier 0.437–0.447; in the populated bins confidence tracks accuracy within
+0.01–0.02 everywhere (e.g. plain GRU L6: 0.63->0.64, 0.77->0.77, 0.90->0.90).
+Best calibrated is the plain GRU at level 7 (ECE 0.0101), worst the hybrid
+(0.0183). No model needs recalibration before a revenue simulation.
+
+**Efficiency.** Best NLL and fewest parameters coincide (plain GRU L6:
+1.25M, 46 s/epoch); the transformer needs 6.3x the parameters and 1.5x the time
+for a worse aggregate — but wins the purchase classes. The honest sentence for
+the paper is no longer "attention buys interpretability, not accuracy" but
+**"attention buys accuracy where the product identity matters, and costs
+accuracy on the timing decision."**
+
+**What this changes.** The paper's comparison section should report per-class,
+not just aggregate: which model to use depends on the decision being predicted
+(what is bought vs whether anything is bought today). That is a more useful
+managerial statement than a single winner, and it is only visible because the
+holdout was opened once, on frozen configurations, with five seeds.
