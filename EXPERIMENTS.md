@@ -26,8 +26,7 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| 41465–41516 | `b17_*` (40 valid + 12 VOID) | 2026-09-24 | R30 stage 4: frozen configs x 5 seeds x vocab {6,7} | 40 family arms done and valid; stock arms void (see below) |
-| 41521–41535 | `b18_*` (15 runs) | 2026-09-25 | R30 stage 4b: stock-path ablation, re-run after a tagging bug | 2 running, 13 queued (qstat 2026-09-25) |
+| — | — | — | queue empty (qstat 2026-09-25): R30 stages 1–4 complete | — |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -1568,7 +1567,7 @@ each family's capacity curve.
 | 1 ✅ | 14 | **Capacity frontier** (done 2026-09-22, 48/48), level 7: 4 families × d ∈ {96,128,176,256} × N ∈ {2,4,6}, 1 seed | 48 |
 | 2 ✅ | 15 | **Random search** (submitted 2026-09-22, jobs 41296–41391) per family around its stage-1 best and runner-up: lr log-uniform [1e-4, 1.2e-3], dropout {0.05,0.1,0.2,0.3}, weight decay {0,0.01,0.05,0.1}, effective batch {8,16,32}, d_ff ratio {2,3,4}, warmup {0.02,0.05,0.1}; 24 configs × 4 families, 1 seed | 96 |
 | 3 ✅ | 16 | **Confirmation** (done 2026-09-24, 36 runs): top 3 per family × 3 fresh seeds; each family's config frozen by validation mean | 36 |
-| 4 ▶ | 17 | **Final comparison** (submitted 2026-09-24, jobs 41465–41519), holdout opened once: frozen config per family × 5 seeds × vocabulary {6,7}; plus stock-path ablation on the winner at level 7 | 55 |
+| 4 ✅ | 17+18 | **Final comparison** (done 2026-09-25), holdout opened once: frozen config per family × 5 seeds × vocabulary {6,7}; plus stock-path ablation on the winner at level 7 | 55 |
 | 5 | — | Diagnostics: per-class profiles, calibration cell, efficiency table, product-embedding perception map, substitution check | 0 |
 
 Families: plain GRU · GRU encoder · transformer + recency · stacked hybrid.
@@ -2204,3 +2203,58 @@ string now rewrites the tag BEFORE appending flags. Re-submitted as batch 18
 sd is not a coincidence to note in passing — it is a configuration bug until
 proven otherwise. The recorded cfg in `final.json` is what settles it, and it
 should be checked before any ablation table is reported.
+
+### R30 stage 4 — RESULTS: no family wins, and the stock path is worth almost nothing
+
+55 runs (40 valid in batch 17, 15 in the corrected batch 18). Five seeds per
+cell, configurations frozen at stage 3, holdout opened once. Cell:
+out-of-sample customers x holdout period. Typical seed sd **0.0075**.
+
+| Rank | Cell | Holdout NLL | Parameters |
+|---|---|---|---|
+| 1 | plain GRU, level 6 | **0.8856 ± 0.0067** | 1.25M |
+| 2 | GRU encoder, level 6 | 0.8904 ± 0.0031 | 4.01M |
+| 3 | transformer + recency, level 7 | 0.8925 ± 0.0058 | 7.93M |
+| 4 | GRU encoder, level 7 | 0.8944 ± 0.0089 | 4.05M |
+| 5 | hybrid, level 6 | 0.8958 ± 0.0076 | 1.47M |
+| 6 | hybrid, level 7 | 0.8962 ± 0.0138 | 1.48M |
+| 7 | plain GRU, level 7 | 0.9033 ± 0.0152 | 1.27M |
+| 8 | transformer + recency, level 6 | 0.9049 ± 0.0100 | 7.90M |
+
+**Stock-path ablation** (hybrid, level 7, 5 seeds each):
+
+| Stock representation | Holdout NLL |
+|---|---|
+| per-product counts, single attention step | 0.8890 ± 0.0190 |
+| per-product counts, 2 satiation layers (frozen) | 0.8962 ± 0.0138 |
+| token inventory (inventory GRU + cross-attention) | 0.8998 ± 0.0075 |
+| **no stock path at all** | 0.9027 ± 0.0119 |
+
+**Decision rules, applied.**
+
+1. **Family winner: NONE.** The full spread across all eight cells is 0.0194,
+   inside the 0.02 margin, and the best-to-second gap is 0.0048 against a seed
+   sd of 0.0075. No pair satisfies "> 0.02 AND 4 of 5 paired seeds".
+2. **Vocabulary interaction: NOT ADOPTED, sign consistent.** Level 7 helps the
+   transformer (−0.0124) and hurts every recurrent family (+0.0004 hybrid,
+   +0.0040 GRU encoder, +0.0177 plain GRU). The DiD against plain GRU is
+   −0.0301, but against the GRU encoder −0.0164 and the hybrid −0.0128, so only
+   1 of 3 exceeds 0.02 where the rule required 2.
+3. **Efficiency: the sharpest result.** The best cell has the FEWEST parameters
+   — 1.25M for the plain GRU against 7.93M for the transformer, a tie at
+   one-sixth the size. The hybrid reaches 0.8962 with 1.48M.
+4. **Ceiling: CONFIRMED, and now with the tuning budget as evidence.** Four
+   families, each at its own tuned frontier, land within 0.02 on a holdout they
+   never saw. This is the pre-registered strong form of the claim.
+
+**The stock path barely matters.** Removing it entirely costs 0.0137 against
+the best stock variant — inside the margin and close to the seed sd. Three
+years of representation work (R23 slots, R24 satiation layers, R27 inventory
+attention) is worth ~0.01 nats at most, and the ordering among representations
+is not significant (counts beat tokens on 3 of 5 paired seeds). This corroborates
+R27's "inventory attention worth ~0" on the holdout, at five seeds, after tuning.
+
+**What R33 inherits from this.** The kernel work is no longer justified by
+accuracy — nothing in the stock path buys accuracy. It is justified by
+interpretation: a decay half-life and duplicate weights that are identified
+(R34) and readable as marketing quantities. That is the honest framing.
