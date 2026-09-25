@@ -111,7 +111,7 @@ def main() -> None:
                 continue
             for seed in SEEDS:
                 v = re.sub(r"SEED=\d+", f"SEED={seed}", base)
-                v = re.sub(r"TAG=\S+", f"TAG=b16_{tag}_s{seed}", v)
+                v = re.sub(r"TAG=[^,]+", f"TAG=b16_{tag}_s{seed}", v)
                 print(v)
 
 

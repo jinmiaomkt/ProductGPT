@@ -45,6 +45,9 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs-root", default=os.path.expanduser("~/ProductGPT/runs"))
     ap.add_argument("--work", default=str(Path(__file__).resolve().parent.parent))
+    ap.add_argument("--ablations-only", action="store_true",
+                    help="re-emit only the stock-path ablation arms")
+    ap.add_argument("--prefix", default="b17", help="tag prefix for this submission")
     a = ap.parse_args()
 
     # stage 3: pool seeds, rank each family by validation MEAN
@@ -70,11 +73,11 @@ def main() -> None:
         print(f"# {fam}: frozen at {orig} (stage-3 validation mean {mean:.4f})"
               + ("   <-- leads, gets the stock ablation" if fam == winner else ""),
               file=sys.stderr)
-        for level in (7, 6):
+        for level in (() if a.ablations_only else (7, 6)):
             for seed in SEEDS:
                 v = re.sub(r"SEED=\d+", f"SEED={seed}", base)
                 v = re.sub(r"VOCAB_LEVEL=\d+", f"VOCAB_LEVEL={level}", v)
-                v = re.sub(r"TAG=\S+", f"TAG=b17_{fam}_v{level}_s{seed}", v)
+                v = re.sub(r"TAG=[^,]+", f"TAG={a.prefix}_{fam}_v{level}_s{seed}", v)
                 print(v)
         if fam == winner:
             for name, flags in ABLATIONS.items():
@@ -82,11 +85,12 @@ def main() -> None:
                     continue                       # already covered by the v7 arm above
                 for seed in SEEDS:
                     v = re.sub(r"SEED=\d+", f"SEED={seed}", base)
+                    # strip the frozen stock flags, then add this arm's. TAG is
+                    # rewritten with [^,]+ so it cannot swallow what follows it.
                     v = re.sub(r"INVENTORY=slots,SAT_LAYERS=2", "", v).replace(",,", ",")
-                    v = v.rstrip(",")
+                    v = re.sub(r"TAG=[^,]+", f"TAG={a.prefix}_{fam}_stock_{name}_s{seed}", v)
                     if flags:
                         v = f"{v},{flags}"
-                    v = re.sub(r"TAG=\S+", f"TAG=b17_{fam}_stock_{name}_s{seed}", v)
                     print(v)
 
 
