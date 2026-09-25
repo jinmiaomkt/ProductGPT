@@ -1,0 +1,21 @@
+#!/bin/bash
+# R30 stage 5: diagnostics on the frozen stage-4 models. Inference only.
+#   qsub -v TAGS="b17_hyb_v7 b17_tf_v7 b17_gru_v7 b17_gru_enc_v7" scripts/stage5.pbs
+#PBS -N stage5
+#PBS -l select=1:ncpus=8:ngpus=1:mem=64GB
+#PBS -q GPU
+#PBS -l walltime=08:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+set -eo pipefail
+module purge
+module load python/3.11.4 cuda/12.5
+cd "$PBS_O_WORKDIR"
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
+source "$PBS_O_WORKDIR/env.sh"
+export PYTHONUNBUFFERED=1
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+python scripts/stage5_eval.py --tags ${TAGS:?set TAGS} \
+    --out-dir "$PBS_O_WORKDIR/results/r30/stage5"
+python scripts/stage5_report.py --res-dir "$PBS_O_WORKDIR/results/r30/stage5"
