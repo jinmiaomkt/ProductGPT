@@ -2141,3 +2141,37 @@ decisive.
 (build) + duplicate weights (build) + a few attribute coefficients (build, with
 the attenuation caveat). About seven free parameters, not fourteen thousand. The
 free QKV kernel is not reported as substitution.
+
+### Decision (2026-09-25): the vocabulary factor is CLOSED; future work is level 7 only
+
+User decision, taken after stage 4 measured both levels on the holdout. From
+here, R32 (hybrid designs), R33 (the kernel) and stage-5 diagnostics run at
+**vocabulary level 7 only**. This is not a silent drop: the factor was measured
+to completion first, so the paper reports it rather than omitting it.
+
+**What per-product resolution costs, by architecture** (out-of-sample x holdout
+cell, 5 seeds; positive = level 7 is worse):
+
+| Family | level 6 | level 7 | cost of per-product identity |
+|---|---|---|---|
+| plain GRU | 0.8856 | 0.9033 | **+0.0177** |
+| GRU encoder | 0.8904 | 0.8944 | +0.0040 |
+| stacked hybrid | 0.8958 | 0.8962 | +0.0004 (free) |
+| transformer + recency | 0.9049 | 0.8925 | **−0.0124** (a gain) |
+
+The ordering is the point: **the more attention an architecture carries, the
+cheaper product-level resolution becomes** — free for the hybrid, positively
+beneficial for the transformer, expensive only for the purely recurrent model.
+That is the R28/R29/R31 crossover, now measured on the holdout at five seeds.
+
+**Why this justifies the decision.** Everything the project wants product-level
+identity FOR — the substitution kernel, product embeddings, the perception map,
+per-product satiation — needs level 7. A reviewer asking "why per-product when
+pooling scores better?" now has a precise answer: pooling scores better only for
+the architecture we are not using, and for the architectures that carry
+attention the finer vocabulary is free or better. Reporting the level-6 column
+once, as evidence, is worth more than carrying it as a live factor in every
+future batch — and it halves the cost of every batch from here.
+
+No runs were cancelled: at the time of the decision the only queued jobs were
+the hybrid's no-stock ablation, which is level 7 by construction.
