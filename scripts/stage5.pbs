@@ -19,3 +19,4 @@ export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
 python scripts/stage5_eval.py --tags ${TAGS:?set TAGS} \
     --out-dir "$PBS_O_WORKDIR/results/r30/stage5"
 python scripts/stage5_report.py --res-dir "$PBS_O_WORKDIR/results/r30/stage5"
+if [[ -n "${EMB:-}" ]]; then python scripts/stage5_embeddings.py --tags ${EMB} --out-dir "$PBS_O_WORKDIR/results/r30/stage5"; fi
