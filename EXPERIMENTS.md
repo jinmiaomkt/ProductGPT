@@ -26,7 +26,9 @@ session. Never write a job id from memory — a wrong id is worse than none.
 
 | Job id | Run dir / tag | Submitted | Hypothesis | Status |
 |---|---|---|---|---|
-| — | — | — | queue empty (qstat 2026-09-25): R30 stages 1–4 complete | — |
+| 41557–41581 | `b20_*` (25 runs) | 2026-09-26 | R33: the identified stock ladder (decay, duplicates, attribute kernel, free kernel as a bound) | 2 running, rest queued (qstat 2026-09-26) |
+| 41582–41617 | `b19_*` (36 runs) | 2026-09-26 | R32: hybrid designs seq_ra / seq_ar / block | queued (qstat 2026-09-26) |
+| 41555–41556 | `r34_sim` (2 jobs) | 2026-09-26 | R34 s6 (detection threshold, campaign shocks) and s7 (heterogeneous satiation) | running on the CPU queue |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -2353,3 +2355,69 @@ when predicting, NOT a perception, preference or substitution map. R34 showed th
 offer design does not identify substitution; the embedding geometry does not
 escape that, because nothing forces these coordinates to be preference-bearing.
 The map may be shown with that sentence attached, or not at all.
+
+### R35 — generation: rolling the model forward, and what that licenses (PLAN)
+
+**Why now.** Every result so far is a one-step-ahead statement: given a true
+history, how well is the next decision predicted. A marketing paper wants
+policy statements — what happens to revenue if the calendar changes — and those
+need the model rolled forward as a generator. This is also how the R34
+recommendation ("randomise a banner slot") gets a price tag instead of being an
+unpriced suggestion.
+
+**The engine.** A rollout is not just the model. Each step needs:
+
+1. the model samples a decision from its 9-way distribution;
+2. the **environment** resolves it: number of pulls, the gacha draw under the
+   published rates and the pity/50-50 rules, which products are acquired;
+3. state advances: inventory counts, duplicate tiers, IPT, campaign index, and
+   the offered assortment from the real calendar.
+
+Step 2 is not in the model and must be written from `Code/`'s generator plus the
+extracted calendar (`results/r34/offer_schedule.json`). The gacha rules are
+institutional facts, not estimated, which is what makes the counterfactuals
+interpretable at all.
+
+**Validation gate, before any counterfactual is reported.**
+
+| # | Check | Standard |
+|---|---|---|
+| V1 | free-running vs teacher-forced calibration on the holdout | ECE stays under 0.03 (stage 5 measured 0.010–0.019 teacher-forced) |
+| V2 | aggregate trajectories over campaigns 28–30 vs actual | revenue per customer, NotBuy share and pulls per campaign inside the customer-bootstrap CI |
+| V3 | drift over horizon | the per-occasion NLL of rolled-out trajectories must not grow with horizon faster than the holdout's own drift |
+
+If V2 fails the generator is descriptive only, and no policy number is reported.
+
+**What the identification results license.** This is the part that separates
+this from a simulation paper that overclaims.
+
+| Counterfactual | Licensed? | Why |
+|---|---|---|
+| campaign length / pacing | **yes** | rests on the decay, identified at every schedule (R34 s1, s4) |
+| duplicate/constellation economics | **yes** | rests on g, recovered to two decimals (R34 s5) |
+| re-ORDERING historical assortments | **yes, with care** | every assortment shown has occurred; only its position changes |
+| NEW product pairings, cannibalisation | **no** | needs the substitution kernel, unidentified under our rotation (R34 s0–s5) |
+| novel assortments (products never co-offered) | **no** | off-support for the offer stream; the model has never seen them |
+
+The last row is a real constraint on the flagship experiment: a fully randomised
+line-up creates assortments that never occurred, so the model extrapolates.
+R35c therefore prices a **permutation** design — the same assortments in a
+shuffled order, which is in-support — and reports the fully randomised version
+only as a bound, clearly labelled.
+
+**Stages.**
+
+| Stage | Content | Cost |
+|---|---|---|
+| R35a | rollout engine + environment, V1–V3 validation | inference only |
+| R35b | licensed counterfactuals: campaign length, pacing, duplicate economics | inference only |
+| R35c | price the identification experiment: revenue under the status-quo calendar vs a permuted one, customer-bootstrap CI | inference only |
+
+**Decision rule.** A policy difference is reported only if its customer-cluster
+bootstrap CI excludes zero AND the design is in the licensed list. Revenue uses
+the existing `rev_vec = [1,10,1,10,1,10,1,10,0]`.
+
+**The sentence this is meant to support.** "Randomising one banner slot would
+cost approximately X% of revenue over a campaign and would make the substitution
+matrix estimable" — a concrete trade a platform can act on, with both halves
+resting on things our design actually identifies.
