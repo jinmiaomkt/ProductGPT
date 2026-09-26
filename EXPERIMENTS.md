@@ -1568,7 +1568,7 @@ each family's capacity curve.
 | 2 ✅ | 15 | **Random search** (submitted 2026-09-22, jobs 41296–41391) per family around its stage-1 best and runner-up: lr log-uniform [1e-4, 1.2e-3], dropout {0.05,0.1,0.2,0.3}, weight decay {0,0.01,0.05,0.1}, effective batch {8,16,32}, d_ff ratio {2,3,4}, warmup {0.02,0.05,0.1}; 24 configs × 4 families, 1 seed | 96 |
 | 3 ✅ | 16 | **Confirmation** (done 2026-09-24, 36 runs): top 3 per family × 3 fresh seeds; each family's config frozen by validation mean | 36 |
 | 4 ✅ | 17+18 | **Final comparison** (done 2026-09-25), holdout opened once: frozen config per family × 5 seeds × vocabulary {6,7}; plus stock-path ablation on the winner at level 7 | 55 |
-| 5 ✅ | — | Diagnostics (done 2026-09-25, job 41552): per-class, calibration, efficiency. Embedding map still open | 0 |
+| 5 ✅ | — | Diagnostics (done 2026-09-26, jobs 41552–41553): per-class, calibration, efficiency, embedding map | 0 |
 
 Families: plain GRU · GRU encoder · transformer + recency · stacked hybrid.
 Total ≈ 235 runs, ≈ 90 GPU-hours, ≈ 2 days wall on two GPUs.
@@ -2319,3 +2319,37 @@ not just aggregate: which model to use depends on the decision being predicted
 (what is bought vs whether anything is bought today). That is a more useful
 managerial statement than a single winner, and it is only visible because the
 holdout was opened once, on frozen configurations, with five seeds.
+
+### R30 stage 5 — the product-embedding map
+
+Nearest-neighbour purity: for each product, the share of its 5 nearest neighbours
+(cosine) sharing an attribute. Rotation-invariant, so it is computed per seed and
+averaged; 5 seeds, level 7 (job 41553).
+
+| Attribute | chance | transformer | hybrid | plain GRU |
+|---|---|---|---|---|
+| rarity | 0.408 | 0.911 ± 0.019 | 0.907 ± 0.014 | 0.666 ± 0.036 |
+| figure vs weapon | 0.514 | 0.992 ± 0.004 | 0.977 ± 0.021 | 0.641 ± 0.042 |
+| limited vs standard | 0.514 | 0.909 ± 0.012 | 0.923 ± 0.009 | 0.746 ± 0.016 |
+| weapon type | 0.202 | 0.442 ± 0.012 | 0.437 ± 0.031 | 0.239 ± 0.025 |
+| element | 0.170 | 0.278 ± 0.014 | 0.280 ± 0.033 | **0.142 ± 0.033** |
+
+- **The attention models organise products by COMMERCIAL attributes** — rarity,
+  limited status, figure vs weapon (purity 0.91–0.99) — and only weakly by
+  thematic ones (element 0.28 against 0.17 chance). They learned the economics
+  of the banner, not the aesthetics of the characters.
+- **The plain GRU barely organises at all.** Every lift is near 1, and element
+  purity (0.142) is BELOW chance (0.170).
+- **This lines up with the per-class result.** The models with a structured
+  product space are exactly the ones that win the purchase classes; the plain
+  GRU wins the timing decision (NotBuy) without needing one. Product structure
+  buys "what", not "whether" — the same split stage 5 found in the class
+  profile, now visible in the geometry.
+- **3-star items cluster**, as hoped when the per-product vocabulary was built:
+  rarity purity 0.907 against 0.408 chance.
+
+**Framing rule.** This is a description of what the trained model groups together
+when predicting, NOT a perception, preference or substitution map. R34 showed the
+offer design does not identify substitution; the embedding geometry does not
+escape that, because nothing forces these coordinates to be preference-bearing.
+The map may be shown with that sentence attached, or not at all.
