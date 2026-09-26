@@ -221,13 +221,21 @@ def set_unknown_user_to_mean(model: nn.Module, trained_idx: List[int]) -> bool:
 
 def inventory_kwargs(model: nn.Module, batch: Dict[str, Any],
                      device: torch.device) -> Dict[str, torch.Tensor]:
-    """Pre-window inventory for the additive slots (R23). Only models built with
-    inventory='slots' accept these; the token path and the recurrent baseline
-    get nothing, so their call signatures are unchanged."""
-    if getattr(model, "inventory_kind", "tokens") != "slots" or "inv_init_count" not in batch:
-        return {}
-    return {"inv_init_count": batch["inv_init_count"].to(device, non_blocking=True),
-            "inv_init_last": batch["inv_init_last"].to(device, non_blocking=True)}
+    """Extra model kwargs derived from the batch.
+
+    Pre-window inventory for the additive slots (R23): only models built with
+    inventory='slots' accept these, so the token path and the recurrent baseline
+    get nothing and their call signatures are unchanged. Campaign ids likewise
+    go only to models built with campaign fixed effects (R33b). Both call sites
+    -- training and evaluation -- route through here, so nothing else changes.
+    """
+    kw: Dict[str, torch.Tensor] = {}
+    if getattr(model, "inventory_kind", "tokens") == "slots" and "inv_init_count" in batch:
+        kw["inv_init_count"] = batch["inv_init_count"].to(device, non_blocking=True)
+        kw["inv_init_last"] = batch["inv_init_last"].to(device, non_blocking=True)
+    if getattr(model, "camp_bias", None) is not None and "campaign" in batch:
+        kw["campaign"] = batch["campaign"].to(device, non_blocking=True)
+    return kw
 
 
 @torch.no_grad()
@@ -695,6 +703,9 @@ def main() -> None:
                     help="R33: exp = one learned half-life on the stock (Guadagni-Little)")
     ap.add_argument("--tier", type=int, default=None,
                     help="R33: 1 = learned diminishing weights for duplicate copies")
+    ap.add_argument("--camp-fe", type=int, default=None,
+                    help="R33b: 1 = per-campaign bias on the purchase logits, so the "
+                         "decay is identified from within-campaign timing (R34 s6)")
     ap.add_argument("--block-len", type=int, default=None,
                     help="R32 fuse=block: occasions per attention block")
     ap.add_argument("--fuse", choices=["gate", "stack", "seq_ra", "seq_ar", "block"],
@@ -838,6 +849,8 @@ def main() -> None:
         cfg["tier"] = bool(args.tier)
     if args.block_len is not None:
         cfg["block_len"] = args.block_len
+    if args.camp_fe is not None:
+        cfg["camp_fe"] = bool(args.camp_fe)
     if args.leaky_time_bias:
         cfg["time_bias_lag_ipt"] = False
     print(f"[cfg] arch={cfg.get('arch')} encoder={cfg.get('encoder')} "
@@ -912,6 +925,7 @@ def main() -> None:
             decay=cfg.get("decay", "none"),
             tier=cfg.get("tier", False),
             block_len=cfg.get("block_len", 64),
+            n_campaigns=(cfg.get("n_campaigns", 32) if cfg.get("camp_fe") else 0),
             fuse=cfg.get("fuse", "gate"),
         ).to(device)
 

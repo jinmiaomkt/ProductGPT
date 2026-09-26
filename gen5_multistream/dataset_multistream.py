@@ -544,7 +544,10 @@ class TemporalRoleView(Dataset):
         item = dict(self.base.__getitem__(idx, sample_index=sample_index))
         hf = item.pop("holdout_feature")
         hi = item.pop("holdout_index")
-        cp = item.pop("campaign", None)
+        # kept in the item (not popped): the model needs it for campaign fixed
+        # effects. R34 s6 showed that without them a campaign-level demand shock
+        # inflates the estimated half-life 2-5x.
+        cp = item.get("campaign", None)
 
         keep = self._keep_mask(hf, hi, cp)
 

@@ -824,6 +824,7 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         inventory: str = "tokens",
         sat_layers: int = 0,
         block_len: int = 64,
+        n_campaigns: int = 0,
         kernel: str = "none",
         decay: str = "none",
         tier: bool = False,
@@ -934,6 +935,16 @@ class MultiStreamStateSpaceTransformer(nn.Module):
             self.inventory_slots = InventorySlots(d_model, n_heads, d_ff, dropout,
                                                   feature_tensor, sat_layers,
                                                   kernel=kernel, decay=decay, tier=tier)
+
+        # Campaign fixed effects (R33b). A calendar-level demand shock moves in
+        # lockstep with "time since the product left the assortment", so without
+        # this the decay half-life absorbs the calendar: R34 s6 measured 30 ->
+        # 59 -> 147 as the shock grew, and 30 throughout once this is on.
+        # Applied to the eight purchase logits only, never to NotBuy, which is
+        # the baseline alternative.
+        self.camp_bias = nn.Embedding(int(n_campaigns), 1) if n_campaigns else None
+        if self.camp_bias is not None:
+            nn.init.zeros_(self.camp_bias.weight)
 
         self.use_user_embedding = bool(use_user_embedding and num_users is not None)
         if self.use_user_embedding:
@@ -1083,6 +1094,7 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         prev_dec_ids: Optional[torch.Tensor] = None,
         user_idx: Optional[torch.Tensor] = None,
         ipt: Optional[torch.Tensor] = None,
+        campaign: Optional[torch.Tensor] = None,
         projection_gate_mode: Optional[str] = None,
         inv_init_count: Optional[torch.Tensor] = None,
         inv_init_last: Optional[torch.Tensor] = None,
@@ -1257,6 +1269,11 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         else:
             logits = self.output_head(h)                           # (B,S,V)
 
+        if self.camp_bias is not None and campaign is not None:
+            c = campaign.clamp(0, self.camp_bias.num_embeddings - 1).long()
+            logits = logits.clone()
+            logits[..., 1:9] = logits[..., 1:9] + self.camp_bias(c)
+
         if return_hidden and return_attention:
             return logits, s, sat_attn
         if return_hidden:
@@ -1317,6 +1334,7 @@ def build_transformer(
         inventory=kwargs.get("inventory", "tokens"),
         sat_layers=kwargs.get("sat_layers", 0),
         block_len=kwargs.get("block_len", 64),
+        n_campaigns=kwargs.get("n_campaigns", 0),
         kernel=kwargs.get("kernel", "none"),
         decay=kwargs.get("decay", "none"),
         tier=kwargs.get("tier", False),
