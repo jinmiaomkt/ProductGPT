@@ -304,8 +304,85 @@ def s5_parametric(quick: bool) -> dict:
     return {"rows": rows, "tier_true": list(base_cfg(quick).tier_weights)}
 
 
+def s6_real_calendar(quick: bool) -> dict:
+    """S6, two questions the earlier experiments left open.
+
+    A. HOW STRONG must substitution be for OUR calendar to detect it? The runs
+       so far fixed the true kernel's shape and varied the schedule. Here the
+       schedule is fixed at our real one (campaigns of 45 occasions) and the
+       true same-attribute weight is swept. The estimator is the parametric
+       kernel, which is the only one with a chance.
+    B. Do CAMPAIGN-LEVEL demand shocks corrupt the decay? Time since acquisition
+       and time since the campaign ended advance together, so a calendar shock
+       can masquerade as memory decay. Fit with and without campaign fixed
+       effects and compare the recovered half-life.
+    """
+    rows = []
+    print("  A. how strong must substitution be, under OUR 45-occasion calendar?")
+    for true_attr in ([0.5, 3.0] if quick else [0.5, 1.5, 3.0, 5.0]):
+        cfg = replace(base_cfg(quick), campaign_len=45, kappa_same_elem=true_attr, seed=600)
+        d = simulate(cfg)
+        r = run_fit(d, quick, kernel="attr", seed=1)
+        rows.append({"experiment": "A substitution strength", "true_theta_attr": true_attr,
+                     "theta_attr_hat": r["attr_same"], "theta_self_hat": r["attr_self"],
+                     "ratio": r["attr_same"] / true_attr if true_attr else float("nan"),
+                     "half_life_hat": r["half_life_hat"]})
+        print(f"     true theta_attr {true_attr:>4}  ->  estimated {r['attr_same']:>6.2f}  "
+              f"({r['attr_same'] / true_attr:>5.0%} of truth)", flush=True)
+
+    print("  B. do campaign shocks corrupt the decay?")
+    for shock in ([0.0, 0.5] if quick else [0.0, 0.3, 0.6]):
+        cfg = replace(base_cfg(quick), campaign_len=45, camp_shock_sd=shock, seed=601)
+        d = simulate(cfg)
+        for camp_fe in (False, True):
+            r = run_fit(d, quick, kernel="attr", campaign_fe=camp_fe, seed=1)
+            rows.append({"experiment": "B campaign shocks", "shock_sd": shock,
+                         "campaign_fe": str(camp_fe), "half_life_hat": r["half_life_hat"],
+                         "half_life_true": cfg.half_life,
+                         "theta_attr_hat": r["attr_same"]})
+            print(f"     shock sd {shock:>4}  campaign FE {str(camp_fe):<5}  "
+                  f"half-life {r['half_life_hat']:>5.1f} (true {cfg.half_life})", flush=True)
+    report("S6 (A) substitution strength / (B) campaign shocks", rows,
+           ["experiment", "true_theta_attr", "theta_attr_hat", "shock_sd", "campaign_fe",
+            "half_life_hat"])
+    return {"rows": rows}
+
+
+def s7_heterogeneity(quick: bool) -> dict:
+    """S7: are the kernel parameters the same for every customer?
+
+    Everything so far assumed one satiation strength for the whole population.
+    Here the DGP gives each customer their own lam_i (log-normal), and a
+    HOMOGENEOUS estimator is fitted to it. Two questions:
+      - how biased is the single lam-hat relative to the population mean?
+      - does unmodelled heterogeneity in the STATE-DEPENDENCE parameter create
+        false substitution structure, the way preference heterogeneity did
+        in S2?
+    A customer fixed effect is included as the standard remedy, to see whether
+    it helps when the heterogeneity is in the slope rather than the intercept.
+    """
+    rows = []
+    for sd in ([0.0, 0.6] if quick else [0.0, 0.3, 0.6, 1.0]):
+        cfg = replace(base_cfg(quick), campaign_len=45, lam_sd=sd, seed=700)
+        d = simulate(cfg)
+        pop_mean = float(np.mean(d.lam_true))
+        for fe in (False, True):
+            r = run_fit(d, quick, kernel="learned", customer_fe=fe, seed=1)
+            m = kernel_metrics(r["kappa_hat"], d.kappa_true, d.elem_of)
+            rows.append({"lam_sd": sd, "customer_fe": str(fe), "lam_hat": r["lam_hat"],
+                         "lam_pop_mean": pop_mean, "elem_lift": m["same_elem_lift"],
+                         "offdiag_mass": m["offdiag_mass"], "half_life_hat": r["half_life_hat"]})
+            print(f"  lam sd {sd:>4}  FE {str(fe):<5}  lam-hat {r['lam_hat']:>5.2f} "
+                  f"(population mean {pop_mean:.2f})  element lift {m['same_elem_lift']:>5.2f}",
+                  flush=True)
+    report("S7 heterogeneous satiation, homogeneous estimator", rows,
+           ["lam_sd", "customer_fe", "lam_hat", "lam_pop_mean", "elem_lift", "offdiag_mass"])
+    return {"rows": rows}
+
+
 EXPERIMENTS = {"s0": s0_diagnostic, "s1": s1_recovery, "s2": s2_false_positive,
-               "s3": s3_separability, "s4": s4_schedule, "s5": s5_parametric}
+               "s3": s3_separability, "s4": s4_schedule, "s5": s5_parametric, "s6": s6_real_calendar,
+               "s7": s7_heterogeneity}
 
 
 def main() -> None:

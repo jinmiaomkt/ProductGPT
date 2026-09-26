@@ -62,6 +62,8 @@ class SimConfig:
     kappa_identity: bool = False   # S2: exactly no substitution, kappa = I
     tier_weights: tuple = (1.0, 0.6, 0.35)   # 1st, 2nd, 3rd+ copy
     taste_sd: float = 0.0          # sd of customer element-level taste (heterogeneity)
+    lam_sd: float = 0.0            # sd of log satiation strength ACROSS CUSTOMERS (S7)
+    camp_shock_sd: float = 0.0     # sd of a campaign-level demand shock (S6)
     beta: float = 1.0              # sensitivity to banner attractiveness
     c1: float = -1.0               # intercept, 1-draw
     c10: float = -2.5              # intercept, 10-draw
@@ -83,6 +85,8 @@ class SimData:
     elem_of: np.ndarray       # (P,) element of each product
     kappa_true: np.ndarray    # (P, P) row-stochastic
     taste_true: np.ndarray    # (N, n_elements) customer element taste
+    lam_true: np.ndarray      # (N,) per-customer satiation strength
+    camp_shock: np.ndarray    # (n_campaigns,) campaign-level demand shock
     base_true: np.ndarray     # (P,) population product taste
     cfg: SimConfig = field(default_factory=SimConfig)
 
@@ -142,6 +146,11 @@ def simulate(cfg: SimConfig) -> SimData:
 
     # 3-star pool: everything not featured this campaign is a possible filler.
     rho = cfg.rho()
+    n_camp = int(np.ceil(T / cfg.campaign_len))
+    camp_shock = (rng.normal(0.0, cfg.camp_shock_sd, size=n_camp) if cfg.camp_shock_sd > 0
+                  else np.zeros(n_camp))
+    lam_i = (cfg.lam * np.exp(rng.normal(0.0, cfg.lam_sd, size=N)) if cfg.lam_sd > 0
+             else np.full(N, cfg.lam))
     R = np.zeros((N, P))          # decayed, g-weighted acquisition history
     owned = np.zeros((N, P), dtype=np.int64)
     decisions = np.zeros((N, T), dtype=np.int64)
@@ -154,9 +163,10 @@ def simulate(cfg: SimConfig) -> SimData:
         attract = np.zeros((N, B))
         for b in range(B):
             idx = offers[t, b]                                   # (F,)
-            attract[:, b] = (theta[:, idx] - cfg.lam * stock[:, idx]).mean(axis=1)
-            util[:, 2 * b] = cfg.c1 + cfg.beta * attract[:, b]
-            util[:, 2 * b + 1] = cfg.c10 + cfg.beta * attract[:, b]
+            attract[:, b] = (theta[:, idx] - lam_i[:, None] * stock[:, idx]).mean(axis=1)
+            shock = camp_shock[min(t // cfg.campaign_len, len(camp_shock) - 1)]
+            util[:, 2 * b] = cfg.c1 + cfg.beta * attract[:, b] + shock
+            util[:, 2 * b + 1] = cfg.c10 + cfg.beta * attract[:, b] + shock
         util[:, NOTBUY] = 0.0
         gumbel = rng.gumbel(size=(N, N_DECISIONS))
         choice = np.argmax(util + gumbel, axis=1)
@@ -184,7 +194,8 @@ def simulate(cfg: SimConfig) -> SimData:
         R *= rho
 
     return SimData(offers=offers, decisions=decisions, acquired=acquired, elem_of=elem_of,
-                   kappa_true=kappa, taste_true=taste, base_true=base, cfg=cfg)
+                   kappa_true=kappa, taste_true=taste, base_true=base, lam_true=lam_i,
+                   camp_shock=camp_shock, cfg=cfg)
 
 
 # --------------------------------------------------------------------------
@@ -202,7 +213,8 @@ class KernelModel(nn.Module):
     def __init__(self, n_products: int, elem_of: np.ndarray, n_elements: int,
                  kernel: str = "learned", d: int = 16, n_tiers: int = 3,
                  customer_fe: bool = False, n_customers: int = 0,
-                 learn_decay: bool = True, init_half_life: float = 20.0):
+                 learn_decay: bool = True, init_half_life: float = 20.0,
+                 n_campaigns: int = 0, campaign_len: int = 0):
         super().__init__()
         self.P, self.kernel = n_products, kernel
         self.register_buffer("elem_of", torch.as_tensor(elem_of, dtype=torch.long))
@@ -227,6 +239,10 @@ class KernelModel(nn.Module):
         self.c1 = nn.Parameter(torch.tensor(-1.0))
         self.c10 = nn.Parameter(torch.tensor(-2.0))
         self.fe = nn.Parameter(torch.zeros(n_customers, n_elements)) if customer_fe else None
+        # campaign fixed effects: absorb calendar-level demand so the decay is
+        # identified from WITHIN-campaign acquisition timing only (S6)
+        self.campaign_len = int(campaign_len)
+        self.camp_fe = nn.Parameter(torch.zeros(n_campaigns)) if n_campaigns else None
 
     def kappa(self) -> torch.Tensor:
         if self.kernel == "identity":
@@ -295,8 +311,10 @@ class KernelModel(nn.Module):
             for b in range(offers.shape[1]):
                 idx = offers[t, b]
                 a = (theta[:, idx] - lam * stock[:, idx]).mean(dim=1)
-                util[:, 2 * b] = self.c1 + self.beta * a
-                util[:, 2 * b + 1] = self.c10 + self.beta * a
+                shock = (self.camp_fe[min(t // self.campaign_len, self.camp_fe.numel() - 1)]
+                         if self.camp_fe is not None else 0.0)
+                util[:, 2 * b] = self.c1 + self.beta * a + shock
+                util[:, 2 * b + 1] = self.c10 + self.beta * a + shock
             if t_lo <= t < (T if t_hi is None else t_hi):
                 total = total + F.cross_entropy(util, decisions[:, t], reduction="sum")
                 n_obs += N
@@ -306,6 +324,7 @@ class KernelModel(nn.Module):
 
 
 def fit(data: SimData, kernel: str = "learned", customer_fe: bool = False,
+        campaign_fe: bool = False,
         epochs: int = 150, lr: float = 0.05, batch: int = 256, device: str = "auto",
         burn_in: int = 20, t_hi: Optional[int] = None, seed: int = 0,
         verbose: bool = False) -> dict:
@@ -318,9 +337,11 @@ def fit(data: SimData, kernel: str = "learned", customer_fe: bool = False,
                        else ("cuda" if device == "cuda" else "cpu"))
     torch.manual_seed(seed)
     cfg = data.cfg
+    n_camp = int(np.ceil(cfg.n_occasions / cfg.campaign_len)) if campaign_fe else 0
     model = KernelModel(cfg.n_products, data.elem_of, cfg.n_elements, kernel=kernel,
                         n_tiers=len(cfg.tier_weights), customer_fe=customer_fe,
-                        n_customers=cfg.n_customers).to(dev)
+                        n_customers=cfg.n_customers, n_campaigns=n_camp,
+                        campaign_len=cfg.campaign_len).to(dev)
     offers = torch.as_tensor(data.offers, device=dev)
     dec = torch.as_tensor(data.decisions, device=dev)
     acq = torch.as_tensor(data.acquired, device=dev)
