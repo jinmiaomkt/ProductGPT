@@ -28,7 +28,7 @@ session. Never write a job id from memory — a wrong id is worse than none.
 |---|---|---|---|---|
 | 41557–41581 | `b20_*` (25 runs) | 2026-09-26 | R33: the identified stock ladder (decay, duplicates, attribute kernel, free kernel as a bound) | 2 running, rest queued (qstat 2026-09-26) |
 | 41582–41617 | `b19_*` (36 runs) | 2026-09-26 | R32: hybrid designs seq_ra / seq_ar / block | queued (qstat 2026-09-26) |
-| 41555–41556 | `r34_sim` (2 jobs) | 2026-09-26 | R34 s6 (detection threshold, campaign shocks) and s7 (heterogeneous satiation) | running on the CPU queue |
+| 41618–41642 | `b21_*` (25 runs) | 2026-09-26 | R33b: the stock ladder WITH campaign fixed effects | queued (qstat 2026-09-26) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -2421,3 +2421,58 @@ the existing `rev_vec = [1,10,1,10,1,10,1,10,0]`.
 cost approximately X% of revenue over a campaign and would make the substitution
 matrix estimable" — a concrete trade a platform can act on, with both halves
 resting on things our design actually identifies.
+
+### R34 s6 / s7 — results: two requirements for R33
+
+**s6(A): how strong must substitution be, under OUR 45-occasion calendar?**
+
+| true theta_attr | estimated | note |
+|---|---|---|
+| 0.5 | 0.76 | over-estimated |
+| 1.5 | 0.82 | 45% attenuated |
+| 3.0 | 2.42 | starts tracking |
+| 5.0 | 2.81 | 44% attenuated |
+
+The estimator has a FLOOR around 0.8 whatever the truth: below theta ~ 3 it
+reports roughly the same number regardless, so a weak-but-real substitution
+effect and a biased constant are indistinguishable here. Only very strong
+substitution is detectable, and even then attenuated. The half-life was
+recovered (30.4–30.9 against 30) in every row.
+
+**s6(B): campaign shocks and the decay — the most actionable result so far.**
+
+| campaign shock sd | half-life, no campaign FE | with campaign FE |
+|---|---|---|
+| 0.0 | 30.4 | 30.2 |
+| 0.3 | **59.3** | 29.5 |
+| 0.6 | **147.2** | 30.4 |
+
+Time since acquisition and time since the product left the assortment advance
+together, so without a campaign control the decay absorbs the calendar and the
+half-life inflates 2x then 5x. With campaign fixed effects it is recovered
+exactly. **R33 must carry campaign fixed effects or its headline half-life is
+not interpretable.** Implemented (default off) and queued as batch 21; batch 20
+is the same ladder without them, so the pair tests this prediction on real data.
+
+**s7: heterogeneous satiation against a homogeneous estimator.**
+
+| sd of log lam | population mean lam | estimated (pooled) | shortfall |
+|---|---|---|---|
+| 0.0 | 1.00 | 0.93 | −7% |
+| 0.3 | 1.04 | 0.77 | −26% |
+| 0.6 | 1.19 | 0.77 | −36% |
+| 1.0 | 1.61 | 0.74 | −54% |
+
+Unmodelled heterogeneity in the SLOPE attenuates the pooled satiation strength
+badly — by half at realistic dispersion. Unlike S2's preference heterogeneity it
+does NOT manufacture false substitution structure (element lift falls toward 0
+as dispersion grows), but a customer fixed effect again makes the kernel worse,
+not better (lift 1.14–1.74 with FE against 0.01–0.17 without).
+
+**Consequence.** lam estimated as a single population number is a lower bound,
+and should be reported as such until a hierarchical version exists. The natural
+next step (S8) is to give the estimator a per-customer satiation drawn from a
+population distribution and ask whether that distribution is recoverable — with
+the constraint that half our evaluation is out-of-sample customers, so any
+per-customer quantity must be predictable from their own history rather than a
+free parameter.
