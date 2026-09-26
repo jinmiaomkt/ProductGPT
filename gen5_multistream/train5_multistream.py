@@ -686,7 +686,19 @@ def main() -> None:
                          "--arch gru, this keeps the inventory GRU and the "
                          "offer-inventory cross-attention. gru_attn combines "
                          "recurrence with attention over past occasions (R25).")
-    ap.add_argument("--fuse", choices=["gate", "stack"], default=None,
+    ap.add_argument("--kernel", choices=["none", "attr", "learned"], default=None,
+                    help="R33 stock write-side: which products an acquisition satiates. "
+                         "attr = a few coefficients on the frozen attribute table "
+                         "(identified, R34); learned = free QKV kernel (an upper bound "
+                         "for a specification test, NOT reportable as substitution)")
+    ap.add_argument("--decay", choices=["none", "exp"], default=None,
+                    help="R33: exp = one learned half-life on the stock (Guadagni-Little)")
+    ap.add_argument("--tier", type=int, default=None,
+                    help="R33: 1 = learned diminishing weights for duplicate copies")
+    ap.add_argument("--block-len", type=int, default=None,
+                    help="R32 fuse=block: occasions per attention block")
+    ap.add_argument("--fuse", choices=["gate", "stack", "seq_ra", "seq_ar", "block"],
+                    default=None,
                     help="With --encoder gru_attn: gate = run both branches and "
                          "blend them with a learned gate; stack = interleave "
                          "GRU and attention layer by layer.")
@@ -818,6 +830,14 @@ def main() -> None:
         cfg["inventory"] = args.inventory
     if args.sat_layers is not None:
         cfg["sat_layers"] = args.sat_layers
+    if args.kernel is not None:
+        cfg["kernel"] = args.kernel
+    if args.decay is not None:
+        cfg["decay"] = args.decay
+    if args.tier is not None:
+        cfg["tier"] = bool(args.tier)
+    if args.block_len is not None:
+        cfg["block_len"] = args.block_len
     if args.leaky_time_bias:
         cfg["time_bias_lag_ipt"] = False
     print(f"[cfg] arch={cfg.get('arch')} encoder={cfg.get('encoder')} "
@@ -888,6 +908,10 @@ def main() -> None:
             time_bias_lag_ipt=cfg.get("time_bias_lag_ipt", True),
             inventory=cfg.get("inventory", "tokens"),
             sat_layers=cfg.get("sat_layers", 0),
+            kernel=cfg.get("kernel", "none"),
+            decay=cfg.get("decay", "none"),
+            tier=cfg.get("tier", False),
+            block_len=cfg.get("block_len", 64),
             fuse=cfg.get("fuse", "gate"),
         ).to(device)
 

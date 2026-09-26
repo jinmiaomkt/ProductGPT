@@ -143,6 +143,12 @@ SAT_LAYERS="${SAT_LAYERS:-}"
 #   ENCODER=gru_attn FUSE=gate|stack   recurrence + attention over past
 #                    occasions (R25)
 FUSE="${FUSE:-}"
+#   R32: FUSE=seq_ra|seq_ar|block (block uses BLOCK_LEN occasions per window)
+#   R33: KERNEL=attr|learned, DECAY=exp, TIER=1 -- the identified stock
+BLOCK_LEN="${BLOCK_LEN:-}"
+KERNEL="${KERNEL:-}"
+DECAY="${DECAY:-}"
+TIER="${TIER:-}"
 
 # Stop cleanly ~30 min before the 24h walltime so last.pt is written and the
 # job can be resubmitted with RESUME=1 instead of losing the run.
@@ -271,6 +277,10 @@ args=(
 [[ -n "$WARMUP" ]] && args+=(--warmup-frac "$WARMUP")
 [[ -n "$SAT_LAYERS" ]] && args+=(--sat-layers "$SAT_LAYERS")
 [[ -n "$FUSE" ]] && args+=(--fuse "$FUSE")
+[[ -n "$BLOCK_LEN" ]] && args+=(--block-len "$BLOCK_LEN")
+[[ -n "$KERNEL" ]] && args+=(--kernel "$KERNEL")
+[[ -n "$DECAY" ]] && args+=(--decay "$DECAY")
+[[ -n "$TIER" ]] && args+=(--tier "$TIER")
 
 echo "Command: python gen5_multistream/train5_multistream.py ${args[*]}"
 echo

@@ -278,6 +278,73 @@ def additive_inventory(obtained_ids: torch.Tensor,
     return count, rows_since
 
 
+
+def _plain_rows(obtained_ids: torch.Tensor, dtype) -> torch.Tensor:
+    """Unweighted acquisitions per occasion, (B,S,P)."""
+    B, S, _ = obtained_ids.shape
+    n_products = LAST_PROD_ID - FIRST_PROD_ID + 1
+    valid = (obtained_ids >= FIRST_PROD_ID) & (obtained_ids <= LAST_PROD_ID)
+    idx = (obtained_ids - FIRST_PROD_ID).clamp(0, n_products - 1)
+    out = torch.zeros(B, S, n_products, device=obtained_ids.device, dtype=dtype)
+    out.scatter_add_(2, idx, valid.to(dtype))
+    return out
+
+
+def copy_weights(obtained_ids: torch.Tensor, count_before: torch.Tensor,
+                 g: torch.Tensor) -> torch.Tensor:
+    """(B,S,P) acquisitions weighted by WHICH copy they are (R33's g).
+
+    Copies acquired in the same occasion must count as 1st, 2nd, 3rd...; using
+    the pre-occasion holding for all of them would over-weight duplicates,
+    which is the whole point of g. `rank` counts earlier slots of the same row
+    holding the same product. (This is the bug the R34 estimator had, caught by
+    a brute-force replay -- see EXPERIMENTS.md.)
+    """
+    B, S, L = obtained_ids.shape
+    n_products = LAST_PROD_ID - FIRST_PROD_ID + 1
+    valid = (obtained_ids >= FIRST_PROD_ID) & (obtained_ids <= LAST_PROD_ID)
+    idx = (obtained_ids - FIRST_PROD_ID).clamp(0, n_products - 1)
+    same = (obtained_ids.unsqueeze(3) == obtained_ids.unsqueeze(2)) & valid.unsqueeze(2)
+    earlier = torch.tril(torch.ones(L, L, device=obtained_ids.device, dtype=torch.bool), -1)
+    rank = (same & earlier[None, None]).sum(dim=3)
+    prior = torch.gather(count_before, 2, idx)
+    k = (prior + rank).clamp(0, g.numel() - 1).long()
+    w = g[k] * valid.to(g.dtype)
+    out = torch.zeros(B, S, n_products, device=obtained_ids.device, dtype=g.dtype)
+    out.scatter_add_(2, idx, w)
+    return out
+
+
+def decayed_counts(per_row: torch.Tensor, rho: torch.Tensor, chunk: int = 64) -> torch.Tensor:
+    """
+    R_t(p) = sum_{tau < t} w_tau(p) * rho^(t-tau)  -- Guadagni-Little smoothing (R33).
+
+    Chunked so it is neither a 1024-step python loop nor a rho^-t overflow:
+    inside a chunk the geometric weights are closed form (exponent < chunk),
+    and only the carry between chunks is looped. rho -> 1 gives the plain
+    cumulative count.
+    """
+    B, S, P = per_row.shape
+    dev, dt = per_row.device, per_row.dtype
+    nb = (S + chunk - 1) // chunk
+    pad = nb * chunk - S
+    x = torch.cat([per_row, per_row.new_zeros(B, pad, P)], dim=1) if pad else per_row
+    x = x.view(B, nb, chunk, P)
+    u = torch.arange(chunk, device=dev, dtype=torch.float32)
+    r = rho.float()
+    up = (r ** (-u)).to(dt)[None, None, :, None]
+    dn = (r ** u).to(dt)[None, None, :, None]
+    incl = torch.cumsum(x * up, dim=2)
+    within = (incl - x * up) * dn
+    tail = (x * (r ** (chunk - u)).to(dt)[None, None, :, None]).sum(dim=2)
+    step = (r ** chunk).to(dt)
+    outs, carry = [], per_row.new_zeros(B, P)
+    for j in range(nb):
+        outs.append(within[:, j] + carry[:, None, :] * dn[0, 0])
+        carry = carry * step + tail[:, j]
+    return torch.stack(outs, dim=1).reshape(B, nb * chunk, P)[:, :S]
+
+
 class _SDPAttention(nn.Module):
     """Multi-head attention through F.scaled_dot_product_attention with a
     boolean keep-mask (True = may attend). Callers guarantee no query row is
@@ -343,9 +410,24 @@ class InventorySlots(nn.Module):
     """
 
     def __init__(self, d_model: int, n_heads: int, d_ff: int, dropout: float,
-                 feature_tensor: torch.Tensor, sat_layers: int = 0):
+                 feature_tensor: torch.Tensor, sat_layers: int = 0,
+                 kernel: str = "none", decay: str = "none", tier: bool = False,
+                 n_tiers: int = 3):
         super().__init__()
         self.sat_layers = int(sat_layers)
+        # R33, the stock's WRITE side: `kernel` says which products an
+        # acquisition touches, `decay` how it fades, `tier` how a duplicate
+        # counts. R34 found decay and duplicate weights identified under our
+        # offer rotation and a free kernel NOT identified, so "attr" (a few
+        # attribute coefficients) is the structural choice and "learned" is
+        # kept only as an upper bound for a specification test.
+        self.kernel = str(kernel).lower()
+        if self.kernel not in ("none", "attr", "learned"):
+            raise ValueError(f"kernel must be none|attr|learned, got {kernel!r}")
+        self.decay = str(decay).lower()
+        if self.decay not in ("none", "exp"):
+            raise ValueError(f"decay must be none|exp, got {decay!r}")
+        self.use_tier = bool(tier)
         prod = feature_tensor[FIRST_PROD_ID:LAST_PROD_ID + 1].float()       # (44,F)
         std = prod.std(dim=0, keepdim=True)
         std = torch.where(std > 0, std, torch.ones_like(std))
@@ -354,6 +436,24 @@ class InventorySlots(nn.Module):
         self.register_buffer("slot_ids", torch.arange(FIRST_PROD_ID, LAST_PROD_ID + 1),
                              persistent=False)
         self.state_mlp = nn.Sequential(nn.Linear(3, d_model), nn.GELU(), nn.Linear(d_model, d_model))
+        n_prod = LAST_PROD_ID - FIRST_PROD_ID + 1
+        if self.decay == "exp":
+            self.log_half_life = nn.Parameter(torch.tensor(math.log(30.0)))
+        if self.use_tier:
+            self.tier_raw = nn.Parameter(torch.zeros(max(int(n_tiers) - 1, 1)))
+        if self.kernel == "attr":
+            # same-attribute indicators from the frozen feature table: the
+            # McAlister restriction, a handful of coefficients instead of P^2
+            feats = feature_tensor[FIRST_PROD_ID:LAST_PROD_ID + 1].float()
+            self.register_buffer("attr_same",
+                                 (feats[:, None, :] == feats[None, :, :]).float(),
+                                 persistent=False)
+            self.attr_w = nn.Parameter(torch.zeros(feats.size(1)))
+            self.attr_self = nn.Parameter(torch.tensor(2.0))
+        elif self.kernel == "learned":
+            self.k_emb = nn.Parameter(torch.randn(n_prod, 32) * 0.1)
+            self.k_q = nn.Linear(32, 32, bias=False)
+            self.k_k = nn.Linear(32, 32, bias=False)
         self.slot_norm = nn.LayerNorm(d_model)
         self.inv_pool = AttentionPool(d_model, dropout)
         self.stock_proj = nn.Sequential(nn.Linear(prod.size(1) + 1, d_model), nn.GELU(),
@@ -367,17 +467,57 @@ class InventorySlots(nn.Module):
             self.out_norm = nn.LayerNorm(d_model)
             self.offer_out = nn.Linear(4 * d_model, d_model)
 
+    def tier_weights(self, dtype, device) -> torch.Tensor:
+        """g = [1, s1, s1*s2, ...]: weakly decreasing, first copy fixed at 1."""
+        if not self.use_tier:
+            return torch.ones(1, dtype=dtype, device=device)
+        steps = torch.sigmoid(self.tier_raw).to(dtype)
+        return torch.cat([torch.ones(1, dtype=dtype, device=device),
+                          torch.cumprod(steps, 0)])
+
+    def kernel_matrix(self, dtype, device):
+        """Row-stochastic (P,P): which product an acquisition also satiates."""
+        if self.kernel == "none":
+            return None
+        n = LAST_PROD_ID - FIRST_PROD_ID + 1
+        eye = torch.eye(n, dtype=dtype, device=device)
+        if self.kernel == "attr":
+            logits = (self.attr_same.to(dtype) @ self.attr_w.to(dtype)
+                      + self.attr_self.to(dtype) * eye)
+        else:
+            q, k = self.k_q(self.k_emb), self.k_k(self.k_emb)
+            logits = (q @ k.transpose(0, 1) / math.sqrt(q.size(-1))).to(dtype)
+        return torch.softmax(logits, dim=1)
+
     def forward(self, product_embed, offer_tok, offer_mask, obtained_ids,
                 init_count=None, init_last=None):
         B, S, Lx, D = offer_tok.shape
         count, since = additive_inventory(obtained_ids, init_count, init_last)
         owned = count > 0                                                     # (B,S,44)
 
-        state = torch.stack([torch.log1p(count), torch.log1p(since), owned.float()], dim=-1)
+        stock_cnt = count
+        if self.use_tier or self.decay == "exp" or self.kernel != "none":
+            g = self.tier_weights(count.dtype, count.device)
+            per_row = (copy_weights(obtained_ids, count.long(), g) if self.use_tier
+                       else _plain_rows(obtained_ids, count.dtype))
+            if self.decay == "exp":
+                hl = F.softplus(self.log_half_life).clamp_min(1e-2)
+                rho = torch.exp(-math.log(2.0) / hl)
+                stock_cnt = decayed_counts(per_row, rho)
+            else:
+                stock_cnt = torch.cumsum(per_row, dim=1) - per_row
+                if init_count is not None:
+                    stock_cnt = stock_cnt + init_count.to(count.device, count.dtype)[:, None, :]
+            kap = self.kernel_matrix(count.dtype, count.device)
+            if kap is not None:
+                stock_cnt = stock_cnt @ kap.transpose(0, 1)
+
+        state = torch.stack([torch.log1p(stock_cnt.clamp_min(0)), torch.log1p(since),
+                             owned.float()], dim=-1)
         base = product_embed(self.slot_ids)                                   # (44,D)
         slots = self.slot_norm(base[None, None] + self.state_mlp(state.to(base.dtype)))
 
-        stock = count @ self.feat_std                                         # (B,S,F)
+        stock = stock_cnt @ self.feat_std                                         # (B,S,F)
         stock = torch.sign(stock) * torch.log1p(stock.abs())
         total = torch.log1p(count.sum(dim=-1, keepdim=True))
         z_stock = self.stock_proj(torch.cat([stock, total], dim=-1).to(base.dtype))
@@ -683,6 +823,10 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         time_bias_lag_ipt: bool = True,
         inventory: str = "tokens",
         sat_layers: int = 0,
+        block_len: int = 64,
+        kernel: str = "none",
+        decay: str = "none",
+        tier: bool = False,
         fuse: str = "gate",
     ):
         super().__init__()
@@ -720,9 +864,19 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         # "stack" interleaves them layer by layer. The attention half keeps
         # whatever recency bias the flags ask for, so "does recurrence already
         # supply recency?" is the bias switched off.
+        # R32: five ways to combine the two mechanisms, each a different claim
+        # about what memory does.
+        #   gate    both branches on the same input, blended per position
+        #   stack   interleaved layer by layer
+        #   seq_ra  recurrence BUILDS the state, attention RETRIEVES among states
+        #   seq_ar  attention builds context, recurrence CARRIES the propensity
+        #   block   attention within a block of occasions, recurrence across
+        #           blocks -- two time scales, and O(S*K) rather than O(S^2)
         self.fuse = str(fuse).lower()
-        if self.fuse not in ("gate", "stack"):
-            raise ValueError(f"fuse must be 'gate' or 'stack', got {fuse!r}")
+        if self.fuse not in ("gate", "stack", "seq_ra", "seq_ar", "block"):
+            raise ValueError(
+                f"fuse must be gate|stack|seq_ra|seq_ar|block, got {fuse!r}")
+        self.block_len = int(block_len)
         # Diagnostic, not a parameter: the mean gate weight on the recurrent
         # branch, so we can report how much the model leans on recency vs
         # retrieval. Updated under no_grad in forward.
@@ -778,7 +932,8 @@ class MultiStreamStateSpaceTransformer(nn.Module):
             self.inventory_gru = None
             self.offer_inventory_attn = None
             self.inventory_slots = InventorySlots(d_model, n_heads, d_ff, dropout,
-                                                  feature_tensor, sat_layers)
+                                                  feature_tensor, sat_layers,
+                                                  kernel=kernel, decay=decay, tier=tier)
 
         self.use_user_embedding = bool(use_user_embedding and num_users is not None)
         if self.use_user_embedding:
@@ -825,7 +980,7 @@ class MultiStreamStateSpaceTransformer(nn.Module):
             self.event_model_norm = nn.LayerNorm(d_model)
 
             if self.encoder_kind == "gru_attn":
-                n_attn = n_layers if self.fuse == "stack" else 1
+                n_attn = n_layers if self.fuse in ("stack", "block") else 1
                 self.attn_branch = nn.ModuleList(
                     CausalEventTransformer(
                         d_model=d_model, n_layers=1, n_heads=n_heads, d_ff=d_ff,
@@ -880,6 +1035,46 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         prev_dec_ids = x[:, :, self.lto_len + self.obtained_len]
 
         return lto_ids, obtained_ids, prev_dec_ids
+
+
+    def _block_recurrent(self, r: torch.Tensor, event_time) -> torch.Tensor:
+        """Attention WITHIN a block of occasions, recurrence ACROSS blocks (R32).
+
+        Two time scales: retrieval inside a campaign-sized window, carry-over
+        between windows. Causality holds in both directions -- attention is
+        causal inside its block, and block j only ever receives the recurrent
+        state summarising blocks < j. Cost is O(S*K), not O(S^2), which is what
+        would let max_events rise above 1024.
+        """
+        B, S, D = r.shape
+        K = max(int(self.block_len), 1)
+        nb = (S + K - 1) // K
+        pad = nb * K - S
+        x = torch.cat([r, r.new_zeros(B, pad, D)], dim=1) if pad else r
+        et = None
+        if event_time is not None:
+            et = event_time
+            if pad:
+                et = torch.cat([et, et[:, -1:].expand(B, pad)], dim=1)
+            et = et.reshape(B * nb, K)
+        y = x.reshape(B * nb, K, D)
+        last = len(self.attn_branch) - 1
+        for i, blk in enumerate(self.attn_branch):
+            y = y + blk(y, et)
+            if i < last:
+                y = self.event_model_dropout(y)
+        y = y.reshape(B, nb, K, D)
+        summary = y.mean(dim=2)                                   # (B, nb, D)
+        h = summary.contiguous()
+        lastg = len(self.event_model) - 1
+        for i, gru in enumerate(self.event_model):
+            h, _ = gru(h)
+            if i < lastg:
+                h = self.event_model_dropout(h).contiguous()
+        h = self.event_model_norm(h)
+        carry = torch.cat([h.new_zeros(B, 1, D), h[:, :-1]], dim=1)   # blocks < j only
+        s = (y + carry[:, :, None, :]).reshape(B, nb * K, D)
+        return s[:, :S]
 
     def forward(
         self,
@@ -1019,6 +1214,28 @@ class MultiStreamStateSpaceTransformer(nn.Module):
                     if i < last:
                         s = self.event_model_dropout(s).contiguous()
                 s = self.event_model_norm(s)
+            elif self.fuse == "seq_ra":
+                # recurrence first, attention over the hidden states it built
+                h = r.contiguous()
+                last = len(self.event_model) - 1
+                for i, gru in enumerate(self.event_model):
+                    h, _ = gru(h)
+                    if i < last:
+                        h = self.event_model_dropout(h).contiguous()
+                h = self.event_model_norm(h)
+                s = h + self.attn_branch[0](h, event_time)
+            elif self.fuse == "seq_ar":
+                # attention first, recurrence reads out the contextualised sequence
+                a = r + self.attn_branch[0](r, event_time)
+                s = a.contiguous()
+                last = len(self.event_model) - 1
+                for i, gru in enumerate(self.event_model):
+                    s, _ = gru(s)
+                    if i < last:
+                        s = self.event_model_dropout(s).contiguous()
+                s = self.event_model_norm(s)
+            elif self.fuse == "block":
+                s = self._block_recurrent(r, event_time)
             else:
                 h = r.contiguous()
                 last = len(self.event_model) - 1
@@ -1099,5 +1316,9 @@ def build_transformer(
         time_bias_lag_ipt=kwargs.get("time_bias_lag_ipt", True),
         inventory=kwargs.get("inventory", "tokens"),
         sat_layers=kwargs.get("sat_layers", 0),
+        block_len=kwargs.get("block_len", 64),
+        kernel=kwargs.get("kernel", "none"),
+        decay=kwargs.get("decay", "none"),
+        tier=kwargs.get("tier", False),
         fuse=kwargs.get("fuse", "gate"),
     )
