@@ -28,7 +28,7 @@ session. Never write a job id from memory — a wrong id is worse than none.
 |---|---|---|---|---|
 | 41557–41581 | `b20_*` (25 runs) | 2026-09-26 | R33: the identified stock ladder (decay, duplicates, attribute kernel, free kernel as a bound) | 2 running, rest queued (qstat 2026-09-26) |
 | 41582–41617 | `b19_*` (36 runs) | 2026-09-26 | R32: hybrid designs seq_ra / seq_ar / block | queued (qstat 2026-09-26) |
-| 41618–41642 | `b21_*` (25 runs) | 2026-09-26 | R33b: the stock ladder WITH campaign fixed effects | queued (qstat 2026-09-26) |
+| 41643–41692 | `b22_*`, `b23_*` (50 runs) | 2026-09-27 | R33 ladder re-run after the parameterisation and weight-decay fixes | queued (qstat 2026-09-27) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -2476,3 +2476,36 @@ population distribution and ask whether that distribution is recoverable — wit
 the constraint that half our evaluation is out-of-sample customers, so any
 per-customer quantity must be predictable from their own history rather than a
 free parameter.
+
+### Bug (2026-09-27): the R33 ladder estimated nothing, twice over
+
+Batches 20 and 21 finished with every arm reporting the SAME structural
+parameters: half-life 3.3 with zero spread across seeds, tier weights exactly
+[1.00, 0.50, 0.25], attribute coefficients within 0.023 of zero. Identical
+numbers across ten runs and two batches is a bug signature, not an estimate.
+
+**Cause 1, parameterisation.** The parameter was named `log_half_life`,
+initialised at log(30) = 3.401, and then passed through `softplus`.
+softplus(3.401) = 3.43, so the ladder trained with a half-life of 3.4
+occasions and reported that as the estimate. Fixed: the parameter now IS the
+half-life through softplus, initialised at 30.
+
+**Cause 2, weight decay.** `AdamW(model.parameters(), weight_decay=...)` decays
+every parameter, including the structural ones. Stage 5 had already shown the
+likelihood is nearly flat in the stock path (removing it entirely costs 0.0137),
+so decay dominated the gradient and the parameters sat at their initial values:
+`tier_raw` at exactly 0 gives [1, 0.5, 0.25], `attr_w` at ~0. Fixed: structural
+parameters (`half_life_raw`, `tier_raw`, `attr_w`, `attr_self`, `camp_bias`,
+kernel embeddings) are a separate optimiser group with no decay and a larger
+step, so the across-seed spread now measures whether the data move them.
+
+**Blast radius.** Batches 20 and 21 are void for the parameter estimates. Their
+NLL comparison is still valid as an architecture comparison (all arms shared the
+same flaw), and it says what stage 5 said: every rung is within 0.008 of every
+other at a seed sd of ~0.012, so no rung is distinguishable. Batch 19 (R32) is
+unaffected: those models carry none of the structural parameters.
+
+**Lesson.** A regularised parameter is not an estimated one. Anything the paper
+reports as a quantity must be outside weight decay, and any parameter with a
+transform must have its initial value asserted in the units it is reported in.
+Re-run as batches 22 (no campaign FE) and 23 (with).
