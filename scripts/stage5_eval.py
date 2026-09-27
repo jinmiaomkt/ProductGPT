@@ -33,12 +33,66 @@ import torch.nn.functional as F
 import config5
 import dataset_multistream
 import model_multistream_state_space
-from eval_per_occasion import CELL, N_CLASSES, build_model
+from eval_per_occasion import CELL, N_CLASSES, build_model, uid_hash
 from shared.features import load_feature_tensor
 from train5_multistream import (amp_dtype, build_loaders, inventory_kwargs, pick_device,
                                 set_seed, set_unknown_user_to_mean)
 
 N_BINS = 15
+
+
+def _avg_ranks(x: np.ndarray) -> np.ndarray:
+    """Average ranks, ties shared -- the Mann-Whitney convention."""
+    order = np.argsort(x, kind="mergesort")
+    ranks = np.empty(len(x), dtype=np.float64)
+    ranks[order] = np.arange(1, len(x) + 1)
+    xs = x[order]
+    i = 0
+    while i < len(xs):
+        j = i
+        while j + 1 < len(xs) and xs[j + 1] == xs[i]:
+            j += 1
+        if j > i:
+            ranks[order[i:j + 1]] = (i + 1 + j + 1) / 2.0
+        i = j + 1
+    return ranks
+
+
+def auc_binary(score: np.ndarray, pos: np.ndarray) -> float:
+    """Area under the ROC curve from ranks; nan when one class is absent."""
+    n_pos = int(pos.sum())
+    n_neg = int((~pos).sum())
+    if n_pos == 0 or n_neg == 0:
+        return float("nan")
+    r = _avg_ranks(score)
+    return float((r[pos].sum() - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg))
+
+
+def auc_macro(p: np.ndarray, y: np.ndarray, n_classes: int = N_CLASSES) -> float:
+    """One-vs-rest AUC averaged over the classes that occur."""
+    vals = [auc_binary(p[:, c], y == c) for c in range(n_classes)]
+    vals = [v for v in vals if v == v]
+    return float(np.mean(vals)) if vals else float("nan")
+
+
+def auc_group(p: np.ndarray, y: np.ndarray, uid: np.ndarray,
+              min_occasions: int = 20) -> tuple:
+    """Jin's group-averaged AUC: macro one-vs-rest WITHIN each customer, then
+    averaged across customers. A customer-level AUC asks whether the model ranks
+    THIS customer's occasions correctly, which is the question a targeting
+    decision actually poses; the pooled version can look good purely by ranking
+    heavy buyers above light ones."""
+    order = np.argsort(uid, kind="mergesort")
+    u, p_, y_ = uid[order], p[order], y[order]
+    bounds = np.flatnonzero(np.diff(u)) + 1
+    vals = []
+    for lo, hi in zip(np.r_[0, bounds], np.r_[bounds, len(u)]):
+        if hi - lo < min_occasions or len(np.unique(y_[lo:hi])) < 2:
+            continue
+        v = auc_macro(p_[lo:hi], y_[lo:hi])
+        if v == v:
+            vals.append(v)
+    return (float(np.mean(vals)) if vals else float("nan"), len(vals))
 
 
 def score(ckpt: Path, device) -> dict:
@@ -64,6 +118,7 @@ def score(ckpt: Path, device) -> dict:
     model.eval()
     adtype = amp_dtype(device) if cfg.get("amp") else None
 
+    probs_all, y_all, uid_all = [], [], []
     conf = np.zeros((N_CLASSES, N_CLASSES), dtype=np.int64)     # true x predicted
     cls_nll = np.zeros(N_CLASSES)
     cls_n = np.zeros(N_CLASSES, dtype=np.int64)
@@ -99,6 +154,11 @@ def score(ckpt: Path, device) -> dict:
             cls_nll += np.bincount(y.cpu().numpy(), weights=nll.cpu().numpy(),
                                    minlength=N_CLASSES)
             cls_n += np.bincount(y.cpu().numpy(), minlength=N_CLASSES)
+            probs_all.append(pm.float().cpu().numpy())
+            y_all.append(y.cpu().numpy().astype(np.int8))
+            n_rows = mask.sum(dim=1)
+            uid_all.append(np.repeat(np.asarray([uid_hash(u) for u in batch["uid"]]),
+                                     n_rows.cpu().numpy()))
             b = np.clip((top.cpu().numpy() * N_BINS).astype(int), 0, N_BINS - 1)
             bin_n += np.bincount(b, minlength=N_BINS)
             bin_conf += np.bincount(b, weights=top.cpu().numpy(), minlength=N_BINS)
@@ -117,6 +177,11 @@ def score(ckpt: Path, device) -> dict:
         except json.JSONDecodeError:
             pass
     ece = float(np.sum(np.abs(bin_acc - bin_conf)) / max(n, 1))
+    P = np.concatenate(probs_all) if probs_all else np.zeros((0, N_CLASSES))
+    Y = np.concatenate(y_all) if y_all else np.zeros(0, dtype=np.int8)
+    U = np.concatenate(uid_all) if uid_all else np.zeros(0, dtype=np.int64)
+    auc_m = auc_macro(P, Y)
+    auc_g, n_cust = auc_group(P, Y, U)
     return {
         "n_occasions": n,
         "nll": float(cls_nll.sum() / max(n, 1)),
@@ -125,6 +190,10 @@ def score(ckpt: Path, device) -> dict:
         "confusion": conf.tolist(),
         "bin_n": bin_n.tolist(), "bin_conf": bin_conf.tolist(), "bin_acc": bin_acc.tolist(),
         "ece": ece,
+        "auc_macro": auc_m,
+        "auc_group": auc_g,
+        "auc_group_customers": n_cust,
+        "hit_rate": float(np.trace(conf) / max(n, 1)),
         "brier": float(brier / max(n, 1)),
         "params": int(sum(p.numel() for p in model.parameters())),
         "secs_per_epoch": secs,
@@ -150,7 +219,9 @@ def main() -> None:
                 continue
             res = score(ck, device)
             dest.write_text(json.dumps(res), encoding="utf-8")
-            print(f"[stage5] {tag}: nll {res['nll']:.4f}  ECE {res['ece']:.4f}  "
+            print(f"[stage5] {tag}: nll {res['nll']:.4f}  hit {res['hit_rate']:.4f}  "
+                  f"AUC macro {res['auc_macro']:.4f} group {res['auc_group']:.4f}  "
+                  f"ECE {res['ece']:.4f}  "
                   f"params {res['params']:,}  {res['secs_per_epoch']:.0f}s/epoch", flush=True)
 
 
