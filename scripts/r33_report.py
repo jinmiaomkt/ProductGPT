@@ -45,7 +45,7 @@ def main() -> None:
             sd = st_["model_state_dict"]
             rec = {"seed": st_["cfg"].get("seed")}
             for k, v in sd.items():
-                if k.endswith("inventory_slots.log_half_life"):
+                if k.endswith("inventory_slots.half_life_raw"):
                     rec["half_life"] = softplus(float(v))
                 elif k.endswith("inventory_slots.tier_raw"):
                     steps = torch.sigmoid(v.float())

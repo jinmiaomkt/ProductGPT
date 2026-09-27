@@ -438,7 +438,10 @@ class InventorySlots(nn.Module):
         self.state_mlp = nn.Sequential(nn.Linear(3, d_model), nn.GELU(), nn.Linear(d_model, d_model))
         n_prod = LAST_PROD_ID - FIRST_PROD_ID + 1
         if self.decay == "exp":
-            self.log_half_life = nn.Parameter(torch.tensor(math.log(30.0)))
+            # softplus(raw) IS the half-life in occasions, so raw starts at 30.
+            # (An earlier version stored log(30) and passed it through softplus,
+            # which silently trained with a half-life of 3.4 -- see EXPERIMENTS.md.)
+            self.half_life_raw = nn.Parameter(torch.tensor(30.0))
         if self.use_tier:
             self.tier_raw = nn.Parameter(torch.zeros(max(int(n_tiers) - 1, 1)))
         if self.kernel == "attr":
@@ -501,7 +504,7 @@ class InventorySlots(nn.Module):
             per_row = (copy_weights(obtained_ids, count.long(), g) if self.use_tier
                        else _plain_rows(obtained_ids, count.dtype))
             if self.decay == "exp":
-                hl = F.softplus(self.log_half_life).clamp_min(1e-2)
+                hl = F.softplus(self.half_life_raw).clamp_min(1e-2)
                 rho = torch.exp(-math.log(2.0) / hl)
                 stock_cnt = decayed_counts(per_row, rho)
             else:

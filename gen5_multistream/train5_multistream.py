@@ -940,7 +940,24 @@ def main() -> None:
     full_w[1:1 + N_CLASSES] = w9
     loss_fn = FocalLoss(cfg["gamma"], PAD_ID, full_w).to(device)
 
-    opt = torch.optim.AdamW(model.parameters(), lr=cfg["lr"],
+    # R33: the structural parameters -- half-life, duplicate weights, kernel
+    # coefficients, campaign effects -- are quantities we REPORT, not weights we
+    # regularise. Weight decay on a near-flat likelihood pinned them at their
+    # initial values in batches 20/21, so they are excluded here and given a
+    # larger step, which lets the across-seed spread show whether the data
+    # actually move them.
+    STRUCT = ("half_life_raw", "tier_raw", "attr_w", "attr_self",
+              "camp_bias", "k_emb", "k_q", "k_k")
+    struct, rest = [], []
+    for n_, p_ in model.named_parameters():
+        (struct if any(k in n_ for k in STRUCT) else rest).append(p_)
+    groups = [{"params": rest, "weight_decay": cfg["weight_decay"]}]
+    if struct:
+        groups.append({"params": struct, "weight_decay": 0.0,
+                       "lr": cfg["lr"] * float(cfg.get("struct_lr_mult", 10.0))})
+        print(f"[cfg] {len(struct)} structural parameters: no weight decay, "
+              f"lr x{cfg.get('struct_lr_mult', 10.0)}")
+    opt = torch.optim.AdamW(groups, lr=cfg["lr"],
                             weight_decay=cfg["weight_decay"], eps=cfg["eps"])
     accum = max(1, int(cfg["grad_accum"]))
     steps_per_epoch = max(1, math.ceil(len(train_dl) / accum))
