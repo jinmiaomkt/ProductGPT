@@ -703,6 +703,9 @@ def main() -> None:
                     help="R33: exp = one learned half-life on the stock (Guadagni-Little)")
     ap.add_argument("--tier", type=int, default=None,
                     help="R33: 1 = learned diminishing weights for duplicate copies")
+    ap.add_argument("--decay-init", type=float, default=None,
+                    help="R33: starting half-life in occasions. Varying it tests whether "
+                         "the data identify the decay or it stays at its prior")
     ap.add_argument("--camp-fe", type=int, default=None,
                     help="R33b: 1 = per-campaign bias on the purchase logits, so the "
                          "decay is identified from within-campaign timing (R34 s6)")
@@ -851,6 +854,8 @@ def main() -> None:
         cfg["block_len"] = args.block_len
     if args.camp_fe is not None:
         cfg["camp_fe"] = bool(args.camp_fe)
+    if args.decay_init is not None:
+        cfg["decay_init"] = args.decay_init
     if args.leaky_time_bias:
         cfg["time_bias_lag_ipt"] = False
     print(f"[cfg] arch={cfg.get('arch')} encoder={cfg.get('encoder')} "
@@ -923,6 +928,7 @@ def main() -> None:
             sat_layers=cfg.get("sat_layers", 0),
             kernel=cfg.get("kernel", "none"),
             decay=cfg.get("decay", "none"),
+            decay_init=cfg.get("decay_init", 30.0),
             tier=cfg.get("tier", False),
             block_len=cfg.get("block_len", 64),
             n_campaigns=(cfg.get("n_campaigns", 32) if cfg.get("camp_fe") else 0),

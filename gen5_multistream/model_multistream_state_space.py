@@ -412,7 +412,7 @@ class InventorySlots(nn.Module):
     def __init__(self, d_model: int, n_heads: int, d_ff: int, dropout: float,
                  feature_tensor: torch.Tensor, sat_layers: int = 0,
                  kernel: str = "none", decay: str = "none", tier: bool = False,
-                 n_tiers: int = 3):
+                 n_tiers: int = 3, decay_init: float = 30.0):
         super().__init__()
         self.sat_layers = int(sat_layers)
         # R33, the stock's WRITE side: `kernel` says which products an
@@ -441,7 +441,7 @@ class InventorySlots(nn.Module):
             # softplus(raw) IS the half-life in occasions, so raw starts at 30.
             # (An earlier version stored log(30) and passed it through softplus,
             # which silently trained with a half-life of 3.4 -- see EXPERIMENTS.md.)
-            self.half_life_raw = nn.Parameter(torch.tensor(30.0))
+            self.half_life_raw = nn.Parameter(torch.tensor(float(decay_init)))
         if self.use_tier:
             self.tier_raw = nn.Parameter(torch.zeros(max(int(n_tiers) - 1, 1)))
         if self.kernel == "attr":
@@ -831,6 +831,7 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         kernel: str = "none",
         decay: str = "none",
         tier: bool = False,
+        decay_init: float = 30.0,
         fuse: str = "gate",
     ):
         super().__init__()
@@ -937,7 +938,8 @@ class MultiStreamStateSpaceTransformer(nn.Module):
             self.offer_inventory_attn = None
             self.inventory_slots = InventorySlots(d_model, n_heads, d_ff, dropout,
                                                   feature_tensor, sat_layers,
-                                                  kernel=kernel, decay=decay, tier=tier)
+                                                  kernel=kernel, decay=decay, tier=tier,
+                                                  decay_init=decay_init)
 
         # Campaign fixed effects (R33b). A calendar-level demand shock moves in
         # lockstep with "time since the product left the assortment", so without
@@ -1340,6 +1342,7 @@ def build_transformer(
         n_campaigns=kwargs.get("n_campaigns", 0),
         kernel=kwargs.get("kernel", "none"),
         decay=kwargs.get("decay", "none"),
+        decay_init=kwargs.get("decay_init", 30.0),
         tier=kwargs.get("tier", False),
         fuse=kwargs.get("fuse", "gate"),
     )
