@@ -412,7 +412,7 @@ class InventorySlots(nn.Module):
     def __init__(self, d_model: int, n_heads: int, d_ff: int, dropout: float,
                  feature_tensor: torch.Tensor, sat_layers: int = 0,
                  kernel: str = "none", decay: str = "none", tier: bool = False,
-                 n_tiers: int = 3, decay_init: float = 30.0):
+                 n_tiers: int = 3, decay_init: float = 30.0, decay_freeze: bool = False):
         super().__init__()
         self.sat_layers = int(sat_layers)
         # R33, the stock's WRITE side: `kernel` says which products an
@@ -441,7 +441,13 @@ class InventorySlots(nn.Module):
             # softplus(raw) IS the half-life in occasions, so raw starts at 30.
             # (An earlier version stored log(30) and passed it through softplus,
             # which silently trained with a half-life of 3.4 -- see EXPERIMENTS.md.)
-            self.half_life_raw = nn.Parameter(torch.tensor(float(decay_init)))
+            # decay_freeze: hold the half-life at decay_init so a GRID over
+            # values is a profile likelihood. R33's half-life does not move
+            # under gradient descent (batch 24: starts of 10/30/100 return
+            # 9.9/29.8/99.7) yet the fit differs by value, so the grid is the
+            # estimator and freezing makes that explicit rather than implied.
+            self.half_life_raw = nn.Parameter(torch.tensor(float(decay_init)),
+                                              requires_grad=not decay_freeze)
         if self.use_tier:
             self.tier_raw = nn.Parameter(torch.zeros(max(int(n_tiers) - 1, 1)))
         if self.kernel == "attr":
@@ -832,6 +838,7 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         decay: str = "none",
         tier: bool = False,
         decay_init: float = 30.0,
+        decay_freeze: bool = False,
         fuse: str = "gate",
     ):
         super().__init__()
@@ -939,7 +946,8 @@ class MultiStreamStateSpaceTransformer(nn.Module):
             self.inventory_slots = InventorySlots(d_model, n_heads, d_ff, dropout,
                                                   feature_tensor, sat_layers,
                                                   kernel=kernel, decay=decay, tier=tier,
-                                                  decay_init=decay_init)
+                                                  decay_init=decay_init,
+                                                  decay_freeze=decay_freeze)
 
         # Campaign fixed effects (R33b). A calendar-level demand shock moves in
         # lockstep with "time since the product left the assortment", so without
@@ -1343,6 +1351,7 @@ def build_transformer(
         kernel=kwargs.get("kernel", "none"),
         decay=kwargs.get("decay", "none"),
         decay_init=kwargs.get("decay_init", 30.0),
+        decay_freeze=kwargs.get("decay_freeze", False),
         tier=kwargs.get("tier", False),
         fuse=kwargs.get("fuse", "gate"),
     )
