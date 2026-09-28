@@ -79,8 +79,11 @@ def main() -> None:
     ap.add_argument("--quick", action="store_true")
     a = ap.parse_args()
     epochs = 120 if a.quick else 400
+    # taste_sd = 0 in the core experiments: first ask whether the estimator can
+    # recover a correctly specified truth. E2b then switches heterogeneity on,
+    # which is the contamination R34 s2 found with the gacha data.
     base = BrandConfig(n_households=300 if a.quick else 800,
-                       n_occasions=100 if a.quick else 200)
+                       n_occasions=100 if a.quick else 200, taste_sd=0.0)
     OUT.mkdir(parents=True, exist_ok=True)
     res = {}
 
@@ -119,6 +122,24 @@ def main() -> None:
     report("E2 (true gamma -1.5 = satiation; lift > 1 means the attribute structure was found)",
            rows, ["attr weight", "spearman", "attr lift", "alpha hat", "gamma hat"])
     res["E2"] = rows
+
+    print("=" * 92)
+    print("E2b  the same truth, with UNOBSERVED taste heterogeneity the estimator lacks")
+    print("=" * 92)
+    rows = []
+    for sd in ([0.0, 0.5] if a.quick else [0.0, 0.25, 0.5, 1.0]):
+        cfg = replace(base, kernel="attr", attr_weight=2.0, gamma=-1.5, alpha=0.9,
+                      taste_sd=sd)
+        rs = run(cfg, epochs)
+        rows.append({"taste sd": sd, "spearman": agg(rs, "spearman"),
+                     "attr lift": agg(rs, "attr_lift"),
+                     "off-diag mass": agg(rs, "offdiag_mass"),
+                     "gamma hat": agg(rs, "gamma_hat")})
+        print(f"  taste sd {sd}: kernel recovery {rows[-1]['spearman']:+.3f}, "
+              f"lift {rows[-1]['attr lift']:.2f}", flush=True)
+    report("E2b (heterogeneity the estimator does not model)", rows,
+           ["taste sd", "spearman", "attr lift", "off-diag mass", "gamma hat"])
+    res["E2b"] = rows
 
     print("\n" + "=" * 92)
     print("E3  the same truth, but the assortment ROTATES (limited-time products)")
