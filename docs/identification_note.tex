@@ -1,0 +1,447 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,booktabs,graphicx,microtype}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black]{hyperref}
+\usepackage{caption}
+\captionsetup{font=small}
+\title{\textbf{Can the inventory kernel be identified?}\\[2pt]
+\large A simulation study: data-generating process, estimator, and results}
+\author{ProductGPT technical note (R34)}
+\date{28 September 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent The model we are building carries a \emph{stock} of previously obtained
+products that decays over time and spreads across similar products. Three
+objects have to be estimated: how strongly one product's acquisition satiates
+demand for another ($\kappa$), how fast that effect fades ($\varphi$), and how
+much a duplicate copy counts ($g$). This note asks which of them our data can
+identify, using a simulation in which the truth is known by construction.
+The answer: $\varphi$ and $g$ are recoverable, $\kappa$ is not, and the reason
+is the rotating assortment rather than the estimator. A parametric kernel with
+two coefficients partially survives; a free kernel does not and, worse, invents
+structure when none exists. Section~\ref{sec:real} reports what happened when
+the resulting model met the real data.
+\end{abstract}
+
+\section{The question, and why a simulation answers it}
+
+On real data we can only ever compare fits. If a flexible kernel improves the
+likelihood we cannot tell whether it found substitution or absorbed something
+else; if it does not improve the likelihood we cannot tell whether substitution
+is absent or merely invisible. A simulation removes the ambiguity: we generate
+data from a known kernel, fit the estimator, and compare the estimate with the
+truth. Everything below is synthetic. No consumer data is read.
+
+\section{The data-generating process}\label{sec:dgp}
+
+\subsection{Objects}
+
+$P$ products, each carrying an attribute (its ``element'') $e(j) \in
+\{1,\dots,E\}$. $N$ customers, $T$ decision occasions each. At every occasion
+$B$ banners are live simultaneously; banner $b$ features $F$ products, so $BF$
+distinct products are on offer at once. The assortment is fixed within a
+campaign of $L$ occasions and rotates between campaigns.
+
+\subsection{The state}
+
+Let $w_\tau(p)$ be the weight of an acquisition of product $p$ at occasion
+$\tau$. The customer's stock of product $j$ entering occasion $t$ is
+\begin{equation}
+S_t(j) \;=\; \sum_{\tau < t} \kappa(j, p_\tau)\; g(k_\tau)\; \varphi(t-\tau),
+\qquad \varphi(\Delta) = \rho^{\Delta},\quad \rho = 2^{-1/h},
+\label{eq:stock}
+\end{equation}
+where $h$ is the half-life in occasions, $k_\tau$ is which copy of $p_\tau$ this
+was ($1$st, $2$nd, $3$rd), and $g$ is weakly decreasing with $g(1)=1$. The
+kernel is row-stochastic,
+\begin{equation}
+\kappa(j,p) \;\propto\; \exp\big(\theta_{\text{self}}\,\mathbf{1}[j=p]
+   \;+\; \theta_{\text{attr}}\,\mathbf{1}[e(j)=e(p)]\big),
+\label{eq:kappa}
+\end{equation}
+so $\theta_{\text{attr}}=0$ means no substitution across products and
+$\kappa = I$.
+
+\subsection{The decision}
+
+Nine alternatives: $B$ banners $\times$ $\{$one draw, ten draws$\}$, plus
+\emph{NotBuy}. Banner $b$'s attractiveness averages taste net of satiation over
+the products it offers,
+\begin{equation}
+A_{ib t} \;=\; \frac{1}{F}\sum_{j \in \mathcal{A}_{bt}}
+   \big(\theta_i(j) - \lambda_i\, S_{it}(j)\big),
+\end{equation}
+with $\theta_i(j) = \text{base}(j) + \text{taste}_i(e(j))$ and
+$\text{taste}_i \sim \mathcal{N}(0,\sigma_{\text{taste}}^2)$. Utilities are
+\begin{equation}
+V_{i,(b,1),t} = c_1 + \beta A_{ibt} + \xi_{c(t)}, \qquad
+V_{i,(b,10),t} = c_{10} + \beta A_{ibt} + \xi_{c(t)}, \qquad
+V_{i,\text{NotBuy},t} = 0,
+\end{equation}
+where $\xi_{c}$ is a campaign-level demand shock with standard deviation
+$\sigma_{\xi}$. The choice is multinomial logit (Gumbel errors).
+
+\subsection{Resolution of a purchase}
+
+If the customer buys $n \in \{1,10\}$ draws on banner $b$, each draw returns the
+banner's featured 5-star with probability $p_5$, its featured 4-star with
+probability $p_4$, and otherwise a uniformly drawn filler. Composition is
+therefore \emph{exogenous} given the number of draws --- which product you
+receive is the machine's decision, not yours. This matters in
+Section~\ref{sec:theory}.
+
+\subsection{Parameters}
+
+\begin{table}[h]\centering\small
+\begin{tabular}{llll}
+\toprule
+Symbol & Meaning & Baseline & Varied in \\
+\midrule
+$P,E$ & products, attributes & 24, 6 & --- \\
+$N,T$ & customers, occasions & 1000, 300 & s1 ($N$) \\
+$B,F$ & concurrent banners, featured each & 4, 2 & --- \\
+$L$ & occasions per campaign & 15 (45 in s6--s7) & s4 \\
+$h$ & half-life (occasions) & 30 & --- \\
+$\theta_{\text{self}},\theta_{\text{attr}}$ & kernel coefficients & 3.0, 1.5 & s2, s6 \\
+$g$ & duplicate weights & $(1,\,0.6,\,0.35)$ & --- \\
+$\lambda$ & satiation strength & 1.0 & s0, s7 \\
+$\sigma_{\text{taste}}$ & taste heterogeneity & 0 & s2 \\
+$\sigma_{\lambda}$ & heterogeneity in satiation & 0 & s7 \\
+$\sigma_{\xi}$ & campaign demand shock & 0 & s6 \\
+$p_5,p_4$ & gacha rates & 0.01, 0.10 & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{The estimator}
+
+The estimator has the same functional form as \eqref{eq:stock}--\eqref{eq:kappa}
+and is fitted by maximum likelihood (Adam, minibatches over customers, 600
+epochs). Free parameters: the kernel, $\log h$, the duplicate steps, $\lambda$,
+$\beta$, the two intercepts, and a per-product base taste. Three kernel
+specifications are compared:
+
+\begin{center}\small
+\begin{tabular}{lll}
+\toprule
+Specification & Free parameters & Interpretation \\
+\midrule
+\texttt{identity} & 0 & no substitution across products \\
+\texttt{attr} & 2 & McAlister attribute satiation, coefficients estimated \\
+\texttt{learned} & $P^2 = 576$ & a free QKV attention kernel \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Two options are switched on where indicated: a \emph{customer fixed
+effect} (per-customer attribute tastes, the standard remedy for heterogeneity)
+and a \emph{campaign fixed effect} (a per-campaign intercept on the purchase
+alternatives).
+
+The first 20 occasions are burn-in. Where a held-out figure is reported, the
+model is fitted on the first 70\% of occasions and scored on the rest.
+
+\paragraph{Metrics.} Recovery of $\kappa$ is measured by the Spearman rank
+correlation between the off-diagonal entries of $\hat\kappa$ and $\kappa^{*}$,
+which is invariant to the scale and to any monotone distortion. ``Element
+lift'' is the ratio of mean off-diagonal mass within an attribute group to that
+outside it; $1.0$ means no structure was found. For the parametric kernel we
+compare $\hat\theta$ with $\theta^{*}$ directly.
+
+\paragraph{One implementation detail that mattered.} Copies acquired in the
+same ten-draw pull must be weighted as the 1st, 2nd and 3rd copy. An earlier
+version of the estimator gave them all the pre-occasion holding, which
+over-weighted duplicates; it was caught by replaying the state against an
+explicit evaluation of \eqref{eq:stock} and is fixed.
+
+\section{Results}
+
+\subsection{s0 --- how much is the kernel worth at all?}
+
+Before asking whether $\kappa$ can be estimated, ask whether it matters. We fit
+two models at equal budget: one with $\kappa$ frozen at the \emph{truth}, one
+with $\kappa = I$. The gap is an upper bound on what any estimator could gain.
+
+\begin{center}\small
+\begin{tabular}{lrrr}
+\toprule
+$\lambda$ & identity kernel & true kernel & gap \\
+\midrule
+0.5 & 1.5910 & 1.5910 & $0.000$ \\
+1.0 & 1.4330 & 1.4320 & $0.000$ \\
+2.0 & 1.1960 & 1.1960 & $0.000$ \\
+4.0 & 0.9020 & 0.9010 & $+0.001$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Knowing the true kernel is worth at most $0.001$ nats, at every
+satiation strength. Note that satiation \emph{itself} matters enormously over
+this range --- the NotBuy share moves from 0.49 to 0.76 --- so the flat quantity
+is specifically the \emph{cross-product structure}, not the stock.
+
+\subsection{s1 --- recovery, and how many customers it would take}
+
+\begin{center}\small
+\begin{tabular}{lrrrr}
+\toprule
+$N$ & Spearman($\hat\kappa,\kappa^{*}$) & element lift & $\hat h$ (true 30) & $\hat\lambda$ (true 1.0) \\
+\midrule
+250 & 0.062 & 1.90 & 30.7 & 0.88 \\
+500 & 0.013 & 1.94 & 28.5 & 0.61 \\
+1000 & 0.080 & 1.64 & 29.7 & 0.89 \\
+2000 & 0.099 & 0.38 & 30.8 & 0.75 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent The half-life is recovered at every sample size. The kernel is not,
+and \emph{more customers do not help} --- which already indicates a structural
+problem rather than a power problem.
+
+\subsection{s2 --- does the kernel invent structure?}
+
+Here the truth is $\kappa^{*} = I$: no substitution whatsoever. A well-behaved
+estimator should return a near-diagonal matrix.
+
+\begin{center}\small
+\begin{tabular}{llrrr}
+\toprule
+DGP & customer FE & element lift & off-diagonal mass & diagonal \\
+\midrule
+homogeneous & no & 1.48 & 0.46 & 0.54 \\
+homogeneous & yes & 1.54 & 0.66 & 0.34 \\
+heterogeneous tastes & no & 1.08 & 0.60 & 0.40 \\
+heterogeneous tastes & yes & \textbf{2.12} & 0.70 & 0.31 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent The free kernel places 46--70\% of its mass off the diagonal when the
+truth is the identity, and the customer fixed effect --- the textbook remedy ---
+makes it \emph{worse}. A flexible estimator does not report ``I don't know''; it
+reports a confident matrix.
+
+\subsection{s4 and s6(A) --- the offer schedule is the binding constraint}
+
+\begin{center}\small
+\begin{tabular}{lrr}
+\toprule
+Offers rotate\dots & Spearman & $\hat h$ \\
+\midrule
+every 30 occasions & $-0.015$ & 29.2 \\
+every 15 occasions & $0.007$ & 29.6 \\
+every 5 occasions & $0.072$ & 28.8 \\
+randomised every occasion & $\mathbf{0.648}$ & 29.0 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent The estimator recovers $\kappa$ when offers are randomised and fails
+at every realistic rotation speed. This is a \emph{cliff, not a slope}:
+rotating six times faster than the baseline buys almost nothing. So the
+estimator is sound and the design is the constraint.
+
+Fixing the schedule at our own calendar ($L = 45$) and varying the true
+substitution strength (s6A) shows how strong the effect would have to be:
+
+\begin{center}\small
+\begin{tabular}{lrr}
+\toprule
+$\theta_{\text{attr}}^{*}$ & $\hat\theta_{\text{attr}}$ & \% of truth \\
+\midrule
+0.5 & 0.76 & 152\% \\
+1.5 & 0.82 & 55\% \\
+3.0 & 2.42 & 81\% \\
+5.0 & 2.81 & 56\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent The estimate has a \emph{floor} near $0.8$ whatever the truth: below
+$\theta^{*}\approx 3$ it reports roughly the same number regardless, so a
+weak-but-real effect and a biased constant are indistinguishable.
+
+\subsection{s5 --- structure buys identification, partially}
+
+Replacing the free kernel by the two-coefficient parametric form
+\eqref{eq:kappa}:
+
+\begin{center}\small
+\begin{tabular}{llrrrr}
+\toprule
+Schedule & kernel & free params & held-out NLL & $\hat\theta_{\text{self}}$ (3.0) & $\hat\theta_{\text{attr}}$ (1.5) \\
+\midrule
+campaign rotation & identity & 0 & 1.6062 & --- & --- \\
+campaign rotation & parametric & 2 & 1.6060 & 3.28 & 0.89 \\
+campaign rotation & free & 576 & 1.6063 & --- & --- \\
+randomised & identity & 0 & 1.5718 & --- & --- \\
+randomised & parametric & 2 & 1.5715 & 3.05 & 1.40 \\
+randomised & free & 576 & 1.5776 & --- & --- \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Under randomisation the parametric kernel is recovered essentially
+perfectly (rank correlation 1.00). Under a rotation its own-product coefficient
+survives but the cross-attribute coefficient is attenuated by about 40\%.
+Note also that the 576-parameter kernel is \emph{not} better out of sample than
+assuming no substitution at all.
+
+\subsection{s6(B) --- campaign shocks masquerade as memory}
+
+Time since acquisition and time since the product left the assortment advance
+together. Without a campaign control the decay absorbs the calendar:
+
+\begin{center}\small
+\begin{tabular}{lrr}
+\toprule
+$\sigma_\xi$ & $\hat h$, no campaign FE & $\hat h$, with campaign FE \\
+\midrule
+0.0 & 30.4 & 30.2 \\
+0.3 & \textbf{59.3} & 29.5 \\
+0.6 & \textbf{147.2} & 30.4 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent True $h = 30$. A modest calendar shock doubles the estimate and a
+larger one quintuples it. \textbf{The empirical model must carry campaign fixed
+effects or its half-life is not interpretable.}
+
+\subsection{s7 --- heterogeneous satiation against a homogeneous estimator}
+
+Each customer is given their own $\lambda_i$ (log-normal); the estimator fits a
+single $\lambda$.
+
+\begin{center}\small
+\begin{tabular}{lrrr}
+\toprule
+$\sigma_\lambda$ & population mean $\lambda$ & $\hat\lambda$ & shortfall \\
+\midrule
+0.0 & 1.00 & 0.93 & $-7\%$ \\
+0.3 & 1.04 & 0.77 & $-26\%$ \\
+0.6 & 1.19 & 0.77 & $-36\%$ \\
+1.0 & 1.61 & 0.74 & $-54\%$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent A pooled satiation estimate is a \emph{lower bound}. Unlike s2's
+preference heterogeneity, slope heterogeneity does not manufacture false
+substitution --- but a customer fixed effect again inflates the kernel rather
+than curing it.
+
+\section{Why rotation blocks identification}\label{sec:theory}
+
+Under a block rotation, acquisitions can only come from the current assortment
+$\mathcal{A}_c$, so \eqref{eq:stock} aggregates:
+\begin{equation}
+S_{it}(j) \;\approx\; \sum_{c' \le c} \varphi(t - T_{c'})\; N_{i,c'}\;
+   K(j, \mathcal{A}_{c'}),
+\qquad
+K(j,\mathcal{A}) = \sum_{p \in \mathcal{A}} \kappa(j,p)\, q_p ,
+\label{eq:collapse}
+\end{equation}
+where $N_{i,c'}$ is how much customer $i$ pulled in campaign $c'$ and $q_p$ is
+$p$'s gacha rate. Two institutional facts produce this: composition within a
+banner is exogenous, and everything in an assortment arrives in the same window
+and so shares one decay factor.
+
+Three consequences follow.
+
+\begin{enumerate}
+\item \textbf{Only assortment-level aggregates enter the likelihood.} The
+contrast $\kappa(j,p_1) - \kappa(j,p_2)$ for two products offered together is
+identified only by gacha sampling noise. With 49 products over 30 campaigns
+there are $49 \times 48 = 2352$ off-diagonal unknowns against at most
+$49 \times 30 = 1470$ weakly-informed functionals.
+
+\item \textbf{Cross terms are attenuated before they are seen.} Our campaigns
+run a median of 45 occasions, so a cross-product effect is first observable
+after a delay of that order: a factor $2^{-45/h}$, about $0.35$ at $h=30$.
+Own-product terms suffer no such penalty because $j$ is offered throughout its
+own campaign.
+
+\item \textbf{The surviving variation is collinear with the propensity.}
+$N_{i,c'}$ multiplies every term, so cross-product stock is nearly proportional
+to how much the customer recently pulled --- which own-stock, previous decision
+and any customer effect already absorb. This is why the customer fixed effect
+made s2 worse rather than better.
+\end{enumerate}
+
+\noindent $\varphi$ and $g$ escape all three because they rest on different
+contrasts: $\varphi$ on \emph{within-customer timing} (the same customer pulls
+early and late within a campaign), and $g$ on \emph{within-product} variation
+(holding one copy versus three), which occurs inside a single assortment and is
+driven by exogenous gacha luck.
+
+\section{What happened on the real data}\label{sec:real}
+
+The model implied by these results --- per-product counts, learned decay,
+duplicate weights, an attribute kernel, campaign fixed effects --- was fitted to
+the Genshin panel (5 seeds per arm).
+
+\paragraph{Duplicate weights are estimated.} $\hat g = (1.00,\,0.42 \pm 0.03,\,
+0.18 \pm 0.015)$: a second copy is worth about 40\% of the first, a third about
+18\%. Stable across seeds and across three different half-life initialisations.
+
+\paragraph{The half-life is not estimable by gradient descent, but the
+likelihood is not flat in it.} Starting the optimiser at 10, 30 and 100 returns
+9.9, 29.8 and 99.7 --- the parameter never moves. Yet the fit depends on the
+value:
+
+\begin{center}\small
+\begin{tabular}{lrr}
+\toprule
+Half-life (fixed at) & holdout NLL & \\
+\midrule
+10 & $0.8845 \pm 0.0065$ & best \\
+30 & $0.8914 \pm 0.0058$ & \\
+100 & $0.8946 \pm 0.0098$ & \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent The gradient is too small to move a parameter of that magnitude while
+the likelihood still has a slope along it. The appropriate estimator is
+therefore a \textbf{profile likelihood}: freeze $h$, fit everything else, and
+read the curve. That grid (half-lives 2, 5, 10, 20, 40) is running; the optimum
+appears to lie below 10 occasions.
+
+\paragraph{Caveat on transferring s1's optimism.} The simulation's satiation was
+far stronger than the real data appear to carry --- there, removing the entire
+stock path costs only 0.0137 nats. So ``the half-life is identified'' held in
+simulation at $\lambda=1$ and should not be assumed at the real data's effective
+signal strength. The profile likelihood is what settles it.
+
+\section{Implications}
+
+\begin{enumerate}
+\item \textbf{Report} the duplicate weights, and the half-life only as a profile
+curve with its uncertainty --- never as a point estimate from gradient descent.
+\item \textbf{Carry campaign fixed effects} in any specification that reports a
+decay.
+\item \textbf{Report the pooled satiation as a lower bound} until a hierarchical
+version exists.
+\item \textbf{Do not report the learned kernel as substitution.} It may appear
+as a specification bound: if it cannot beat the parametric restriction out of
+sample, nothing beyond the restriction is in the data.
+\item \textbf{The negative result is a contribution.} A learned attention
+inventory identifies the decay of consumption but not the substitution
+structure, under a live-service rotation schedule --- with the randomised-offer
+arm proving the estimator is sound and the design is the binding constraint.
+It also says what experiment would fix it: randomise one banner slot.
+\end{enumerate}
+
+\vspace{1em}
+\noindent\footnotesize Code: \texttt{simulation/kernel\_sim.py} (process and
+estimator), \texttt{simulation/run\_sim\_study.py} (experiments s0--s7),
+\texttt{scripts/test\_kernel\_sim.py} (16 correctness checks, including a
+brute-force replay of the state recursion). Full run records and the bugs found
+along the way are in \texttt{EXPERIMENTS.md}.
+
+\end{document}
