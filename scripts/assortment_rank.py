@@ -42,31 +42,47 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--schedule", required=True)
     ap.add_argument("--data", action="store_true", help="also read entry campaigns")
+    ap.add_argument("--level", choices=["campaign", "banner"], default="campaign",
+                    help="granularity of the incidence matrix: a campaign pools its "
+                         "banners, but customers CHOOSE a banner, so the banner cell is "
+                         "the finer and more favourable unit")
     ap.add_argument("--ai-rate", type=int, default=15)
     a = ap.parse_args()
 
-    sched = json.loads(Path(a.schedule).read_text())
+    raw = json.loads(Path(a.schedule).read_text())
+    if "campaign" in raw and "banner" in raw:
+        sched, banner = raw["campaign"], raw["banner"]
+    else:
+        sched, banner = raw, None
     camps = sorted(sched, key=lambda c: int(c))
     products = sorted({p for v in sched.values() for p in v["products"]})
-    C, P = len(camps), len(products)
+    P = len(products)
     idx = {p: i for i, p in enumerate(products)}
+    if banner and a.level == "banner":
+        rows_src = [(k, v) for k, v in banner.items() if v]
+        label = "campaign x banner cells"
+    else:
+        rows_src = [(c, sched[c]["products"]) for c in camps]
+        label = "campaigns"
+    C = len(rows_src)
     M = np.zeros((C, P))
-    for r, c in enumerate(camps):
-        for p in sched[c]["products"]:
+    for r, (_, prods) in enumerate(rows_src):
+        for p in prods:
             M[r, idx[p]] = 1.0
+    appearances_rows = M.sum(0)
 
-    appearances = M.sum(0)
+    appearances = appearances_rows
     rank = int(np.linalg.matrix_rank(M))
     sv = np.linalg.svd(M, compute_uv=False)
     print("=" * 78)
     print("THE RANK CONDITION FOR IDENTIFYING kappa FROM CAMPAIGN VARIATION")
     print("=" * 78)
-    print(f"  campaigns C                      {C}")
+    print(f"  rows ({label})   {C}")
     print(f"  products offered P               {P}")
     print(f"  rank(M)                          {rank}")
     print(f"  identified?                      "
           f"{'YES' if rank >= P else 'NO -- rank ' + str(rank) + ' < P = ' + str(P)}")
-    print(f"  campaigns needed (at least)      {P}")
+    print(f"  rows needed (at least)           {P}")
     if rank >= 1:
         nz = sv[sv > 1e-9]
         print(f"  condition number of M            {nz.max() / nz.min():.1f}")

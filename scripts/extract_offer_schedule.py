@@ -42,6 +42,7 @@ def main() -> None:
         records = next(v for v in records.values() if isinstance(v, list))
 
     offers = defaultdict(set)          # campaign -> {product id}
+    by_slot = defaultdict(set)         # (campaign, slot) -> {product id}
     spans = defaultdict(list)          # campaign -> occasions per customer
     first, last = cfg["first_prod_id"], cfg["last_prod_id"]
     n_users = 0
@@ -58,10 +59,11 @@ def main() -> None:
             if c <= 0:
                 continue
             per_user[c] += 1
-            for tok in ai[t * a.ai_rate: t * a.ai_rate + a.lto_len]:
+            for slot, tok in enumerate(ai[t * a.ai_rate: t * a.ai_rate + a.lto_len]):
                 tok = int(tok)
                 if first <= tok <= last:
                     offers[c].add(tok)
+                    by_slot[(c, slot)].add(tok)
         for c, n in per_user.items():
             spans[c].append(n)
 
@@ -75,7 +77,9 @@ def main() -> None:
         }
     dest = Path(a.out)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(json.dumps(out, indent=2), encoding="utf-8")
+    by_slot_ser = {f"{c}|{sl}": sorted(v) for (c, sl), v in sorted(by_slot.items())}
+    out_all = {"campaign": out, "banner": by_slot_ser}
+    dest.write_text(json.dumps(out_all, indent=2), encoding="utf-8")
 
     ns = [v["n_products"] for v in out.values()]
     ms = [v["median_occasions_per_customer"] for v in out.values()]
