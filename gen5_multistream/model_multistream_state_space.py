@@ -455,8 +455,14 @@ class InventorySlots(nn.Module):
             # same-attribute indicators from the frozen feature table: the
             # McAlister restriction, a handful of coefficients instead of P^2
             feats = feature_tensor[FIRST_PROD_ID:LAST_PROD_ID + 1].float()
-            self.register_buffer("attr_same",
-                                 (feats[:, None, :] == feats[None, :, :]).float(),
+            # Interaction of STANDARDISED attributes, not equality. Equality
+            # counts two products that both LACK an attribute as matching, and
+            # with one-hot blocks most pairs agree on most zero columns, so the
+            # coefficient was dominated by joint absence and could not be read
+            # as "shares this attribute". z_j * z_p is positive when both are
+            # high, negative when they differ -- a proper similarity.
+            z = (feats - feats.mean(0, keepdim=True)) / feats.std(0, keepdim=True).clamp_min(1e-6)
+            self.register_buffer("attr_same", torch.einsum("if,jf->ijf", z, z),
                                  persistent=False)
             self.attr_w = nn.Parameter(torch.zeros(feats.size(1)))
             # softmax over P products: a self-weight of w puts exp(w)/(exp(w)+P-1)

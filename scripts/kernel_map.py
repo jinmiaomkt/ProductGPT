@@ -74,10 +74,12 @@ def main() -> None:
 
     # ---- 1. which attributes carry satiation -----------------------------
     order = np.argsort(-np.abs(w))[:12]
+    seeds = np.asarray(coef.get("attr_w_seeds", [w]), dtype=float)
+    err = seeds.std(axis=0, ddof=1) if len(seeds) > 1 else np.zeros_like(w)
     fig, ax = plt.subplots(figsize=(7.2, 4.2))
     y = np.arange(len(order))
-    ax.barh(y, w[order][::-1], color=["#378ADD" if v >= 0 else "#D85A30"
-                                     for v in w[order][::-1]])
+    ax.barh(y, w[order][::-1], xerr=err[order][::-1], capsize=2.5, ecolor="#5F5E5A",
+            color=["#378ADD" if v >= 0 else "#D85A30" for v in w[order][::-1]])
     ax.set_yticks(y)
     ax.set_yticklabels([names[i] for i in order][::-1], fontsize=8)
     ax.axvline(0, color="#888780", lw=0.8)
