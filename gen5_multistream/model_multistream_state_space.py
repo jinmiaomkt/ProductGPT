@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from typing import Optional
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -458,7 +459,11 @@ class InventorySlots(nn.Module):
                                  (feats[:, None, :] == feats[None, :, :]).float(),
                                  persistent=False)
             self.attr_w = nn.Parameter(torch.zeros(feats.size(1)))
-            self.attr_self = nn.Parameter(torch.tensor(2.0))
+            # softmax over P products: a self-weight of w puts exp(w)/(exp(w)+P-1)
+            # on the own product. At P=118 a weight of 2.0 gives only 5.5%, so the
+            # kernel starts almost uniform and the arm degenerates to "total
+            # holdings". log(P) starts it at ~50%, which is a neutral prior.
+            self.attr_self = nn.Parameter(torch.tensor(float(np.log(max(n_prod, 2)))))
         elif self.kernel == "learned":
             self.k_emb = nn.Parameter(torch.randn(n_prod, 32) * 0.1)
             self.k_q = nn.Linear(32, 32, bias=False)
