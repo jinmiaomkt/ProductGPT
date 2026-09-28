@@ -23,9 +23,13 @@ class SpecialPlusFeatureLookup(nn.Module):
     def __init__(self, d_model: int,
                  feature_tensor: torch.Tensor,
                  product_ids: list[int],
-                 vocab_size_src: int):
+                 vocab_size_src: int, use_features: bool = True):
         super().__init__()
         self.d_model = d_model
+        # use_features=False zeroes the attribute branch, so the product vector
+        # is learned from BEHAVIOUR alone. That is the test of whether the model
+        # can discover product structure rather than be handed it.
+        self.use_features = bool(use_features)
         self.feature_dim = feature_tensor.size(1)
 
         # ── id and feature branches ─────────────────────────────
@@ -63,4 +67,6 @@ class SpecialPlusFeatureLookup(nn.Module):
         feat_vec = feat_vec * keep.unsqueeze(-1)
 
         # weighted sum
+        if not self.use_features:
+            return id_vec
         return id_vec + self.gamma * feat_vec

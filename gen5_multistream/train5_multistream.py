@@ -706,6 +706,10 @@ def main() -> None:
     ap.add_argument("--decay-init", type=float, default=None,
                     help="R33: starting half-life in occasions. Varying it tests whether "
                          "the data identify the decay or it stays at its prior")
+    ap.add_argument("--no-product-features", action="store_true",
+                    help="zero the attribute branch of the product embedding, so products "
+                         "are represented from BEHAVIOUR alone (the test of whether the "
+                         "model can discover product structure rather than be handed it)")
     ap.add_argument("--decay-freeze", type=int, default=None,
                     help="R33: hold the half-life fixed, so a grid over --decay-init is a "
                          "profile likelihood")
@@ -861,6 +865,8 @@ def main() -> None:
         cfg["decay_init"] = args.decay_init
     if args.decay_freeze is not None:
         cfg["decay_freeze"] = bool(args.decay_freeze)
+    if args.no_product_features:
+        cfg["use_product_features"] = False
     if args.leaky_time_bias:
         cfg["time_bias_lag_ipt"] = False
     print(f"[cfg] arch={cfg.get('arch')} encoder={cfg.get('encoder')} "
@@ -935,6 +941,7 @@ def main() -> None:
             decay=cfg.get("decay", "none"),
             decay_init=cfg.get("decay_init", 30.0),
             decay_freeze=cfg.get("decay_freeze", False),
+            use_product_features=cfg.get("use_product_features", True),
             tier=cfg.get("tier", False),
             block_len=cfg.get("block_len", 64),
             n_campaigns=(cfg.get("n_campaigns", 32) if cfg.get("camp_fe") else 0),

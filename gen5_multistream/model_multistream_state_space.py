@@ -839,6 +839,7 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         tier: bool = False,
         decay_init: float = 30.0,
         decay_freeze: bool = False,
+        use_product_features: bool = True,
         fuse: str = "gate",
     ):
         super().__init__()
@@ -922,6 +923,8 @@ class MultiStreamStateSpaceTransformer(nn.Module):
             vocab_size_src=vocab_size_src,
             product_id_embed=product_id_embed,
         )
+        if not use_product_features:
+            self.product_embed.use_features = False
 
         self.decision_embed = nn.Embedding(vocab_size_src, d_model)
         self.offer_pool = AttentionPool(d_model, dropout)
@@ -1352,6 +1355,7 @@ def build_transformer(
         decay=kwargs.get("decay", "none"),
         decay_init=kwargs.get("decay_init", 30.0),
         decay_freeze=kwargs.get("decay_freeze", False),
+        use_product_features=kwargs.get("use_product_features", True),
         tier=kwargs.get("tier", False),
         fuse=kwargs.get("fuse", "gate"),
     )
