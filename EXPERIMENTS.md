@@ -2723,3 +2723,52 @@ sequence generator, which is a materially stronger paper but a modelling change.
 Decide before building R36c, because the metric set changes if timing becomes
 generated.
 
+
+#### R36b — the instrument, and what it can already see (BUILT Sep 29 2026)
+
+`simulation/seq_metrics.py`, `simulation/baselines.py`,
+`scripts/test_seq_metrics.py` (35 checks). Not a result about the model — a
+calibration of the measuring device, recorded so the HPCC stream can read
+R36c's numbers without re-deriving what they mean.
+
+**27 functionals**, all things no model was fit to: spend, incidence, the nine
+decision shares, longest NotBuy run, mean/max buy run, switch rate, spend HHI
+across banners, buy-indicator autocorrelation at lags 1–5, escalation
+P(Buy10 | Buy10), persistence P(buy | buy), and the four-bucket **satiation
+signature** P(buy on a banner | already holding k copies of what it features),
+k = 0, 1, 2, 3+. The last is the functional the stock path exists to get right
+and the one H1 turns on.
+
+**Undefined functionals stay NaN** (a customer with no Buy10 has no escalation
+rate) and are imputed to the REAL-set mean after standardisation, identically
+for both sets, so a missing value cannot by itself manufacture a discrepancy.
+
+**The energy statistic is signed.** The within-sample terms leave the diagonal
+out, which makes it unbiased and therefore negative about half the time under
+the null. That is deliberate: it is what makes the split-half band a proper
+reference distribution. A negative value is not a bug.
+
+**Sample sizes are matched.** Energy distance and MMD both depend on n, so the
+observed statistic is computed on half-sized draws, the same size as the
+split-half null. Comparing a full-size observed statistic to a half-size null
+would rig the test toward rejection.
+
+**Calibration of the instrument**, on 240 customers over a 48-row span:
+
+| generator | energy stat | null q95 | z | C2ST AUC |
+|---|---|---|---|---|
+| i.i.d. from the empirical marginal | 2.485 | 0.042 | 106.8 | 0.996 |
+| first-order Markov on the 9 decisions | 1.023 | 0.042 | — | — |
+
+So the pipeline rejects an i.i.d. generator overwhelmingly, and a first-order
+chain scores less than half the i.i.d. discrepancy while still sitting far
+outside the band. **Markov-1 is therefore a live bar, not a straw man**: matching
+the marginals and first-order persistence gets a generator most of the way and
+still fails. Against i.i.d. the classifier leant on switch rate, spend and the
+Buy1-FigA / Buy10-Reg shares — i.e. it found the missing dependence, which is
+what it was built to find.
+
+**What this does not yet establish.** Nothing about ProductGPT: no trained
+checkpoint has been rolled out. The V0 environment check in
+`scripts/test_rollout.py` still runs on a 120-user slice where 5-star counts are
+7–104, so it is a wiring check, not a calibration at scale. R36c does both.

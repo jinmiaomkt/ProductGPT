@@ -139,6 +139,12 @@ def rollout(model, batch: Dict[str, torch.Tensor], env, vocab, *, start: int,
     Returns
         decisions  (B*n_rep, S) int64, 0 outside the generated span
         alive      (B*n_rep, S) bool, rows that exist in the real sequence
+        obtained   (B*n_rep, S, 10) int64, the acquisitions the environment
+                   produced.  The satiation signature -- the functional the
+                   stock path exists to get right, and the one H1 turns on --
+                   is computed from this, so it has to come back out.
+        lto        (B*n_rep, S, 4) int64, the (exogenous) offers, carried so a
+                   caller can score functionals without re-deriving them.
     """
     from gacha_env import PityState
 
@@ -181,7 +187,9 @@ def rollout(model, batch: Dict[str, torch.Tensor], env, vocab, *, start: int,
         buf["obtained"][:, t + 1] = torch.as_tensor(nxt, device=device)
         buf["prev_decision"][:, t + 1] = torch.as_tensor(y, device=device)
 
-    return {"decisions": gen, "alive": alive, "start": start}
+    return {"decisions": gen, "alive": alive, "start": start,
+            "obtained": buf["obtained"].cpu().numpy(),
+            "lto": buf["lto"].cpu().numpy()}
 
 
 def _warm_pity(states, buf, vocab, env, start: int) -> None:
