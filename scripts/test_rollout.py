@@ -213,6 +213,26 @@ check("teacher forcing leaves the input streams untouched",
 check("the caller's batch is never mutated by a free rollout",
       torch.equal(before, batch["obtained"]))
 
+# Sequences enter the holdout at different rows.  Mask the first half of the
+# batch as "not yet generating" over part of the span and confirm their real
+# streams survive -- zeroing them would delete history and empty the inventory.
+stag = {k: (v.clone() if torch.is_tensor(v) else v) for k, v in batch.items()}
+half = stag["label"].shape[0] // 2
+stag["label"][:half, start:start + 8] = 0          # these rows are not in the cell
+ref_obt = stag["obtained"].clone()
+rs = rollout(model, stag, env, vocab, start=start, n_rep=1, seed=11)
+kept = rs["obtained"][:half, start + 1:start + 9]
+want = ref_obt[:half, start + 1:start + 9].numpy()
+# Non-vacuity: obtained rows for NotBuy are legitimately all zeros, so if the
+# window happened to hold only those, the comparison below could not fail.
+check("the preserved window actually contains data", (want != 0).any(),
+      f"{(want != 0).sum()} non-zero cells in the window")
+check("late-entering sequences keep their real history",
+      np.array_equal(kept, want),
+      f"{(kept != want).sum()} cells differ")
+check("masked rows generate nothing",
+      (rs["decisions"][:half, start:start + 8] == 0).all())
+
 occ = np.bincount(live, minlength=10)[1:10]
 check("the rollout does not collapse onto one class", (occ > 0).sum() >= 3,
       f"classes used: {(occ > 0).sum()}/9")

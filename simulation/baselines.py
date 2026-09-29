@@ -109,12 +109,12 @@ def simulate(batch: Dict[str, torch.Tensor], env, vocab, sampler: Callable, *,
         gen[:, t] = y
         if t + 1 >= S:
             break
-        for b in range(B):
-            if alive[b, t] and y[b] > 0:
-                obtained[b, t + 1] = env.step(int(y[b]), offers[b, t], states[b], rng)
-            else:
-                obtained[b, t + 1] = 0
-        prev = y
+        # Same rule as the model rollout: rows not yet generating keep their
+        # real streams, so a late-entering sequence does not lose its history.
+        act = alive[:, t] & (y > 0)
+        for b in np.flatnonzero(act):
+            obtained[b, t + 1] = env.step(int(y[b]), offers[b, t], states[b], rng)
+        prev = np.where(act, y, buf["prev_decision"].cpu().numpy()[:, t + 1])
     return {"decisions": gen, "alive": alive, "start": start,
             "obtained": obtained, "lto": offers}
 

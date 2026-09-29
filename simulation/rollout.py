@@ -179,13 +179,20 @@ def rollout(model, batch: Dict[str, torch.Tensor], env, vocab, *, start: int,
             break
         if teacher_forced:
             continue
-        nxt = np.zeros((B, buf["obtained"].shape[2]), dtype=np.int64)
-        for b in range(B):
-            if not alive[b, t] or y[b] == 0:
-                continue
-            nxt[b] = env.step(int(y[b]), offers[b, t], states[b], rng)
-        buf["obtained"][:, t + 1] = torch.as_tensor(nxt, device=device)
-        buf["prev_decision"][:, t + 1] = torch.as_tensor(y, device=device)
+        # Sequences enter the holdout at DIFFERENT rows, because a customer's
+        # first campaign-28 event sits wherever their own history puts it.  A
+        # row that is not generating yet must keep its REAL streams: writing
+        # zeros there would delete history the model still has to condition on,
+        # and silently empty the inventory.  Only overwrite where we generated.
+        act = alive[:, t] & (y > 0)
+        if act.any():
+            nxt = buf["obtained"][:, t + 1].cpu().numpy().copy()
+            prv = buf["prev_decision"][:, t + 1].cpu().numpy().copy()
+            for b in np.flatnonzero(act):
+                nxt[b] = env.step(int(y[b]), offers[b, t], states[b], rng)
+                prv[b] = y[b]
+            buf["obtained"][:, t + 1] = torch.as_tensor(nxt, device=device)
+            buf["prev_decision"][:, t + 1] = torch.as_tensor(prv, device=device)
 
     return {"decisions": gen, "alive": alive, "start": start,
             "obtained": buf["obtained"].cpu().numpy(),
