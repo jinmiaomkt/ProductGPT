@@ -2922,3 +2922,31 @@ run directory name, so every downstream artifact asserted a control that did
 not exist. **Any flag claiming to add a control must have a test that the
 control changes the output.** Added for campaign FE; the same test is owed to
 every other flag that gates on a batch key.
+
+#### R36c — pricing the context truncation (method note, 29 Sep 2026)
+
+A free-running rollout at the trained context of 1024 is infeasible: the
+offer-inventory cross-attention builds a `(B,H,S,4,S*10)` tensor, about 2.5 GB
+per sequence at S=1024, so any usable batch fails — as a CUDA kernel launch
+error rather than a clean OOM, which reads as "invalid configuration argument".
+
+`inv_init_count` / `inv_init_last` carry PRE-WINDOW inventory exactly, so a
+shorter window preserves the inventory state; what it truncates is the
+attention context. That changes the function, so it was priced by teacher-forced
+NLL on the same cell rather than assumed harmless:
+
+| context | teacher-forced NLL | gap vs 1024 | holdout events scored |
+|---|---|---|---|
+| 1024 | 0.8653 | — | 22,490 |
+| **384** | **0.8664** | **+0.0011** | **22,490** |
+| 256 | 0.8738 | +0.0085 | 22,325 |
+| 192 | 0.8811 | +0.0158 | 21,402 |
+
+**384 is the operating point**: it costs 0.0011 nats, about one seventh of the
+0.0075 seed sd, and scores every holdout event. Below it the window starts
+dropping holdout rows (22,325 then 21,402), which is most of why the NLL rises —
+the loss is coverage, not just context. Memory falls by (384/1024)^2 = 7x.
+
+Any R36c number therefore carries a stated approximation of +0.0011 nats in the
+teacher-forced baseline. That is far below the effects H1 is testing for, but it
+is a real approximation and belongs next to the results.
