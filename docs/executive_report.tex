@@ -1,0 +1,245 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,booktabs,graphicx,microtype}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black]{hyperref}
+\usepackage{caption}
+\captionsetup{font=small}
+\title{\textbf{Prediction and inference in ProductGPT}\\[2pt]
+\large An executive report on what the model can claim}
+\author{ProductGPT technical note}
+\date{29 September 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent ProductGPT has been developed and selected, for a year, on one
+criterion: how well it predicts the \emph{next} decision given a true history.
+That programme is now finished, and it has converged. This report separates
+what that work established (the \textbf{prediction phase}) from what a
+marketing paper actually needs (the \textbf{inference phase}), and reports the
+evidence for a claim that has emerged repeatedly and from independent
+directions: \emph{the criterion that selected the model cannot select a model
+for inference}. Four experiments completed on 29 September make this a
+measurement rather than an argument. The infrastructure to test the remaining
+step --- whether the model is valid as a \emph{generator} of sequences --- is
+built and validated, and has not yet been run.
+\end{abstract}
+
+\section{The one-paragraph version}
+
+Every architecture we tried reaches the same predictive accuracy. Every
+component we added to improve it --- the inventory mechanism, customer
+heterogeneity, the learned product embedding --- is worth nothing or nearly
+nothing on that criterion. Yet the same components are decisive for whether the
+model's parameters mean anything: modelling customer heterogeneity moves the
+recovery of the substitution structure from essentially zero to clearly found,
+and removes a factor-2.2 bias in the satiation coefficient. Selecting on
+predictive fit would have discarded the single component the identification
+analysis says matters most. That is the finding, and it reframes the paper:
+the identification analysis is the contribution, and the architecture is the
+setting in which it is made.
+
+\section{The prediction phase: what was established}
+
+\paragraph{The headline is a tie, and it is a strong one.} Four model families
+--- a plain GRU, a GRU encoder, a transformer with recency bias, and a hybrid
+--- were each tuned to their own frontier under an equal budget, then evaluated
+once on a holdout of customers and campaigns neither had seen. All eight cells
+(four families $\times$ two vocabularies) land within 0.0194 nats, against a
+seed standard deviation of 0.0075. No family wins. The best cell is also the
+smallest: 1.25M parameters against 7.93M for the transformer.
+
+\paragraph{The components do not separate either.} Removing the stock path
+entirely --- the inventory representation that three rounds of work went into
+--- costs 0.0137 nats, inside the same margin.
+
+\paragraph{The four experiments completed on 29 September.} Thirty GPU runs and
+one CPU job, five seeds per cell, with selection read on validation and the
+holdout opened once and not used to choose.
+
+\begin{center}\small
+\begin{tabular}{llr}
+\toprule
+Experiment & Question & Validation NLL \\
+\midrule
+control & frozen configuration, half-life 2 & $0.8756 \pm 0.0085$ \\
+batch 30 & mixture head over output projections & $0.8756 \pm 0.0097$ \\
+batch 30 & per-customer embedding & $0.8802 \pm 0.0076$ \\
+batch 30 & both & $0.8829 \pm 0.0116$ \\
+batch 32 & attributes only, no product identity & $0.8757 \pm 0.0078$ \\
+batch 26 & product identity only, no attributes & $0.8820 \pm 0.0101$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Three readings, all negative for prediction:
+
+\begin{enumerate}
+\item \textbf{Customer heterogeneity buys nothing.} Three variants, five seeds
+each; the mixture head ties the control exactly and the other two are worse.
+Every difference is inside a seed standard deviation, but the direction is
+uniformly non-positive and no variant is adopted.
+
+\item \textbf{The learned per-product embedding buys nothing.} Deleting it
+costs $0.0001$ nats and is slightly better on the holdout ($0.8832$ against
+$0.8846$); deleting the product \emph{attributes} instead costs $0.0064$.
+Everything the model knows about a product, it knows from the attribute
+projection. This confirms by construction an earlier decomposition in which the
+learned identity branch scored at chance, and it retires a product map we had
+previously shown as evidence of learned structure.
+
+\item \textbf{The one positive result is a boundary check.} A profile over
+frozen decay half-lives gives $0.8795$, $\mathbf{0.8735}$, $0.8756$, $0.8801$
+and $0.8817$ at half-lives of $0.5$, $1$, $2$, $5$ and $10$ occasions. The
+optimum is \emph{interior}: holdings fade over days, not campaigns. The
+$1$-versus-$2$ gap is a quarter of a seed standard deviation, so the
+defensible claim is a half-life of one to two occasions, not a point estimate.
+\end{enumerate}
+
+\paragraph{What the prediction phase licenses.} Forecasting the next decision.
+That is the whole of it. It is a real result --- the ceiling claim is
+pre-registered and now supported at five seeds after tuning --- but it supports
+no statement about why a customer behaves as they do, and no policy number.
+
+\section{The inference phase: three kinds of validity}
+
+The word ``valid'' has been doing too much work. Three distinct claims, with
+distinct evidence and distinct licences:
+
+\begin{center}\small
+\begin{tabular}{p{2.6cm}p{4.3cm}p{4.3cm}}
+\toprule
+Tier & Evidence & What it licenses \\
+\midrule
+T1 decision-level predictive & stage 4/5: NLL, AUC, calibration error
+0.010--0.019 & forecasting the next decision \\
+T2 sequence-level generative & \textbf{not yet tested} & in-support policy
+simulation: pacing, campaign length, re-ordering assortments that occurred \\
+T3 structural & decay and duplicate weights recovered; a free product-level
+kernel is not & off-support counterfactuals: new pairings, novel assortments \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent T2 is neither implied by T1 nor dependent on T3. Every result we hold
+is T1 or T3. The middle rung --- the one that licenses the policy numbers a
+marketing paper wants --- has never been tested.
+
+\paragraph{Why T1 does not imply T2.} If the model's conditional distributions
+were correctly specified, the chain rule would deliver the joint law for free.
+The gap opens only under misspecification, and for a specific reason: training
+evaluates the model on prefixes drawn from the \emph{data}, while a rollout
+visits prefixes drawn from the \emph{model}. A sequence-level failure in the
+presence of good one-step fit is therefore direct evidence of misspecification
+--- a specification test that the likelihood cannot perform, because it is
+never evaluated off the data manifold. Marketing has long had the same idea
+under other names: nonrandom-holdout validation, predictive simulation for
+discrete choice models, and posterior predictive checks.
+
+\section{What the identification work establishes (T3)}
+
+\paragraph{Some parameters are recoverable and some are not.} In simulations
+where the truth is known by construction, the decay and the duplicate weights
+are recovered; a free product-level substitution kernel is not, and a rank
+condition on the offer calendar says it never will be. Our window offers 30
+campaigns against 49 products; the full six-year history offers 106 against
+135. \textbf{The deficit widens as the panel grows}, because a live-service
+game introduces products about as fast as it introduces campaigns. Waiting does
+not help, and neither does an independently constructed banner schedule, which
+reproduces the deficit exactly.
+
+\paragraph{Heterogeneity, not the calendar, is the binding constraint.} The
+most consequential simulation result is not about assortments at all. With
+unobserved taste heterogeneity that the estimator does not model, the recovered
+attribute structure collapses:
+
+\begin{center}\small
+\begin{tabular}{lrrr}
+\toprule
+Unobserved taste dispersion & 0.25 & 0.50 & 1.00 \\
+\midrule
+attribute lift, tastes not modelled & 0.15 & 0.03 & 0.18 \\
+attribute lift, tastes modelled & 28.83 & 27.85 & 10.56 \\
+satiation coefficient, not modelled (true $-1.50$) & $-1.28$ & $-1.35$ &
+$\mathbf{-3.35}$ \\
+satiation coefficient, modelled & $-1.31$ & $-1.30$ & $-1.28$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Modelling per-household attribute tastes restores the structure and
+removes the factor-2.2 bias in the satiation coefficient. One caveat belongs
+with these numbers: the true lift is 7.4, and the recovered values overshoot
+it. The qualitative claim is solid; the magnitudes are noisy at three seeds and
+should not be quoted as estimates.
+
+\section{The two phases meet}
+
+\begin{center}\small
+\begin{tabular}{p{2.8cm}p{5.0cm}p{5.0cm}}
+\toprule
+Component & Predictive verdict & Structural verdict \\
+\midrule
+Customer heterogeneity & No gain. Five seeds, three variants, none beats the
+control. & Decisive. Without it the attribute kernel is unrecoverable and
+satiation is biased by 2.2$\times$. \\
+Product representation & Identity and attributes indistinguishable; deleting
+identity costs 0.0001. & Only the attribute parameterisation is identified
+under our rotation. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Two independent cases --- one from simulation, one from the real
+panel --- of decision-level accuracy being silent about exactly the thing the
+paper wants to claim. Neither was constructed to make the point; both arrived
+from experiments run for other reasons, which is what makes them usable.
+
+\section{What is built, and what remains}
+
+\paragraph{Built and validated this week, not yet run.} A rollout engine that
+carries a trained model forward on its own outputs across the holdout
+campaigns; an acquisition environment that turns a decision into what the
+player received, with the lottery dynamics taken from the published rates and
+the product-identity process calibrated on calibration data only; twenty-seven
+sequence-level statistics the model was never fitted to, including the
+satiation signature --- the probability of buying on a banner given how many
+copies of its featured product the customer already holds; and a null band
+built by splitting the real data against itself, without which no discrepancy
+number means anything.
+
+The instrument is calibrated: it rejects an independent-draws generator
+overwhelmingly, while a first-order Markov chain scores less than half that
+discrepancy and still fails. A 9$\times$9 transition matrix is therefore a live
+benchmark, not a straw man.
+
+\paragraph{The test that matters.} Four model families tie on one-step accuracy.
+Do they tie as generators? The satiation mechanism is a sequence-level
+mechanism --- it governs whether a customer who has just acquired five copies
+stops --- so it is precisely the kind of thing a decision-level criterion is
+least able to see. If tied models separate here, the criterion was wrong rather
+than the mechanism. If they do not, the case for using the model as a simulator
+fails cleanly, and that is also a result.
+
+\paragraph{One scope decision, which gets more expensive to defer.} The model
+consumes elapsed time as an input and never predicts it, so it cannot generate
+the timing of occasions. Everything built so far conditions on the observed
+arrival process, and therefore tests the composition and dependence structure
+of decisions rather than purchase timing or frequency. Removing that limitation
+requires adding a duration head --- a modelling change, not an evaluation
+change, and one that would make ProductGPT a genuine sequence generator.
+
+\section{What this means for the paper}
+
+The spine that all of this supports is: \emph{a deep sequence model of
+limited-time product markets, and an account of what such a model can and
+cannot learn from observational choice data}. This inverts the usual order ---
+the identification analysis is the contribution and the architecture is the
+setting --- and every result, including the negative ones, supports it.
+
+The claim to avoid is predictive superiority. Our own stage-4 tie forecloses
+it, and it is the crowded lane. A tie is fatal to that spine and irrelevant to
+this one.
+
+\end{document}
