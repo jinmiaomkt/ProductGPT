@@ -2772,3 +2772,88 @@ what it was built to find.
 checkpoint has been rolled out. The V0 environment check in
 `scripts/test_rollout.py` still runs on a 120-user slice where 5-star counts are
 7–104, so it is a wiring check, not a calibration at scale. R36c does both.
+
+### Batches 30–32 and E4 — RESULTS: heterogeneity is worth nothing predictively and everything structurally
+
+30 GPU runs (jobs 41768–41797) plus the E4 CPU job 41799. Five seeds per cell,
+selection read on VALIDATION; the holdout column is shown for transparency and
+was not used to choose anything.
+
+**Batch 30 — per-customer heterogeneity on the frozen R33 config.**
+
+| cell | validation | holdout |
+|---|---|---|
+| b29_hl2 (control) | **0.8756 ± 0.0085** | 0.8846 ± 0.0036 |
+| mixture head (Lu & Kannan, 8 heads) | 0.8756 ± 0.0097 | 0.8934 ± 0.0114 |
+| per-customer embedding | 0.8802 ± 0.0076 | 0.8891 ± 0.0098 |
+| both | 0.8829 ± 0.0116 | 0.8873 ± 0.0140 |
+
+**Nothing improves.** The mixture head is an exact tie on validation; the
+customer embedding and the combination are worse. Every difference is inside a
+seed sd, but the direction is uniformly non-positive and no variant is adopted.
+This reproduces R15's verdict at five seeds with the kernel present.
+
+**Batch 31 + 29 — the half-life profile, all on validation.**
+
+| frozen half-life (occasions) | 0.5 | 1 | 2 | 5 | 10 |
+|---|---|---|---|---|---|
+| validation NLL | 0.8795 | **0.8735** | 0.8756 | 0.8801 | 0.8817 |
+| sd | 0.0113 | 0.0046 | 0.0085 | 0.0109 | 0.0146 |
+
+**The optimum is interior**, which is what batch 31 was for: 0.5 is worse than
+1, and the curve rises monotonically from 1 to 10. The 1-vs-2 gap is 0.0021,
+about a quarter of a seed sd, so the point estimate is not pinned down; the
+defensible claim is a half-life of **1–2 occasions**, with the boundary ruled
+out. "Holdings fade over days, not campaigns" now rests on a profile with an
+interior minimum rather than an argmin at the edge of the grid.
+
+**Batch 32 + 26 + 29 — what the model actually uses about a product.**
+
+| product representation | validation | holdout |
+|---|---|---|
+| identity embedding only (b26, n=3) | 0.8820 ± 0.0101 | 0.8883 |
+| attributes only (b32, PROD_ID=0) | 0.8757 ± 0.0078 | **0.8832 ± 0.0033** |
+| both (b29_hl2) | 0.8756 ± 0.0085 | 0.8846 ± 0.0036 |
+
+**The learned per-product identity embedding contributes nothing.** Deleting it
+costs 0.0001 nats on validation and is slightly better on the holdout, while
+deleting the ATTRIBUTES costs 0.0064. This is the training-based confirmation of
+the R31 decomposition (the learned id branch scored at chance, 0.404 against
+0.408) and it closes the September embedding map for good: everything the model
+knows about a product, it knows from the attribute projection.
+
+**E4 (CPU 41799) — does modelling heterogeneity restore what E2b destroyed?**
+
+| unobserved taste sd | 0.25 | 0.50 | 1.00 |
+|---|---|---|---|
+| attribute lift, tastes NOT modelled | 0.15 | 0.03 | 0.18 |
+| attribute lift, tastes modelled | 28.83 | 27.85 | 10.56 |
+| satiation coefficient, not modelled (true −1.50) | −1.28 | −1.35 | **−3.35** |
+| satiation coefficient, modelled | −1.31 | −1.30 | −1.28 |
+
+**The remedy works.** Per-household attribute tastes restore the attribute
+structure from nothing to clearly found, and remove the factor-2.2 bias in the
+satiation coefficient at the largest dispersion. Caveat carried from E2: the
+true lift is 7.4 and the recovered values overshoot it (10.6–28.8), the same
+direction as E2's 21.7-against-7.4. The qualitative claim is solid; the
+magnitudes are noisy at three seeds and should not be quoted as estimates.
+
+#### What these four together establish
+
+Batch 30 says customer heterogeneity buys **nothing predictively**. E4 says it
+is **decisive structurally** — without it the attribute kernel is unrecoverable
+and the satiation coefficient is biased by more than a factor of two. Both are
+true, and they are not in tension.
+
+> Selecting on validation NLL would have discarded the single component the
+> identification analysis says matters most.
+
+That is a concrete, measured instance of the R36 thesis: a predictive criterion
+cannot select a model for inference. The same pattern holds for product
+representation — identity and attributes are predictively indistinguishable,
+but only the attribute parameterisation is identified under our rotation (R34).
+Two independent cases, one from simulation and one from the real panel, of
+decision-level accuracy being silent about the thing the paper wants to claim.
+
+This is the empirical support for deck 45's positioning, and it is the argument
+R36 was pre-registered to make on sequences rather than parameters.
