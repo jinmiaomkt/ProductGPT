@@ -2509,3 +2509,217 @@ unaffected: those models carry none of the structural parameters.
 reports as a quantity must be outside weight decay, and any parameter with a
 transform must have its initial value asserted in the units it is reported in.
 Re-run as batches 22 (no campaign FE) and 23 (with).
+
+### R36 — sequence-level inference validity: is the best predictor a valid generator? (PLAN)
+
+**The question.** Every selection decision in R1–R35 used decision-level
+prediction error: given a true history, how well is the NEXT decision predicted.
+Inference — the thing a marketing paper wants — is a statement about whole
+sequences. R36 asks whether the argmin of one-step prediction error is a model
+whose FREELY GENERATED holdout sequences are distributionally valid, judged at
+the sequence level rather than the decision level.
+
+**Why this is not automatic, and why a failure is informative.** If the model's
+conditionals were correctly specified, the chain rule would deliver the joint law
+for free: sequence validity would follow from decision validity with nothing left
+to check. The gap opens only under misspecification or finite data, and it opens
+for a specific reason — training evaluates the model on prefixes drawn from the
+DATA, while a rollout visits prefixes drawn from the MODEL. So:
+
+> A sequence-level failure in the presence of good one-step fit is direct
+> evidence of misspecification. The sequence check is a specification test that
+> the one-step likelihood cannot perform, because the likelihood is never
+> evaluated off the data manifold.
+
+That is the methodological claim R36 is built to support.
+
+**The three-tier ladder of validity.** These are distinct claims with distinct
+evidence and distinct licences. T2 is neither implied by T1 nor dependent on T3.
+
+| Tier | Claim | Evidence | What it licenses |
+|---|---|---|---|
+| T1 decision-level predictive | next decision, given the true history | stage 4/5: NLL, AUC, ECE 0.010–0.019 | forecasting the next decision. Nothing else. |
+| T2 sequence-level generative | the joint law of holdout trajectories | **R36 — not yet tested** | in-support policy simulation: pacing, campaign length, re-ordering assortments that occurred |
+| T3 structural | parameters carry their intended meaning | R34: phi and g pass, free kappa fails | off-support counterfactuals: new pairings, novel assortments |
+
+R35's licensing table asserted this split. R36 tests the middle row and, in H2
+below, earns the split with ground truth instead of asserting it.
+
+#### Facts already settled by the code (checked Sep 29 2026, do not re-litigate)
+
+- **IPT is an input, not an output.** `model_multistream_state_space.py` consumes
+  IPT as a recency ruler (lagged, per R21); the head emits only the 9-way
+  decision. The model therefore CANNOT generate the occasion grid.
+- **The row grid is part exogenous, part endogenous.** `InsertNotBuy_GenerateJSON_IPT.R`
+  line 122 builds synthetic NotBuy rows "one per interval", unconditionally, for
+  every interval between the player's first and last purchase campaign. The
+  NotBuy skeleton is therefore exogenous given the calendar and the active
+  window; the purchase rows are endogenous.
+- **`is_inserted` is loaded but never consumed.** It appears only in
+  `dataset_multistream.py` (carried in the batch for a future model); neither the
+  trainer nor the model references it. Conditioning a rollout on the real row
+  grid therefore does not leak the label. Verified by grep over
+  `gen5_multistream/` and `shared/`.
+- **Checkpoints exist.** `best.pt` in all 665 run directories under
+  `~/ProductGPT/runs/<run>/gen5_multistream/hpcc/` (21 GB), including every
+  frozen stage-4 and R33 cell. R36 is INFERENCE ONLY — no retraining.
+
+#### R36a — the rollout engine
+
+Mode: **warm-start free-running on the real row grid.**
+
+1. Condition on the customer's true history through campaign 27.
+2. For campaigns 28–30, hold the row grid and the IPTs at their observed values.
+3. At each row, SAMPLE the decision from the 9-way distribution — ancestral
+   sampling at temperature 1, no top-k and no nucleus truncation. Truncated
+   decoding changes the distribution being tested, which is the whole object of
+   the exercise.
+4. Resolve purchases through the gacha environment (published rates, pity, the
+   50-50 rule) to advance inventory counts and duplicate tiers.
+5. M replicates per customer.
+
+**Stated limitation, to be written into the paper, not buried.** Because the
+arrival process is held at its observed values, R36a tests the COMPOSITION and
+DEPENDENCE STRUCTURE of decisions conditional on when occasions arrive. It does
+not test purchase timing or purchase frequency. Making the model a true sequence
+generator requires a duration head (see R36e), which is a modelling change, not
+an evaluation change.
+
+**Engineering risk.** The frozen config is `ENCODER=gru_attn, FUSE=stack`, so it
+has an attention branch and needs the whole prefix at each step: a naive rollout
+is O(S^2). Mitigations, in order: batch (customer, replicate) pairs into the
+batch dimension; cache the GRU branch state; add incremental decoding with a KV
+cache for the attention branch. Run a timing probe before committing to M=200.
+
+#### Metrics — three layers, all at the sequence level
+
+**L1, per-customer functionals.** Chosen because the model was NOT fit to them:
+
+- total spend (`rev_vec`), purchase incidence rate, share of each of the 9 decisions
+- longest NotBuy run; the run-length distribution of consecutive buys
+- number of banner switches; Herfindahl of spend across the four banners
+- autocorrelation of the buy indicator at lags 1–5
+- escalation: P(Buy10 | previous decision was Buy10)
+- the 9x9 empirical decision transition matrix
+- **the satiation signature**: P(buy on banner b | already holding k copies from
+  b), for k = 0, 1, 2, 3+. This is the functional the stock path exists to get
+  right, and the one the decision-level criterion is least able to see.
+
+**L2, distributional distance** between the real holdout set and the generated
+set in the L1 feature space:
+
+- energy distance and MMD, with a permutation test
+- **the variogram score** for the dependence structure. The energy score is known
+  to have weak power against misspecified dependence, and dependence is exactly
+  what is at stake here, so energy distance alone is not sufficient.
+- a **classifier two-sample test**: gradient-boosted trees, real vs generated,
+  reporting AUC with a CI. Its feature importances NAME the failure mode, which
+  is worth more than the AUC itself.
+
+**L3, per-customer calibration.** Rank histogram / PIT: for each functional and
+each customer, the rank of the observed value among the M replicates. Uniform =
+calibrated. U-shaped = under-dispersed, the classic failure of a one-step-trained
+model rolled out. Skewed = biased.
+
+**The null band — required before any number is interpreted.** Split the real
+holdout customers into two random halves and compute every statistic above on
+real-vs-real; 200 repetitions gives the sampling distribution. A model is
+"indistinguishable" only relative to that band. Without this floor the L2
+numbers mean nothing.
+
+#### The baseline ladder
+
+| # | Generator | Purpose |
+|---|---|---|
+| 1 | i.i.d. sampler from the empirical decision marginals | matches marginals by construction; must fail dependence. Sanity floor. |
+| 2 | first-order Markov chain on the 9 decisions, fit on calibration | cheap dependence baseline; the bar a deep model must clear |
+| 3 | ProductGPT with NO stock path (`b18_hyb_stock_nostock`) | the critical cell — see H1 |
+| 4 | ProductGPT, frozen R33 config (`b29_hl2`) | the incumbent |
+| 5 | plain GRU level 6 | stage-4 rank 1 on the decision-level criterion |
+
+#### H1 — the headline hypothesis
+
+Stage 4 found NO family wins: eight cells spread 0.0194 nats against a seed sd of
+0.0075, and removing the stock path entirely cost 0.0137 — a statistical tie. The
+decision-level criterion therefore cannot distinguish a model that has a satiation
+mechanism from one that does not. But satiation is a sequence-level mechanism: it
+governs whether a customer who has just acquired five copies stops pulling.
+
+> **H1. Models that are statistically tied on one-step NLL separate on
+> sequence-level validity, and the no-stock model is the one that separates.**
+
+Test: rank the frozen cells by one-step holdout NLL and by L2 discrepancy;
+report the Spearman correlation between the two rankings. H1 predicts it is low
+or zero, and specifically that `b18_hyb_stock_nostock` is distinguishable from
+real data on the satiation signature while `b29_hl2` is not.
+
+**Either outcome is publishable.** If H1 holds, the criterion was wrong rather
+than the mechanism, and three years of representation work is worth ~0.01 nats on
+the wrong criterion and is decisive on the right one. If H1 fails — every model
+equally good, or equally bad, as a generator — that kills the "use the transformer
+as a simulator" claim cleanly and honestly, and the paper's contribution becomes
+the negative result plus the licensing analysis.
+
+#### H2 — do the identification results predict where generation fails?
+
+Run entirely inside the R34 harness (`simulation/kernel_sim.py`), where truth is
+known. Fit two estimators: (a) the identified parametric kernel, (b) the
+unidentified free QKV kernel. R34 already establishes they tie on one-step fit.
+Then generate under three schedules:
+
+| Schedule | Support | Prediction |
+|---|---|---|
+| status-quo calendar | in | both valid |
+| permuted calendar (same assortments, shuffled order) | in | both roughly valid |
+| novel assortments (products never co-offered) | off | ONLY the identified kernel valid |
+
+This earns R35's licensing table with ground truth instead of asserting it, and
+it is the experiment that ties R34 and R36 into one argument. CPU only, cheap.
+
+#### H3 — horizon drift
+
+Per-occasion discrepancy as a function of rollout horizon within campaigns 28–30,
+free-running against teacher-forced. A gap that grows with horizon is compounding
+error; a flat gap means the model self-corrects. Reported as a curve, not a
+scalar.
+
+#### H4 — conditional on failure: is it fixable?
+
+Only run if T2 fails. Scheduled sampling / rollout fine-tuning, against a
+distribution-matching alternative. Note in writing that the scheduled-sampling
+objective is known to be inconsistent, so it is reported as a remedy, not as a
+contribution.
+
+#### Decision rule (pre-registered, fixed before any rollout is scored)
+
+A model **passes T2** iff:
+- its L2 statistic lies inside the real-vs-real null band on at least 4 of the 5
+  pre-specified functionals (spend, incidence, longest NotBuy run, banner
+  switches, satiation signature), AND
+- its classifier two-sample AUC has a 95% CI containing 0.5.
+
+Only models that pass T2 may be used for the R35 counterfactuals. If no model
+passes, R35 reports NO policy numbers, and that is the finding.
+
+**Pre-registration discipline.** The five functionals and the decision rule are
+fixed before the first rollout is scored. The holdout was already opened once for
+stage 4; R36 reuses the same cells and adds no new selection, so no further
+holdout budget is consumed — but any functional added AFTER seeing a rollout must
+be reported as exploratory.
+
+#### Stages and cost
+
+| Stage | Content | Cost |
+|---|---|---|
+| R36a | rollout engine + gacha environment + timing probe | inference |
+| R36b | L1/L2/L3 metrics, null band, baselines 1–2 | CPU |
+| R36c | H1 across the frozen cells | inference, GPU |
+| R36d | H2 in the simulation harness | CPU |
+| R36e | OPTIONAL: duration head, making the model a true generator | training |
+
+**Open scope decision.** R36a as specified conditions on the real arrival
+process. R36e removes that limitation and turns ProductGPT into a genuine
+sequence generator, which is a materially stronger paper but a modelling change.
+Decide before building R36c, because the metric set changes if timing becomes
+generated.
+
