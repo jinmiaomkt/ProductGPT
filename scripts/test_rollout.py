@@ -91,6 +91,33 @@ offenders = [h for h in hits if "dataset_multistream" not in h]
 check("is_inserted reaches neither the model nor the trainer", not offenders,
       f"only {hits}" if not offenders else f"consumed by {offenders}")
 
+# Regression for the 29 Sep 2026 bug: campaign ids were present in every item
+# and dropped by collate_multistream, so the trainer's `"campaign" in batch`
+# was always false and camp_bias never received a gradient. A flag that claims
+# to add a control has to be shown to CHANGE THE OUTPUT.
+check("collate carries campaign to the batch", "campaign" in batch,
+      f"batch keys: {sorted(k for k in batch if k != 'uid')}")
+if "campaign" in batch:
+    import torch as _t
+    cm = mm.build_transformer(
+        vocab_size_src=cfg["vocab_size_src"], vocab_size_tgt=cfg["vocab_size_tgt"],
+        max_seq_len=cfg["max_events"], d_model=32, n_layers=2, n_heads=4, d_ff=64,
+        dropout=0.0, feature_tensor=feat, ai_rate=cfg["ai_rate"], num_users=4,
+        lto_len=cfg["lto_len"], obtained_len=cfg["obtained_len"],
+        prev_dec_len=cfg["prev_dec_len"], use_user_embedding=False,
+        encoder="gru_attn", fuse="stack", inventory="slots", n_campaigns=32).eval()
+    with _t.no_grad():
+        _t.nn.init.normal_(cm.camp_bias.weight, std=0.5)
+        kwv = {"ipt": batch["ipt"]} if batch.get("ipt") is not None else {}
+        n1 = cm(batch["lto"], batch["obtained"], batch["prev_decision"], None, **kwv)
+        n2 = cm(batch["lto"], batch["obtained"], batch["prev_decision"], None,
+                campaign=batch["campaign"], **kwv)
+        n1 = (n1[0] if isinstance(n1, (tuple, list)) else n1)
+        n2 = (n2[0] if isinstance(n2, (tuple, list)) else n2)
+        dcf = (n1 - n2).abs().max().item()
+    check("campaign fixed effects actually change the logits", dcf > 1e-3,
+          f"max|d|={dcf:.4f}")
+
 # ───────────────────────────── B. causality ───────────────────────────
 print("\nB. causality: rows after t must not move the logits at t")
 with torch.no_grad():
