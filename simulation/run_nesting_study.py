@@ -159,8 +159,8 @@ def main() -> None:
            rows, ["assortment", "spearman", "attr lift", "alpha hat"])
     res["E3"] = rows
 
-    print("
-" + "=" * 92)
+    print()
+    print("=" * 92)
     print("E4  does MODELLING the heterogeneity restore what E2b destroyed?")
     print("=" * 92)
     rows = []
