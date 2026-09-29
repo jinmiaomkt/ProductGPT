@@ -126,12 +126,18 @@ class LearnedInventory(nn.Module):
     """
 
     def __init__(self, cfg: BrandConfig, attr_of: np.ndarray, kernel: str = "learned",
-                 learn_decay: bool = True, alpha_init: float = 0.5, d: int = 8):
+                 learn_decay: bool = True, alpha_init: float = 0.5, d: int = 8,
+                 customer_fe: bool = False):
         super().__init__()
         J = cfg.n_brands
         self.J, self.kernel = J, kernel
         same = (attr_of[:, None] == attr_of[None, :]).astype(np.float32)
         self.register_buffer("same_attr", torch.as_tensor(same))
+        self.register_buffer("attr_of", torch.as_tensor(attr_of, dtype=torch.long))
+        # S8: per-household attribute tastes, i.e. the heterogeneity the DGP has
+        # and E2b showed the kernel absorbs when the estimator lacks it.
+        self.hh_taste = (nn.Parameter(torch.zeros(cfg.n_households, cfg.n_attributes))
+                         if customer_fe else None)
         if kernel == "learned":
             self.emb = nn.Parameter(torch.randn(J, d) * 0.1)
             self.wq, self.wk = nn.Linear(d, d, bias=False), nn.Linear(d, d, bias=False)
@@ -158,15 +164,18 @@ class LearnedInventory(nn.Module):
     def alpha(self) -> torch.Tensor:
         return torch.sigmoid(self.logit_alpha)
 
-    def nll(self, choices, avail, prices) -> torch.Tensor:
+    def nll(self, choices, avail, prices, hh=None) -> torch.Tensor:
         N, T = choices.shape
         J, dev = self.J, self.base.device
         kappa, alpha = self.kappa(), self.alpha()
+        base = self.base[None, :].expand(N, J)
+        if self.hh_taste is not None and hh is not None:
+            base = base + self.hh_taste[hh][:, self.attr_of]
         R = torch.zeros(N, J, device=dev)
         total = torch.zeros((), device=dev)
         for t in range(T):
             stock = R @ kappa.T
-            v = self.base[None, :] + self.gamma * stock + self.price_beta * prices[:, t]
+            v = base + self.gamma * stock + self.price_beta * prices[:, t]
             v = torch.where(avail[t][None, :], v, torch.full_like(v, -1e9))
             v = torch.cat([v, self.nobuy.expand(N, 1)], dim=1)
             total = total + F.cross_entropy(v, choices[:, t], reduction="sum")
@@ -182,12 +191,12 @@ class LearnedInventory(nn.Module):
 
 def fit(data: BrandData, kernel: str = "learned", learn_decay: bool = True,
         epochs: int = 300, lr: float = 0.05, batch: int = 256, seed: int = 0,
-        alpha_init: float = 0.5, device: str = "cpu") -> dict:
+        alpha_init: float = 0.5, device: str = "cpu", customer_fe: bool = False) -> dict:
     dev = torch.device(device)
     torch.manual_seed(seed)
     cfg = data.cfg
     m = LearnedInventory(cfg, data.attr_of, kernel=kernel, learn_decay=learn_decay,
-                         alpha_init=alpha_init).to(dev)
+                         alpha_init=alpha_init, customer_fe=customer_fe).to(dev)
     ch = torch.as_tensor(data.choices, device=dev)
     av = torch.as_tensor(data.avail, device=dev)
     pr = torch.as_tensor(data.prices, dtype=torch.float32, device=dev)
@@ -197,7 +206,7 @@ def fit(data: BrandData, kernel: str = "learned", learn_decay: bool = True,
     for ep in range(epochs):
         idx = torch.as_tensor(rng.choice(cfg.n_households, min(batch, cfg.n_households),
                                          replace=False), device=dev)
-        loss = m.nll(ch[idx], av, pr[idx])
+        loss = m.nll(ch[idx], av, pr[idx], hh=idx)
         opt.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(m.parameters(), 5.0)

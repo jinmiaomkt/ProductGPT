@@ -57,11 +57,11 @@ def report(name, rows, keys):
              else str(r.get(k, "")).rjust(max(11, len(k)))) for k in keys))
 
 
-def run(cfg, epochs, seeds=(0, 1, 2)):
+def run(cfg, epochs, seeds=(0, 1, 2), customer_fe=False):
     out = []
     for sd in seeds:
         d = simulate(replace(cfg, seed=100 + sd))
-        r = fit(d, kernel="learned", epochs=epochs, seed=sd)
+        r = fit(d, kernel="learned", epochs=epochs, seed=sd, customer_fe=customer_fe)
         r["spearman"] = spearman(offdiag(r["kappa_hat"]), offdiag(d.kappa_true))
         r["attr_lift"] = attr_lift(r["kappa_hat"], d.attr_of)
         r["true_half_life"] = cfg.half_life()
@@ -158,6 +158,27 @@ def main() -> None:
     report("E3 (identification of the kernel against assortment availability)",
            rows, ["assortment", "spearman", "attr lift", "alpha hat"])
     res["E3"] = rows
+
+    print("
+" + "=" * 92)
+    print("E4  does MODELLING the heterogeneity restore what E2b destroyed?")
+    print("=" * 92)
+    rows = []
+    for sd in ([0.5] if a.quick else [0.25, 0.5, 1.0]):
+        cfg = replace(base, kernel="attr", attr_weight=2.0, gamma=-1.5, alpha=0.9,
+                      taste_sd=sd)
+        for fe in (False, True):
+            rs = run(cfg, epochs, customer_fe=fe)
+            rows.append({"taste sd": sd, "household tastes": str(fe),
+                         "attr lift": agg(rs, "attr_lift"),
+                         "spearman": agg(rs, "spearman"),
+                         "gamma hat": agg(rs, "gamma_hat"),
+                         "alpha hat": agg(rs, "alpha_hat")})
+            print(f"  taste sd {sd}  modelled={str(fe):<5}  lift {rows[-1]['attr lift']:>7.2f}  "
+                  f"gamma {rows[-1]['gamma hat']:+.2f} (true -1.50)", flush=True)
+    report("E4 (the remedy: per-household attribute tastes in the estimator)", rows,
+           ["taste sd", "household tastes", "attr lift", "spearman", "gamma hat"])
+    res["E4"] = rows
 
     res["config"] = asdict(base)
     (OUT / ("nesting_quick.json" if a.quick else "nesting.json")).write_text(
