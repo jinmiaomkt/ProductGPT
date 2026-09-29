@@ -48,7 +48,8 @@ NOT_BUY = 9
 
 
 # --------------------------------------------------------------- model load
-def load_checkpoint(ckpt_path, device: str = "cpu", *, vocab_level: Optional[int] = None):
+def load_checkpoint(ckpt_path, device: str = "cpu", *, vocab_level: Optional[int] = None,
+                    neutralise_untrained_camp_bias: bool = True):
     """Rebuild the trained model from a run's best.pt.
 
     The checkpoint carries `cfg` and `num_users`, so the architecture is
@@ -96,6 +97,27 @@ def load_checkpoint(ckpt_path, device: str = "cpu", *, vocab_level: Optional[int
         fuse=cfg.get("fuse", "gate"),
     )
     model.load_state_dict(state["model_state_dict"])
+
+    # Every checkpoint written before 29 Sep 2026 was trained with campaign ids
+    # that never reached the model: collate_multistream dropped the field, so
+    # `"campaign" in batch` was always false and the forward skipped camp_bias
+    # entirely.  Its weights are therefore the INITIALISATION, not an estimate --
+    # provably so, since they are bit-identical across different configurations
+    # that share a training seed and differ only across seeds.
+    #
+    # Now that collate carries campaign, rolling such a checkpoint forward would
+    # start applying those untrained random offsets to the purchase logits and
+    # the generator would no longer be the model that was trained.  Zero them,
+    # so passing campaign is a no-op and the rollout reproduces training exactly.
+    if neutralise_untrained_camp_bias and getattr(model, "camp_bias", None) is not None:
+        w = model.camp_bias.weight
+        if float(w.abs().max()) > 0:
+            print(f"[ckpt] camp_bias is untrained (max|w|={float(w.abs().max()):.3e}); "
+                  "zeroing it so the rollout reproduces the trained function. "
+                  "Re-train with the collate fix to get real campaign fixed effects.")
+            with torch.no_grad():
+                w.zero_()
+
     model.to(device).eval()
     return model, cfg
 

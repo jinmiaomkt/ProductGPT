@@ -672,6 +672,16 @@ def collate_multistream(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         )
     if "is_inserted" in batch[0]:
         out["is_inserted"] = torch.stack([pad1(b["is_inserted"]) for b in batch])
+    # R36c BUG FIX (Sep 29 2026). campaign was present in every ITEM and dropped
+    # here, so `"campaign" in batch` in the trainer was ALWAYS false and
+    # camp_bias never received an id. Every run submitted with --camp-fe 1
+    # therefore computed the same function as one without, with the bias left at
+    # its zero init and no gradient. That voids the batch 20-vs-21 and 22-vs-23
+    # pairs, which existed to test exactly this on real data, and it means the
+    # R33/R29 half-life profile was measured WITHOUT the control that R34 s6
+    # said it needs. Padding with 0 is safe: those rows are PAD and are masked.
+    if "campaign" in batch[0]:
+        out["campaign"] = torch.stack([pad1(b["campaign"]) for b in batch])
     if "inv_init_count" in batch[0]:
         out["inv_init_count"] = torch.stack([b["inv_init_count"] for b in batch])
         out["inv_init_last"] = torch.stack([b["inv_init_last"] for b in batch])

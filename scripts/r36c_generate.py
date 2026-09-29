@@ -163,6 +163,16 @@ def main() -> None:
                 print(f"  skip {tag} s{sd}: {e}")
                 continue
             model, mcfg = load_checkpoint(cp, device=a.device)
+            # set_product_range is GLOBAL. A checkpoint from a different
+            # vocabulary level would silently re-point the id range that the
+            # already-built dataset and the functionals use, and the satiation
+            # signature would count the wrong products. Refuse instead.
+            if (mcfg["first_prod_id"], mcfg["last_prod_id"]) !=                (cfg["first_prod_id"], cfg["last_prod_id"]):
+                raise SystemExit(
+                    f"{tag} s{sd} is vocabulary level {mcfg.get('vocab_level')} "
+                    f"({mcfg['first_prod_id']}-{mcfg['last_prod_id']}), but the "
+                    f"dataset was built for {cfg['first_prod_id']}-"
+                    f"{cfg['last_prod_id']}. Run one level per invocation.")
             t0 = time.time()
             F = []
             for ci, (ch, st) in enumerate(zip(chunks, starts)):

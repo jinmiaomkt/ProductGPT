@@ -2857,3 +2857,68 @@ decision-level accuracy being silent about the thing the paper wants to claim.
 
 This is the empirical support for deck 45's positioning, and it is the argument
 R36 was pre-registered to make on sequences rather than parameters.
+
+### BUG (found 29 Sep 2026, while building R36c) — campaign fixed effects never reached the model
+
+**What was wrong.** `collate_multistream` built its output dict field by field and
+never copied `campaign`, although every ITEM carried it. The trainer gates the
+argument on `"campaign" in batch` (train5_multistream.py:236), so that test was
+always false, the forward's `if self.camp_bias is not None and campaign is not
+None` never fired, and `camp_bias` received no gradient. **Every run submitted
+with `--camp-fe 1` computed exactly the same function as one without it.**
+
+**How it was proved, not inferred.** `camp_bias` in the saved checkpoints is
+bit-identical across configurations that share a training seed and differs only
+across seeds:
+
+| checkpoint | first weights | identical to b29\_hl2\_s1? |
+|---|---|---|
+| b29\_hl2\_s1 | 0.4052, 0.2595, −0.2285 | — |
+| b23\_L3\_attr\_s1 | 0.4052, 0.2595, −0.2285 | **yes** |
+| b21\_L3\_attr\_s1 | 0.4052, 0.2595, −0.2285 | **yes** |
+| b29\_hl2\_s2 | −0.3798, 0.2935, 0.3305 | no (different seed) |
+
+Three different kernel/decay/tier ladders, trained on the same data, produced
+the same 32 numbers. That is only possible for a parameter no gradient ever
+touched. (They are non-zero despite `nn.init.zeros_` because a later blanket
+initialisation pass overwrites embedding weights; irrelevant, since the forward
+never used them.)
+
+**What it invalidates.**
+
+1. **The batch 20-vs-21 and 22-vs-23 pairs test nothing.** They existed
+   specifically to check R34 s6's prediction on real data. Both arms are the
+   same model; the reported differences are seed noise.
+2. **The R33/R29/R31 half-life profile was measured without the control R34 s6
+   says it needs.** The ledger's own standard was "R33 must carry campaign
+   fixed effects or its headline half-life is not interpretable." It did not
+   carry them. In simulation, omitting the control inflated the half-life 2x
+   then 5x as campaign shock variance rose. Our measured optimum is SHORT (1–2
+   occasions), which is the opposite direction to that bias, so the qualitative
+   claim "holdings fade over days, not campaigns" is not obviously threatened
+   — but it is currently unprotected, and the number should not be quoted as
+   controlled until the profile is re-run.
+3. Nothing else. `camp_bias` is additive on the purchase logits only; with it
+   absent, every other result is the model it was reported as.
+
+**The fix.** `collate_multistream` now carries `campaign` (padded with 0, which
+is safe because those rows are PAD and masked). Verified end to end: the field
+reaches the batch, and with a non-trivial `camp_bias` the logits move by 0.41,
+where before the two calls were identical.
+
+**Consequence for R36c.** Legacy checkpoints must NOT have campaign applied at
+rollout time, or the generator stops being the model that was trained.
+`load_checkpoint` now zeroes an untrained `camp_bias` on load and says so.
+
+**Re-runs required.** The half-life profile (frozen half-lives 1, 2, 5 at five
+seeds) with `--camp-fe 1` actually in force, and a real 20-vs-21 equivalent.
+Until then the decay half-life is reported as uncontrolled.
+
+**Lesson, for the same shelf as the R20 label leak and the R26 index bug.** A
+flag that is plumbed through argparse, config, model construction and the
+optimizer's structural group can still be inert if one dictionary in the data
+path omits a key. `--camp-fe 1` appeared in every job's command line and in the
+run directory name, so every downstream artifact asserted a control that did
+not exist. **Any flag claiming to add a control must have a test that the
+control changes the output.** Added for campaign FE; the same test is owed to
+every other flag that gates on a batch key.
