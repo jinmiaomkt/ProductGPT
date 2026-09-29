@@ -80,6 +80,14 @@ def main() -> None:
     ap.add_argument("--probe", action="store_true",
                     help="time one chunk of one config and stop")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--max-events", type=int, default=None,
+                    help="shorten the context window. The pre-window inventory is "
+                         "carried exactly by inv_init_count/inv_init_last, but the "
+                         "ATTENTION context is truncated, so this changes the "
+                         "function. Validate it with --tf-nll before using it.")
+    ap.add_argument("--tf-nll", action="store_true",
+                    help="teacher-forced NLL on the cell, then stop. Run at two "
+                         "--max-events values to price the truncation.")
     a = ap.parse_args()
     runs = Path(a.runs_dir)
 
@@ -89,6 +97,10 @@ def main() -> None:
     state = torch.load(str(first), map_location="cpu", weights_only=False)
     cfg = dict(state["cfg"])
     dsm.set_product_range(cfg["first_prod_id"], cfg["last_prod_id"])
+    if a.max_events:
+        print(f"[ctx] context window {cfg['max_events']} -> {a.max_events}; "
+              "pre-window inventory is carried by inv_init, attention context is not")
+        cfg["max_events"] = int(a.max_events)
 
     from train5_multistream import build_loaders
     tr_dl, _, tests, num_users = build_loaders(cfg)
@@ -111,6 +123,36 @@ def main() -> None:
     print(f"[env] calibrated on {nfit} training customers")
 
     chunks = [pick[i:i + a.chunk] for i in range(0, len(pick), a.chunk)]
+
+    if a.tf_nll:
+        import torch.nn.functional as Fn
+        model, mcfg = load_checkpoint(ckpt_path(a.configs[0], a.seeds[0], runs),
+                                      device=a.device)
+        tot = n = 0.0
+        with torch.no_grad():
+            for ch in chunks:
+                b = collate_chunk(cell, ch)
+                kw = {}
+                if b.get("ipt") is not None:
+                    kw["ipt"] = b["ipt"].to(a.device)
+                if getattr(model, "camp_bias", None) is not None and "campaign" in b:
+                    kw["campaign"] = b["campaign"].to(a.device)
+                for k in ("inv_init_count", "inv_init_last"):
+                    if k in b:
+                        kw[k] = b[k].to(a.device)
+                out_ = model(b["lto"].to(a.device), b["obtained"].to(a.device),
+                             b["prev_decision"].to(a.device),
+                             b["user_idx"].to(a.device), **kw)
+                lg = (out_[0] if isinstance(out_, (tuple, list)) else out_)
+                y = b["label"].to(a.device)
+                m = y != 0
+                if m.any():
+                    ll = Fn.cross_entropy(lg[..., 1:10][m], (y[m] - 1),
+                                          reduction="sum")
+                    tot += float(ll); n += int(m.sum())
+        print(f"[tf-nll] max_events={cfg['max_events']}  NLL={tot/n:.4f}  "
+              f"scored {n:,} events")
+        return
 
     # ------------------------------------------------------------- real set
     F_real, starts = [], []
