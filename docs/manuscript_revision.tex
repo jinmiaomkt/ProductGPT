@@ -1,0 +1,466 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\Sepackage{amsmath,amssymb,booktabs,graphicx,longtable}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black]{hyperref}
+\usepackage{xcolor}
+\newcommand{\new}[1]{\textcolor{blue!60!black}{#1}}
+\newcommand{\drop}[1]{\textcolor{red!60!black}{#1}}
+\title{\textbf{ProductGPT: revised Model Development and Empirical Results}\\[3pt]
+\large Proposed replacement text for Sections~3 and~5 of \texttt{jmp\_v11.tex},
+with a change log}
+\author{Technical note for co-author review}
+\date{30 September 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent This note proposes replacement text for two sections of
+\texttt{jmp\_v11.tex}. The model section is rewritten because the architecture
+described there is a subset of what we now estimate: the paper's current text
+has no stock variable, and the stock is where the marketing content of the model
+lives. The results section is rewritten because its central empirical claim ---
+that ProductGPT outperforms recurrent benchmarks --- did not survive a
+235-run tuning programme in which every family was tuned to its own frontier.
+Section~\ref{sec:log} lists every change and its evidence. Three claims in v11
+are \drop{withdrawn}; two reviewer comments are now answerable with data rather
+than argument.
+\end{abstract}
+
+\section{Change log}\label{sec:log}
+
+\begin{longtable}{p{3.4cm}p{5.2cm}p{5.6cm}}
+\toprule
+Where & v11 says & Revision, and why \\
+\midrule
+\endhead
+\S3 Model overview & A Transformer over triplet input tokens. & \new{Adds an
+explicit \emph{stock} variable and states the model as two memories: a
+decision-level memory (the sequence encoder) and a stock-level memory (the
+inventory). The stock is where satiation and substitution live, and v11 has no
+notation for it.} \\
+\addlinespace
+\S3 (new) Stock & absent & \new{$S_{it}(j)=\sum_{\tau<t}\kappa(j,c_\tau)\,
+g(k_\tau)\,\varphi(t-\tau)$, with the nesting result: $\kappa=I$ and geometric
+$\varphi$ give Guadagni--Little loyalty; $\kappa$ = attribute similarity gives
+McAlister accumulated-attribute satiation. Attention supplies a \emph{learned}
+$\kappa$ and a \emph{learned} $\varphi$.} \\
+\addlinespace
+\S3 Attention & ``the core innovation \dots\ captures long-range dependencies'' &
+\new{Kept, but scoped: the encoder is now one of several interchangeable
+choices, and the empirical section shows the choice does not matter for
+accuracy. Reviewer Comment~1 (cross-attention vs.\ triplets) is answered with a
+measurement rather than a preference.} \\
+\addlinespace
+\S3 Heterogeneity & absent & \new{Per-customer embedding and a mixture over
+output projections, both estimated. Answers the first half of reviewer
+Comment~2.} \\
+\addlinespace
+\S3 Stopping rule & absent & \new{States that NotBuy is an ordinary predicted
+class, not an end-of-sequence token, and that it is defined by a fixed 24-hour
+interval. Answers the second half of Comment~2.} \\
+\addlinespace
+\S3 Teacher forcing & ``Without teacher forcing, simulation errors would
+accumulate rapidly'' & \new{Correct, and now the starting point of a test rather
+than an aside: training on data prefixes while deployment visits model prefixes
+is exactly the gap Section~\ref{sec:gen} measures. Answers the third half of
+Comment~2.} \\
+\addlinespace
+\S5 Split & 80/10/10 by customer; campaign 28 = new-LTP holdout, 29--30 =
+revived & \new{Replaced by the Lu \& Kannan $2\times2$: customers $\times$
+periods, four cells reported separately, validation from late calibration
+(campaign 27), \texttt{split\_seed} fixed at 33, holdout opened once.} \\
+\addlinespace
+\S5 Primary metric & AUC & \new{Held-out negative log-likelihood is the
+selection metric; AUC, macro-F1 and hit rate are reported per decision class.
+Answers reviewer Comment~3 on metric--goal matching.} \\
+\addlinespace
+\S5 Model comparison & ``ProductGPT outperforms the RNN benchmarks'' &
+\drop{Withdrawn.} \new{Under equal tuning budgets, four families span 0.0194
+nats against a seed sd of 0.0075 --- a tie. The best cell is also the smallest
+model.} \\
+\addlinespace
+\S5 Perception map & t-SNE of product embeddings shows category clusters and
+figure--weapon pairs & \drop{Withdrawn.} \new{A decomposition shows the learned
+identity branch is at chance (0.404 vs.\ 0.408); the apparent structure is the
+attribute projection. Confirmed by training with the identity embedding
+removed, which costs 0.0001 nats.} \\
+\addlinespace
+\S5 Triplet vs.\ duplet & AUC 0.9004 vs.\ 0.7611 & \drop{Not reportable as
+stated.} \new{Those runs predate two data corrections (a label leak through the
+obtained-product block, and a product-index error affecting 89 of 122
+products). The ablation must be recomputed on the corrected data.} \\
+\addlinespace
+\S5 Generative deployment & described as a working decision-support procedure &
+\new{Rewritten as an open question with a test attached
+(Section~\ref{sec:gen}). Preliminary results do not support the claim as v11
+states it.} \\
+\bottomrule
+\end{longtable}
+
+\section{Proposed replacement: Model Development}
+
+\subsection*{Overview: two memories}
+
+ProductGPT predicts one of $J=9$ decisions at each purchase occasion from three
+observed streams: the limited-time products on offer, $\mathbf{x}_{it}$; the
+products previously obtained, $\mathbf{o}_{i,t-1}$; and the previous decision,
+$y_{i,t-1}$. What the model does with them is best stated as \emph{two
+memories}, because they carry different economics and, as
+Section~\ref{sec:results} shows, contribute differently.
+
+The \textbf{decision-level memory} summarises the customer's own history of
+choices. This is the sequence encoder, and it may be self-attention with a
+recency prior, a gated recurrent network, or a hybrid of the two.
+
+The \textbf{stock-level memory} summarises what the customer \emph{holds}. It is
+a vector $S_{it}\in\mathbb{R}^{P}$ over the $P$ products, and it is the object
+that carries satiation and substitution. The v11 text has no notation for it,
+which is why the model there reads as a generic sequence model rather than a
+demand model.
+
+\subsection*{The stock, and what it nests}
+
+Let $c_\tau$ index a product acquired at occasion $\tau$, and let $k_\tau$ be
+which copy of that product it is (first, second, third). The stock relevant to
+product $j$ at occasion $t$ is
+\begin{equation}
+S_{it}(j)\;=\;\sum_{\tau<t}\ \kappa(j,c_\tau)\ g(k_\tau)\ \varphi(t-\tau),
+\label{eq:stock}
+\end{equation}
+with three primitives:
+\begin{itemize}
+\item $\varphi(\Delta)=\rho^{\Delta}$, a decay with half-life $h$, so recent
+acquisitions matter more;
+\item $g(k)$, the weight of a $k$th duplicate copy, normalised to $g(1)=1$;
+\item $\kappa(j,p)$, a \textbf{substitution kernel}: how much holding $p$
+satiates demand for $j$.
+\end{itemize}
+
+Equation~\eqref{eq:stock} is not new to marketing; it is a generalisation of two
+classical constructions, and saying so is the cleanest way to explain what the
+architecture contributes.
+
+\begin{itemize}
+\item With $\kappa=I$ and $\varphi$ geometric, $S_{it}(j)$ is exactly Guadagni
+and Little's (1983) exponentially smoothed loyalty variable.
+\item With $\kappa$ equal to an attribute-similarity matrix, it is McAlister's
+(1982) accumulated-attribute satiation, in which consuming one item of an
+attribute class satiates the class.
+\end{itemize}
+
+\noindent\textbf{The architecture therefore adds no mechanism; it estimates what
+the classics fix in advance.} Attention supplies a learned $\kappa$ --- a
+softmax over product embeddings --- and the recency prior supplies a learned
+$\varphi$. We verify this nesting by simulation in ordinary brand choice, with
+no probabilistic goods anywhere: when a Guadagni--Little process generates the
+data the smoothing constant is recovered (0.499, 0.708 and 0.919 against true
+0.5, 0.7 and 0.9), and when a McAlister process generates it the attribute
+structure is found.
+
+We estimate three forms of $\kappa$: the identity; an attribute
+parameterisation with a handful of coefficients; and a free product-level kernel
+$\kappa=\mathrm{softmax}(EW_Q(EW_K)^\top/\sqrt{d})$. Section~\ref{sec:results}
+reports what each is worth, and a companion note reports which are identified.
+
+\subsection*{Decision-level memory, and the cross-attention question}
+
+Reviewer Comment~1 asks whether cross-attention should pool the three streams
+instead of concatenating them into triplets. We implemented both. The
+offer-inventory cross-attention --- in which the current offer token attends to
+the full history of obtained products --- is the architecture the comment
+describes, and it is worth approximately nothing: removing the entire stock
+path, cross-attention included, costs 0.0137 nats, inside the seed noise of the
+comparison.
+
+We therefore keep the triplet structure, and we say why in the language the
+comment invites: the choice is \emph{intentional and empirically grounded},
+not a convenience. Cross-attention costs $O(S^2)$ in sequence length --- the
+tensor it forms is $(B,H,S,4,10S)$ --- and buys no accuracy on this data.
+
+\subsection*{Product representation}
+
+Each product token is represented as $e_p=\mathrm{id}_p+\gamma\,W\mathbf{f}_p$,
+combining a learned identity embedding with a projection of the product's
+observed attributes $\mathbf{f}_p$ (rarity, type, element, weapon class and
+so on). Section~\ref{sec:results} reports the decomposition of what each branch
+contributes, and the answer is consequential enough to change how the paper
+discusses embeddings.
+
+\subsection*{Consumer heterogeneity}
+
+Reviewer Comment~2 asks how heterogeneity across players is accounted for. Two
+mechanisms are estimated: a per-customer embedding appended to the input, and a
+mixture over $H$ output projections with per-customer weights. For customers not
+seen in training, the embedding is set to the mean of the trained rows. Both are
+evaluated in Section~\ref{sec:results}, and the result is not the one we
+expected.
+
+\subsection*{The stopping rule}
+
+Comment~2 also asks how stopping is modelled. Decision 9, ``NotBuy'', is
+\emph{not} an end-of-sequence token: it means the customer was shown the
+banners and chose not to pull, and they may pull again at the next occasion. It
+is an ordinary predicted class, and the majority one. Occasions are defined on a
+fixed 24-hour grid --- one NotBuy row is inserted at the end of every interval
+in the customer's active window --- so ``NotBuy'' means \emph{no purchase within
+one 24-hour interval}. Sequences terminate by padding, which is why no EOS token
+is needed. This also means the occasion grid is partly exogenous: the interval
+skeleton comes from the calendar, and only the purchase rows are endogenous.
+
+\subsection*{Objective, teacher forcing, and the recursive loop}
+
+The model is trained by minimising cross-entropy on the decision only, with
+teacher forcing: after each prediction the \emph{ground-truth} decision, not the
+predicted one, is appended to the history. Offers are excluded from the
+prediction targets because they are managerial inputs, and outcomes are excluded
+because they are drawn by a published lottery.
+
+Comment~2's third question --- how simulation errors are managed in the
+recursive generative loop --- is the sharpest of the three, and v11 answers it
+only by asserting that teacher forcing prevents the problem during training. It
+does, but it also creates one at deployment. Training evaluates the model on
+prefixes drawn from the \emph{data}; free-running generation visits prefixes
+drawn from the \emph{model}. If the model's conditional distributions were
+correctly specified this would not matter --- the chain rule would deliver the
+joint law --- so any gap between one-step accuracy and generated-sequence
+quality is evidence of misspecification. Section~\ref{sec:gen} measures it
+rather than assuming it away.
+
+\section{Proposed replacement: Empirical Results}\label{sec:results}
+
+\subsection*{Design}
+
+We use the Lu and Kannan (2025) $2\times2$: customers are split in half, the
+period is split into a calibration block (campaigns 1--27) and a holdout block
+(campaigns 28--30), and the four cells are reported separately. The customer
+partition is fixed by a dedicated seed so that multi-seed runs share one
+partition and their differences reflect training noise. Validation comes from
+\emph{late calibration} (campaign 27) rather than from a random slice of time,
+so early stopping can see temporal drift; the holdout block is untouched by
+model selection and was opened exactly once. The headline cell is out-of-sample
+customers $\times$ holdout campaigns.
+
+Selection uses held-out negative log-likelihood. We additionally report AUC,
+macro-F1, hit rate and revenue error per decision class, which answers
+Comment~3: AUC is reported per binary class and hit rate for the categorical
+task, rather than one metric standing in for both.
+
+\subsection*{Tuning protocol}
+
+Because the paper's claim is now about \emph{families} rather than about one
+model, the comparison has to be budget-fair. We ran a five-stage programme of
+235 runs: a coarse stage over depth and width; a refinement stage sampled from
+the leaders; confirmation on fresh seeds; a final stage of five seeds per frozen
+configuration; and a diagnostic stage. Every family received an equal budget,
+selection used validation only, and a family was adopted only if it beat the
+incumbent by more than 0.02 nats on at least four of five paired seeds.
+
+\subsection*{Result 1: no family wins}
+
+\begin{center}\small
+\begin{tabular}{llrr}
+\toprule
+Rank & Family & Holdout NLL & Parameters \\
+\midrule
+1 & plain GRU & \textbf{0.8856 $\pm$ 0.0067} & 1.25M \\
+2 & GRU encoder & 0.8904 $\pm$ 0.0031 & 4.01M \\
+3 & transformer + recency prior & 0.8925 $\pm$ 0.0058 & 7.93M \\
+4 & hybrid & 0.8958 $\pm$ 0.0076 & 1.47M \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent The full spread across all eight cells (four families $\times$ two
+vocabularies) is 0.0194 nats against a typical seed sd of 0.0075. No pair
+satisfies the adoption rule. \textbf{The best cell is also the smallest model}:
+1.25M parameters against the transformer's 7.93M, a tie at one sixth of the
+size.
+
+This is a stronger statement than v11's, not a weaker one. ``We beat an LSTM''
+invites the question of whether the LSTM was tuned. ``Four families, each tuned
+to its own frontier under an equal budget, land within 0.02 nats on a holdout
+they never saw'' does not.
+
+\subsection*{Result 2: the components are worth less than expected}
+
+\begin{center}\small
+\begin{tabular}{lrr}
+\toprule
+Component removed or added & $\Delta$ validation NLL & Verdict \\
+\midrule
+stock path removed entirely & $+0.0137$ & inside the margin \\
+per-customer embedding added & $+0.0046$ & no gain \\
+mixture over output projections added & $+0.0000$ & exact tie \\
+both added & $+0.0073$ & no gain \\
+product identity embedding removed & $+0.0001$ & no cost \\
+product attributes removed & $+0.0064$ & a real cost \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Two readings deserve emphasis.
+
+\textbf{The learned identity embedding contributes nothing.} Deleting it costs
+0.0001 nats and is slightly better on the holdout; deleting the attributes costs
+sixty times as much. Everything the model knows about a product, it knows from
+the attribute projection. This is why the perception map in v11 is withdrawn: a
+decomposition of the two branches scores the learned identity part at chance
+(0.404 against 0.408 for a random baseline), and the visible clustering is the
+attribute projection rendered through t-SNE. We report the decomposition instead
+of the map.
+
+\textbf{Modelling heterogeneity does not improve prediction.} This is a negative
+result on the real panel, and it is reported as such. Its significance is that
+the same component is decisive for whether the model's parameters can be
+interpreted at all: in simulation, unmodelled taste heterogeneity collapses the
+recovered attribute structure and biases the satiation coefficient by a factor
+of 2.2, and modelling it removes both problems. A criterion that selects on
+predictive fit would have discarded it.
+
+\subsection*{Result 3: the decay is short, and its optimum is interior}
+
+Freezing the half-life and profiling the likelihood over it gives validation NLL
+of 0.8795, \textbf{0.8735}, 0.8756, 0.8801 and 0.8817 at half-lives of 0.5, 1,
+2, 5 and 10 occasions. The optimum is interior --- 0.5 is worse than 1 and the
+curve rises monotonically thereafter --- so \textbf{holdings fade over days, not
+over campaigns}. The gap between 1 and 2 is a quarter of a seed sd, so we report
+an interval (one to two occasions) rather than a point estimate.
+
+\paragraph{A disclosed limitation.} The runs behind this profile were submitted
+with campaign fixed effects enabled, but a defect in the data pipeline meant the
+campaign index never reached the model, so the effects were never estimated. We
+discovered this on 30 September 2026 and have fixed it. Simulation indicates
+that omitting this control \emph{inflates} the estimated half-life, which is the
+opposite direction to what we observe, so the qualitative conclusion is not
+threatened; nonetheless the profile is being recomputed with the control in
+force, and the interval above should be treated as provisional until then.
+
+\subsection*{Result 4: where the families differ, they differ compositionally}
+
+The aggregate tie conceals a systematic pattern. Decomposing the per-class
+likelihood, the attention-based encoder is better on \emph{purchase} classes by
+0.042 nats, while the recurrent encoder is better on \emph{NotBuy} by 0.079.
+The two effects are of comparable size and opposite sign, which is why the
+aggregate is flat. The advantage of attention is concentrated in the
+Figure-B banner --- the one that is absent in roughly half of campaigns, and
+therefore the one where a flexible memory of what was offered when is worth
+most.
+
+This is the honest version of the architectural claim: attention does not
+predict better overall, but it predicts differently, and where it helps is
+interpretable.
+
+\section{Generative validity: an open question}\label{sec:gen}
+
+Section~5 of v11 ends by describing the generative deployment --- the manager
+specifies an offer schedule, the model simulates decisions, the published
+lottery resolves outcomes --- as a working procedure. That description is
+premature, and revising it is the most consequential change proposed here.
+
+Prediction and generation are different claims. Everything above is a statement
+about the \emph{next} decision given a true history. A decision-support tool
+makes statements about \emph{sequences} under a schedule that has not occurred.
+We now test the second directly: condition on each customer's true history
+through the calibration period, then roll the model forward over the holdout
+campaigns on its own sampled decisions, with the published gacha rules resolving
+acquisitions, and compare the resulting sequences to the real ones on statistics
+the model was never fitted to --- spend, purchase incidence, run lengths, banner
+switching, autocorrelation, and the probability of buying on a banner given how
+many copies of its featured product the customer already holds.
+
+The comparison is made against a floor built by splitting the real data against
+itself, and against two deliberately weak generators fitted on calibration only:
+independent draws from the empirical decision distribution, and a first-order
+Markov chain on the nine decisions.
+
+\paragraph{The finding.} No trained configuration matched the real sequences.
+Over 300 held-out customers with eight simulated replicates each, all four
+configurations --- which are statistically tied on one-step accuracy --- score
+between 1.91 and 2.37 in energy distance against a split-half null band of
+0.078. A first-order Markov chain scores 0.71, closer to the data than any
+trained model, and independent draws score 2.19.
+
+Two conclusions follow, and the second depends on a control.
+
+\textbf{First, the tie survives.} The four configurations differ by 0.0137 nats
+in one-step accuracy and by 0.47 in sequence discrepancy against seed standard
+deviations of 0.10--0.42. They are indistinguishable on both criteria. Our prior
+was that the stock path would separate here, because satiation is a
+sequence-level mechanism; it does not.
+
+\textbf{Second, the failure is the feedback loop, not the conditional
+distribution.} Teacher forcing --- sampling at each occasion while the input
+streams stay real --- is the control that separates a genuine failure of
+free-running generation from an error in our rollout:
+
+\begin{center}\small
+\begin{tabular}{lrrl}
+\toprule
+Generator & energy distance & $z$ & verdict \
+\midrule
+teacher-forced & \textbf{0.307} & 1.6 & \textbf{inside the null band} \
+free-running & 1.793 & 9.4 & outside \
+independent draws & 1.776 & 9.3 & outside \
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Teacher-forced sequences are statistically indistinguishable from real
+ones. The per-step distribution and the scoring are therefore sound, and the
+entire discrepancy is created by conditioning the model on its own output.
+
+The mechanism is visible in the generated decision shares:
+
+\begin{center}\small
+\begin{tabular}{lrrrrr}
+\toprule
+& NotBuy & Buy10 Fig-B & Buy1 Weapon & Buy10 Weapon & Buy1 Fig-A \
+\midrule
+observed & 0.503 & 0.021 & 0.023 & 0.012 & 0.176 \
+teacher-forced & 0.410 & 0.048 & 0.036 & 0.020 & 0.169 \
+free-running & \textbf{0.183} & 0.113 & 0.134 & \textbf{0.135} & 0.078 \
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Under free running the model abandons the majority class: NotBuy falls
+from 0.503 to 0.183, while purchases on the rarer banners inflate five- to
+eleven-fold. A sampled purchase updates the inventory, the updated state is one
+the model rarely saw during training, and from there it buys more. This is
+error accumulation of exactly the form the training objective cannot penalise,
+because the likelihood is only ever evaluated on histories the data generated.
+
+\paragraph{What this means for the paper.} The generative deployment described
+in v11 is not currently supported, and the managerial section should be
+rewritten around what the evidence licenses. Three tiers should be distinguished
+explicitly:
+
+\begin{center}\small
+\begin{tabular}{p{2.8cm}p{4.4cm}p{6.0cm}}
+\toprule
+Claim & Status & Licenses \
+\midrule
+next-decision prediction & established, and a tie across families & forecasting
+the next decision \
+sequence generation & \textbf{fails, by a controlled test} & nothing, until the
+feedback loop is addressed \
+structural interpretation & decay and duplicate weights identified; a free
+product-level kernel is not & comparative statics on the identified primitives
+only \
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent This is a more defensible paper than one that asserts the simulation
+works. The contribution becomes a demonstration, with a control, that
+\emph{predictive accuracy does not license simulation} --- a result that
+transfers well beyond this application, and one the current wave of papers using
+learned models as consumer simulators has reason to take seriously.
+
+Remedies exist and are the natural next step: scheduled sampling and related
+exposure-bias corrections, or training against a sequence-level criterion rather
+than one-step likelihood. We report the diagnosis first because it is the part
+that generalises.
+
+\end{document}

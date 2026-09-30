@@ -2950,3 +2950,65 @@ the loss is coverage, not just context. Memory falls by (384/1024)^2 = 7x.
 Any R36c number therefore carries a stated approximation of +0.0011 nats in the
 teacher-forced baseline. That is far below the effects H1 is testing for, but it
 is a real approximation and belongs next to the results.
+
+### R36c — RESULT: the conditional distribution is valid, the feedback loop is not
+
+12 rollouts (4 configurations x 3 seeds), 300 out-of-sample customers, 8
+replicates each, context 384 (approximation priced at +0.0011 nats), on the same
+`outsample_users_holdout_period` cell as the headline NLL. Job 41840.
+
+| generator | energy | z | C2ST AUC |
+|---|---|---|---|
+| first-order Markov | **0.711** | 19.8 | 0.879 |
+| b18 counts, single step | 1.907 ± 0.103 | 55.2 | 0.85 |
+| b18 no stock path | 2.255 ± 0.262 | 59–71 | 0.86 |
+| b29_hl2 (incumbent) | 2.269 ± 0.303 | 54–71 | 0.87 |
+| b18 token inventory | 2.372 ± 0.423 | 52–73 | 0.86 |
+| independent draws | 2.190 | 60.9 | 0.903 |
+
+Null band q95 = 0.078.
+
+**H1 is REFUTED in its specific form.** The prediction was that models tied on
+one-step NLL would separate as generators, with the no-stock model separating.
+They do not: the spread is 0.47 against seed sds of 0.10–0.42, and no-stock
+(2.255) is indistinguishable from the full-stock incumbent (2.269). The tie
+survives the change of criterion.
+
+**Every trained model also loses to a 9x9 transition matrix**, and all of them
+sit near or above independent draws.
+
+**The control settles why (job 41859).** Teacher forcing — sampling at each
+occasion while the input streams stay real:
+
+| arm | energy | z | verdict |
+|---|---|---|---|
+| teacher-forced | **0.307** | 1.6 | **INSIDE the band** |
+| free-running | 1.793 | 9.4 | outside |
+| independent draws | 1.776 | 9.3 | outside |
+
+Teacher-forced sequences are indistinguishable from real ones, so **the per-step
+distribution and the scoring are sound**. The whole discrepancy is created by
+conditioning the model on its own output.
+
+**The mechanism**, from the generated decision shares:
+
+| | NotBuy | Buy10 FigB | Buy1 Wep | Buy10 Wep |
+|---|---|---|---|---|
+| observed | 0.503 | 0.021 | 0.023 | 0.012 |
+| teacher-forced | 0.410 | 0.048 | 0.036 | 0.020 |
+| free-running | **0.183** | 0.113 | 0.134 | **0.135** |
+
+Free running abandons the majority class — NotBuy 0.503 → 0.183 — and inflates
+the rare banners five- to elevenfold. A sampled purchase updates the inventory,
+the updated state is one the model rarely saw in training, and from there it
+buys more. The likelihood cannot penalise this because it is only ever evaluated
+on histories the data generated.
+
+**T2 fails, by a controlled test.** Per the pre-registered rule, no model may be
+used for the R35 counterfactuals, and R35 reports no policy numbers. The
+diagnosis — predictive accuracy does not license simulation — is the result.
+
+**Next**, in order: (1) scheduled sampling or a sequence-level objective, as a
+remedy, reported as a remedy and not a contribution; (2) the campaign-FE re-run,
+now also needed because R36 will be re-scored on whatever configuration the
+remedy produces.
