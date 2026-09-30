@@ -713,6 +713,12 @@ def main() -> None:
     ap.add_argument("--decay-freeze", type=int, default=None,
                     help="R33: hold the half-life fixed, so a grid over --decay-init is a "
                          "profile likelihood")
+    ap.add_argument("--sched-sampling", type=float, default=None,
+                    help="R36d: max probability of feeding the model its OWN "
+                         "previous decision during training (0 = teacher forcing "
+                         "only, the default). Ramped linearly over --ss-ramp epochs.")
+    ap.add_argument("--ss-ramp", type=int, default=None,
+                    help="epochs over which scheduled sampling ramps to its max")
     ap.add_argument("--camp-fe", type=int, default=None,
                     help="R33b: 1 = per-campaign bias on the purchase logits, so the "
                          "decay is identified from within-campaign timing (R34 s6)")
@@ -861,6 +867,10 @@ def main() -> None:
         cfg["block_len"] = args.block_len
     if args.camp_fe is not None:
         cfg["camp_fe"] = bool(args.camp_fe)
+    if args.sched_sampling is not None:
+        cfg["sched_sampling"] = float(args.sched_sampling)
+    if args.ss_ramp is not None:
+        cfg["ss_ramp"] = int(args.ss_ramp)
     if args.decay_init is not None:
         cfg["decay_init"] = args.decay_init
     if args.decay_freeze is not None:
@@ -1031,6 +1041,12 @@ def main() -> None:
         t0 = time.time()
         running, nb = 0.0, 0
         opt.zero_grad(set_to_none=True)
+        ss_max = float(cfg.get("sched_sampling", 0.0) or 0.0)
+        ss_ramp = max(int(cfg.get("ss_ramp", 10) or 10), 1)
+        ss_p_now = (0.0 if ss_max <= 0 else
+                    ss_max * min(1.0, (ep + 1) / ss_ramp))
+        if ss_max > 0:
+            print(f"          scheduled sampling p={ss_p_now:.3f}")
 
         for i, batch in enumerate(train_dl):
             lto = batch["lto"].to(device, non_blocking=True)
@@ -1046,6 +1062,34 @@ def main() -> None:
 
             ctx = (torch.autocast("cuda", dtype=adtype)
                    if adtype is not None else torch.autocast("cpu", enabled=False))
+
+            # R36d: SCHEDULED SAMPLING (Bengio et al. 2015).  R36c showed the
+            # model's per-step distribution is fine -- teacher-forced samples are
+            # inside the null band -- while free running collapses (NotBuy 0.503
+            # -> 0.183).  The gap is that training only ever sees histories the
+            # DATA generated.  This feeds the model its own previous decision
+            # with probability p, ramped from 0, so it learns on the prefixes it
+            # will actually visit.
+            #
+            # Two passes, because the architecture consumes the whole sequence in
+            # parallel: sample under teacher forcing, rebuild the previous-decision
+            # stream, then re-forward for the loss.  Costs one extra forward.
+            #
+            # LIMITATION, to be stated with any result: this corrupts the DECISION
+            # stream only.  The obtained-products stream stays real, so the
+            # inventory drift that R36c's decision shares point to is not
+            # reproduced here.  If this does not close the gap, that is evidence
+            # the inventory channel is the binding one.
+            if ss_p_now > 0.0:
+                with torch.no_grad(), ctx:
+                    pre = model(lto, obt, prev, uid, ipt, **inv)
+                    pre = (pre[0] if isinstance(pre, (tuple, list)) else pre)
+                    samp = torch.distributions.Categorical(
+                        logits=pre[..., 1:1 + N_CLASSES].float()).sample() + 1
+                shifted = torch.cat([prev[:, :1], samp[:, :-1]], dim=1)
+                take = (torch.rand(prev.shape, device=prev.device) < ss_p_now)                     & (prev != PAD_ID)
+                prev = torch.where(take, shifted, prev)
+
             with ctx:
                 logits = model(lto, obt, prev, uid, ipt, **inv)
                 loss = loss_fn(logits.float(), tgt) / accum

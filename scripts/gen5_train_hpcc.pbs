@@ -150,6 +150,10 @@ KERNEL="${KERNEL:-}"
 DECAY="${DECAY:-}"
 TIER="${TIER:-}"
 CAMP_FE="${CAMP_FE:-}"
+#   SCHED_SAMPLING=0.25  R36d: feed the model its own previous decision with
+#                        this probability, ramped over SS_RAMP epochs
+SCHED_SAMPLING="${SCHED_SAMPLING:-}"
+SS_RAMP="${SS_RAMP:-}"
 DECAY_INIT="${DECAY_INIT:-}"
 DECAY_FREEZE="${DECAY_FREEZE:-}"
 NO_PROD_FEAT="${NO_PROD_FEAT:-}"
@@ -286,6 +290,8 @@ args=(
 [[ -n "$DECAY" ]] && args+=(--decay "$DECAY")
 [[ -n "$TIER" ]] && args+=(--tier "$TIER")
 [[ -n "$CAMP_FE" ]] && args+=(--camp-fe "$CAMP_FE")
+[[ -n "$SCHED_SAMPLING" ]] && args+=(--sched-sampling "$SCHED_SAMPLING")
+[[ -n "$SS_RAMP" ]] && args+=(--ss-ramp "$SS_RAMP")
 [[ -n "$DECAY_INIT" ]] && args+=(--decay-init "$DECAY_INIT")
 [[ -n "$DECAY_FREEZE" ]] && args+=(--decay-freeze "$DECAY_FREEZE")
 [[ "$NO_PROD_FEAT" == "1" ]] && args+=(--no-product-features)
