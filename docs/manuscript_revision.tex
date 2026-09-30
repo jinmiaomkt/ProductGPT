@@ -1,6 +1,6 @@
 \documentclass[11pt]{article}
 \usepackage[margin=1in]{geometry}
-\Sepackage{amsmath,amssymb,booktabs,graphicx,longtable}
+\usepackage{amsmath,amssymb,booktabs,graphicx,longtable}
 \usepackage[colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black]{hyperref}
 \usepackage{xcolor}
 \newcommand{\new}[1]{\textcolor{blue!60!black}{#1}}
@@ -23,7 +23,7 @@ lives. The results section is rewritten because its central empirical claim ---
 that ProductGPT outperforms recurrent benchmarks --- did not survive a
 235-run tuning programme in which every family was tuned to its own frontier.
 Section~\ref{sec:log} lists every change and its evidence. Three claims in v11
-are \drop{withdrawn}; two reviewer comments are now answerable with data rather
+are \drop{withdrawn}; three reviewer comments are now answerable with data rather
 than argument.
 \end{abstract}
 
@@ -53,17 +53,17 @@ accuracy. Reviewer Comment~1 (cross-attention vs.\ triplets) is answered with a
 measurement rather than a preference.} \\
 \addlinespace
 \S3 Heterogeneity & absent & \new{Per-customer embedding and a mixture over
-output projections, both estimated. Answers the first half of reviewer
+output projections, both estimated. Answers the first question in reviewer
 Comment~2.} \\
 \addlinespace
 \S3 Stopping rule & absent & \new{States that NotBuy is an ordinary predicted
 class, not an end-of-sequence token, and that it is defined by a fixed 24-hour
-interval. Answers the second half of Comment~2.} \\
+interval. Answers the second question in Comment~2.} \\
 \addlinespace
 \S3 Teacher forcing & ``Without teacher forcing, simulation errors would
 accumulate rapidly'' & \new{Correct, and now the starting point of a test rather
 than an aside: training on data prefixes while deployment visits model prefixes
-is exactly the gap Section~\ref{sec:gen} measures. Answers the third half of
+is exactly the gap Section~\ref{sec:gen} measures. Answers the third question in
 Comment~2.} \\
 \addlinespace
 \S5 Split & 80/10/10 by customer; campaign 28 = new-LTP holdout, 29--30 =
@@ -261,7 +261,7 @@ incumbent by more than 0.02 nats on at least four of five paired seeds.
 \begin{center}\small
 \begin{tabular}{llrr}
 \toprule
-Rank & Family & Holdout NLL & Parameters \\
+Rank & Family (better vocabulary) & Holdout NLL & Parameters \\
 \midrule
 1 & plain GRU & \textbf{0.8856 $\pm$ 0.0067} & 1.25M \\
 2 & GRU encoder & 0.8904 $\pm$ 0.0031 & 4.01M \\
@@ -287,9 +287,9 @@ they never saw'' does not.
 \begin{center}\small
 \begin{tabular}{lrr}
 \toprule
-Component removed or added & $\Delta$ validation NLL & Verdict \\
+Component removed or added & $\Delta$ NLL & Verdict \\
 \midrule
-stock path removed entirely & $+0.0137$ & inside the margin \\
+stock path removed entirely & $+0.0137^{\dagger}$ & inside the margin \\
 per-customer embedding added & $+0.0046$ & no gain \\
 mixture over output projections added & $+0.0000$ & exact tie \\
 both added & $+0.0073$ & no gain \\
@@ -299,11 +299,18 @@ product attributes removed & $+0.0064$ & a real cost \\
 \end{tabular}
 \end{center}
 
+\noindent $^{\dagger}$ measured on the holdout cell, where that ablation was run;
+every other row is a validation delta against the frozen configuration. The two
+are not interchangeable, so the holdout row is marked rather than pooled with
+the rest.
+
 \noindent Two readings deserve emphasis.
 
 \textbf{The learned identity embedding contributes nothing.} Deleting it costs
-0.0001 nats and is slightly better on the holdout; deleting the attributes costs
-sixty times as much. Everything the model knows about a product, it knows from
+0.0001 nats and is slightly better on the holdout, while deleting the
+\emph{attributes} costs 0.0064 --- two orders of magnitude more, though the
+ratio itself should not be read closely, since the numerator sits at the
+rounding floor. Everything the model knows about a product, it knows from
 the attribute projection. This is why the perception map in v11 is withdrawn: a
 decomposition of the two branches scores the learned identity part at chance
 (0.404 against 0.408 for a random baseline), and the visible clustering is the
@@ -383,9 +390,9 @@ trained model, and independent draws score 2.19.
 
 Two conclusions follow, and the second depends on a control.
 
-\textbf{First, the tie survives.} The four configurations differ by 0.0137 nats
-in one-step accuracy and by 0.47 in sequence discrepancy against seed standard
-deviations of 0.10--0.42. They are indistinguishable on both criteria. Our prior
+\textbf{First, the tie survives.} The four configurations span 0.018 nats in
+one-step holdout accuracy (0.8846 to 0.9027) and 0.47 in sequence discrepancy,
+against seed standard deviations of 0.0075 and 0.10--0.42 respectively. They are indistinguishable on both criteria. Our prior
 was that the stock path would separate here, because satiation is a
 sequence-level mechanism; it does not.
 
@@ -397,11 +404,11 @@ free-running generation from an error in our rollout:
 \begin{center}\small
 \begin{tabular}{lrrl}
 \toprule
-Generator & energy distance & $z$ & verdict \
+Generator & energy distance & $z$ & verdict \\
 \midrule
-teacher-forced & \textbf{0.307} & 1.6 & \textbf{inside the null band} \
-free-running & 1.793 & 9.4 & outside \
-independent draws & 1.776 & 9.3 & outside \
+teacher-forced & \textbf{0.307} & 1.6 & \textbf{inside the null band} \\
+free-running & 1.793 & 9.4 & outside \\
+independent draws & 1.776 & 9.3 & outside \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -415,11 +422,11 @@ The mechanism is visible in the generated decision shares:
 \begin{center}\small
 \begin{tabular}{lrrrrr}
 \toprule
-& NotBuy & Buy10 Fig-B & Buy1 Weapon & Buy10 Weapon & Buy1 Fig-A \
+& NotBuy & Buy10 Fig-B & Buy1 Weapon & Buy10 Weapon & Buy1 Fig-A \\
 \midrule
-observed & 0.503 & 0.021 & 0.023 & 0.012 & 0.176 \
-teacher-forced & 0.410 & 0.048 & 0.036 & 0.020 & 0.169 \
-free-running & \textbf{0.183} & 0.113 & 0.134 & \textbf{0.135} & 0.078 \
+observed & 0.503 & 0.021 & 0.023 & 0.012 & 0.176 \\
+teacher-forced & 0.410 & 0.048 & 0.036 & 0.020 & 0.169 \\
+free-running & \textbf{0.183} & 0.113 & 0.134 & \textbf{0.135} & 0.078 \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -439,15 +446,15 @@ explicitly:
 \begin{center}\small
 \begin{tabular}{p{2.8cm}p{4.4cm}p{6.0cm}}
 \toprule
-Claim & Status & Licenses \
+Claim & Status & Licenses \\
 \midrule
 next-decision prediction & established, and a tie across families & forecasting
-the next decision \
+the next decision \\
 sequence generation & \textbf{fails, by a controlled test} & nothing, until the
-feedback loop is addressed \
+feedback loop is addressed \\
 structural interpretation & decay and duplicate weights identified; a free
 product-level kernel is not & comparative statics on the identified primitives
-only \
+only \\
 \bottomrule
 \end{tabular}
 \end{center}
