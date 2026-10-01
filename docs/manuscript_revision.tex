@@ -325,23 +325,33 @@ recovered attribute structure and biases the satiation coefficient by a factor
 of 2.2, and modelling it removes both problems. A criterion that selects on
 predictive fit would have discarded it.
 
-\subsection*{Result 3: the decay is short, and its optimum is interior}
+\subsection*{Result 3: the decay half-life is not identified}
 
-Freezing the half-life and profiling the likelihood over it gives validation NLL
-of 0.8795, \textbf{0.8735}, 0.8756, 0.8801 and 0.8817 at half-lives of 0.5, 1,
-2, 5 and 10 occasions. The optimum is interior --- 0.5 is worse than 1 and the
-curve rises monotonically thereafter --- so \textbf{holdings fade over days, not
-over campaigns}. The gap between 1 and 2 is a quarter of a seed sd, so we report
-an interval (one to two occasions) rather than a point estimate.
+Freezing the half-life and profiling the likelihood over it, \emph{with campaign
+fixed effects in force}, gives validation NLL of 0.8814, 0.8810 and 0.8773 at
+half-lives of 1, 2 and 5 occasions: a spread of 0.0041 against seed standard
+deviations of 0.009 to 0.015. \textbf{The profile is flat, and the decay
+half-life is not identified on this data at five seeds.} We report the stock's
+decay as a fitted component of the model, not as an estimated behavioural
+quantity, and we draw no substantive conclusion from its value.
 
-\paragraph{A disclosed limitation.} The runs behind this profile were submitted
-with campaign fixed effects enabled, but a defect in the data pipeline meant the
-campaign index never reached the model, so the effects were never estimated. We
-discovered this on 30 September 2026 and have fixed it. Simulation indicates
-that omitting this control \emph{inflates} the estimated half-life, which is the
-opposite direction to what we observe, so the qualitative conclusion is not
-threatened; nonetheless the profile is being recomputed with the control in
-force, and the interval above should be treated as provisional until then.
+\paragraph{What this replaces, and why it matters.} An earlier version of this
+profile --- run without the control --- showed validation NLL of 0.8795,
+0.8735, 0.8756, 0.8801 and 0.8817 at half-lives of 0.5, 1, 2, 5 and 10, an
+apparent interior optimum at one to two occasions. We reported it as evidence
+that holdings fade over days rather than campaigns. \textbf{That claim is
+withdrawn.} Those runs were submitted with campaign fixed effects enabled, but a
+defect in the data pipeline meant the campaign index never reached the model, so
+the control was never applied; with it genuinely in force the apparent optimum
+disappears and the ordering reverses.
+
+The episode is worth one sentence in the paper rather than a footnote, because
+it is an instance of the point Section~\ref{sec:gen} makes in a different
+register: a quantity can look estimated --- it had a profile, a minimum and an
+uncertainty interval --- while being an artefact of seed noise under a control
+that was asserted but absent. Simulation (R34 s6) shows the decay \emph{is}
+recoverable when campaign-level demand shocks are controlled and the design is
+informative; it is this panel, not the estimator, that cannot pin it down.
 
 \subsection*{Result 4: where the families differ, they differ compositionally}
 

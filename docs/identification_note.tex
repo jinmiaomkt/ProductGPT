@@ -543,18 +543,35 @@ Half-life (frozen) & validation NLL & holdout NLL \\
 \end{tabular}
 \end{center}
 
-\noindent Both curves penalise long half-lives and favour short ones, so
-\textbf{holdings fade over days, not campaigns: a half-life of roughly 2--10
-occasions}. The two argmins differ (2 on validation, 5 on the holdout) by less
-than one seed standard deviation, so the point estimate is not pinned down.
+\noindent \textbf{WITHDRAWN (1 October 2026).} The table above, and the reading
+we drew from it --- that holdings fade over days rather than campaigns, with a
+half-life of roughly 2--10 occasions --- do not survive a correction, and are
+retained here only so the record shows what was claimed.
 
-\paragraph{A protocol correction.} The first version of this profile was read
-off the \emph{holdout} cell. Selection belongs on validation, with the holdout
-opened once after the configuration is frozen; reading the argmin off the
-holdout and then quoting that cell's fit is contaminated. The table above shows
-both columns for transparency, and a clean re-selection (three frozen
-half-lives, five seeds each, chosen on validation with the kernel present) is
-running. Any headline that depends on the half-life should wait for it.
+\paragraph{Why it is withdrawn.} Every run in the table was submitted with
+campaign fixed effects enabled, but \texttt{collate\_multistream} never copied
+the campaign index into the batch, so the trainer's guard on that field was
+always false and the fixed effects were never estimated. The defect was found on
+30 September 2026 and fixed. Re-running the profile with the control genuinely
+in force (five seeds per cell) gives validation NLL of 0.8814, 0.8810 and 0.8773
+at half-lives of 1, 2 and 5 --- a spread of 0.0041 against seed standard
+deviations of 0.009 to 0.015, with the ordering reversed.
+
+\begin{center}
+\emph{The profile is flat. The decay half-life is not identified on this panel.}
+\end{center}
+
+\noindent Note that this is the opposite of what we predicted when the defect
+was found: s6(B) below shows that omitting a campaign control \emph{inflates}
+the half-life, so we expected the corrected estimate to be shorter still, and
+argued on that basis that the qualitative claim was safe. It was not. The
+apparent interior optimum was inside seed noise from the start, and the control
+removed an artefact rather than shifting a signal.
+
+\paragraph{An earlier protocol correction, now superseded.} The first version of
+this profile was read off the \emph{holdout} cell rather than validation, which
+is contaminated selection. That correction stands on its own terms, but it is no
+longer the binding problem with the number.
 
 \paragraph{Caveat on transferring s1's optimism.} The simulation's satiation was
 far stronger than the real data appear to carry --- there, removing the entire

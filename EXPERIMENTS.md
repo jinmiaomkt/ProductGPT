@@ -3012,3 +3012,54 @@ diagnosis — predictive accuracy does not license simulation — is the result.
 remedy, reported as a remedy and not a contribution; (2) the campaign-FE re-run,
 now also needed because R36 will be re-scored on whatever configuration the
 remedy produces.
+
+### Batches 33–35 — RESULT: the half-life claim is withdrawn
+
+26 runs (41869–41894), five seeds per cell except batch 35 (three).
+
+| cell | validation | holdout |
+|---|---|---|
+| b33 campaign FE, half-life 1 | 0.8814 ± 0.0149 | 0.8805 ± 0.0108 |
+| b33 campaign FE, half-life 2 | 0.8810 ± 0.0149 | 0.8837 ± 0.0138 |
+| b33 campaign FE, half-life 5 | **0.8773 ± 0.0094** | 0.8809 ± 0.0093 |
+| b34 NO campaign FE, half-life 2 | 0.8868 ± 0.0176 | 0.8974 ± 0.0112 |
+| b35 scheduled sampling p=0.15 | 0.8739 ± 0.0121 | 0.8767 ± 0.0085 |
+| b35 scheduled sampling p=0.35 | 0.8801 ± 0.0059 | 0.8872 ± 0.0032 |
+
+**1. The decay half-life is NOT identified.** With the control genuinely applied
+the profile is flat: spread 0.0041 across half-lives 1/2/5 against seed sds of
+0.009–0.015, and the ordering REVERSES (5 is now nominally best, 1 was before).
+**"Holdings fade over days, not campaigns" is withdrawn**, along with the
+"interior optimum at 1–2 occasions".
+
+The earlier reassurance was wrong, and the way it was wrong is worth recording.
+When the bug was found I argued the omitted-control bias *inflates* the
+half-life (R34 s6: 30 → 59 → 147), so a short estimate was safe in direction.
+The direction reasoning was sound but irrelevant: the apparent optimum was
+inside seed noise all along, so the control removed an ARTEFACT rather than
+shifting a signal. A bias-direction argument cannot rescue a quantity that was
+never resolved above noise in the first place.
+
+**2. Campaign FE helps, but not significantly.** b33 hl2 beats b34 by 0.0058 on
+validation and 0.0137 on holdout, both favouring the control but both inside
+one seed sd (0.011–0.018). The 20-vs-21 test has now actually run; the verdict
+is directionally right, not demonstrated.
+
+**3. Scheduled sampling costs nothing on one-step fit.** p=0.15 is 0.0071 better
+than its matched control (b33 hl2) on validation and 0.0070 on holdout, within
+noise but with no penalty — contrary to the prediction that it would trade
+one-step accuracy for generative validity. p=0.35 is a wash. Whether it fixes
+the R36c failure is R36e (job 41897), scoring both against b33 hl2 on the same
+cell.
+
+**Artifacts corrected** (1 Oct): decks 44 and 45, `45 Executive Report.pdf`,
+`45 Manuscript Revision.pdf`, and `44 Meeting extra.pdf`. The simulation results
+where the half-life IS recovered (R34 s1, s6) are untouched and remain valid:
+they establish that the estimator can recover a decay when the design is
+informative. It is this panel that cannot pin it down.
+
+**A trap avoided.** `load_checkpoint` zeroed `camp_bias` whenever it was
+non-zero — right for legacy checkpoints, where those weights are untrained
+initialisation, but catastrophic for batches 33+, whose campaign effects are
+genuinely estimated. "Non-zero" cannot distinguish an initialisation from an
+estimate. Now an explicit `--legacy-camp-bias` flag, defaulting to KEEP.
