@@ -3142,3 +3142,58 @@ hair, and its top functionals are sat_k1, sat_k2, sat_k3 — the satiation
 signature. So the environment's duplicate structure is very slightly off. It is
 far too small to carry any part of the 2.352, but it is the next thing to tighten
 if the environment is ever used for a policy number.
+
+### R36h — the 50/50 guarantee: implemented, calibrated, and REFUSED by the data
+
+Prompted by a co-author's question about the conditional probability of a 5-star
+given previous results. Audit of `simulation/gacha_env.py` against the gen-4
+pipeline (`evaluation/infer_new_campaign_advanced.py`):
+
+| rule | gen-4 code | our environment (before) |
+|---|---|---|
+| 5-star pity (soft 74/63, hard 90/80, +base x10 per pull) | yes | **yes** |
+| 4-star pity (soft 9, hard 10) | yes | **yes** |
+| pity warmed on the customer's real prefix | no | **yes** |
+| **50/50 guarantee** (lose once -> next 5-star featured) | yes | **NO** |
+| weapon Epitomized Path (two losses -> guaranteed) | yes | **NO** |
+
+The guarantee existed in our code but only inside `identity="published"`, and
+every R36 run used `identity="empirical"`, so it was never read or updated.
+Rarity was conditional on history; WHICH 5-star you received was an
+unconditional mixture.
+
+**The fix.** Keep the mechanism and calibrate its level rather than assuming the
+published 0.5. Under a guarantee after L consecutive losses the stationary
+featured share is `1 / sum_{s=0..L} (1-q)^s`, which inverts for q. Also added a
+dilution correction: estimate the share only on rows whose recorded acquisitions
+match the decision's pull count, since a Buy10 fills ten slots just 72% of the
+time and that bias drags the share down.
+
+**The data refuses it.** On 2,000 calibration customers:
+
+| banner | featured share (clean) | raw | n | floor | verdict |
+|---|---|---|---|---|---|
+| figure A | 0.323 | 0.320 | 2,543 | 0.500 | below the floor |
+| figure B | 0.146 | 0.142 | 1,256 | 0.500 | far below |
+| weapon | 0.335 | 0.310 | 1,042 | 0.333 | not separated (q would be 0.005) |
+
+**No q can produce these shares.** The floor is 0.50 for a character banner
+(q=0) and 0.333 for the weapon banner at L=2; the observed shares sit below
+both. The weapon banner clears its floor by 0.002, which fits q at the boundary
+— "always lose until forced" — so a two-standard-error guard now rejects it
+rather than imposing structure the data cannot support.
+
+**The dilution correction moved almost nothing** (0.320 -> 0.323), which RULES
+OUT attribution noise in the acquisition block as the explanation. The remaining
+candidate is the featured-product attribution itself: which banner a decision
+refers to, and whether the `lto` slot for that row names the product that was
+actually featured when the customer pulled. Figure-B's slot is empty in 55% of
+campaigns, and its share is the lowest of the three — consistent with that.
+
+**Status.** The machinery is in place, calibrated, tested (32 + 35 checks pass)
+and currently inactive on all three banners, announcing why at fit time. The
+environment therefore behaves exactly as it did for R36a-g, so no earlier result
+changes. What has changed is that the omission is now measured rather than
+unexamined, and it is a finding about the DATA: this panel is inconsistent with
+the published 50/50 guarantee, by a wide margin and not because of the
+acquisition-attribution noise we had already documented.

@@ -86,17 +86,56 @@ def _pity_prob(base: float, since: int, soft: int, hard: int) -> float:
     return float(min(1.0, base + (i - soft + 1) * base * 10.0))
 
 
+# Consecutive non-featured 5-stars before the next one is GUARANTEED featured.
+# Character banners: lose once, the next is guaranteed. Weapon banners carry the
+# Epitomized Path, where two losses guarantee the selected weapon.
+LOSSES_TO_GUARANTEE: Dict[str, int] = {"figA": 1, "figB": 1, "wep": 2}
+
+
+def featured_share(q: float, L: int) -> float:
+    """Long-run P(featured | 5*) under a guarantee after L consecutive losses.
+
+    States count consecutive losses. From s < L: featured w.p. q (back to 0),
+    otherwise to s+1. From L: featured with certainty. The stationary featured
+    share collapses to 1 / sum_{s=0..L} (1-q)^s.
+    """
+    r = 1.0 - q
+    return 1.0 / sum(r ** s for s in range(L + 1))
+
+
+def solve_q(share: float, L: int) -> Optional[float]:
+    """Invert featured_share. None when `share` is below the mechanism's floor.
+
+    The floor is featured_share(0, L) -- 0.50 for a character banner, 0.333 for
+    the weapon banner. A measured share below it cannot be produced by ANY
+    guarantee of that form, so the caller must fall back.
+    """
+    if not (featured_share(0.0, L) <= share <= 1.0):
+        return None
+    lo, hi = 0.0, 1.0
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        if featured_share(mid, L) < share:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
 @dataclass
 class PityState:
     """Per-banner pity counters for one simulated customer."""
     since5: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
     since4: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
     guaranteed: Dict[str, bool] = field(default_factory=lambda: defaultdict(bool))
+    # consecutive non-featured 5-stars, per banner (the guarantee counter)
+    losses: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
 
     def copy(self) -> "PityState":
         return PityState(defaultdict(int, self.since5),
                          defaultdict(int, self.since4),
-                         defaultdict(bool, self.guaranteed))
+                         defaultdict(bool, self.guaranteed),
+                         defaultdict(int, self.losses))
 
 
 class AcquisitionEnv:
@@ -131,6 +170,7 @@ class AcquisitionEnv:
         nslots: Dict[int, Counter] = defaultdict(Counter)
         rar: Dict[str, Counter] = defaultdict(Counter)
         cls: Dict[Tuple[str, int], Counter] = defaultdict(Counter)
+        cls_clean: Dict[Tuple[str, int], Counter] = defaultdict(Counter)
         within: Dict[Tuple[int, int, int], Counter] = defaultdict(Counter)
 
         for it in items:
@@ -171,6 +211,16 @@ class AcquisitionEnv:
                         else:
                             k = "other_lto"
                         cls[(banner, r)][k] += 1
+                        # ALSO accumulate on "clean" rows only -- those where the
+                        # recorded acquisitions match the decision's pull count.
+                        # Attribution in this dataset is imperfect (a Buy10 fills
+                        # ten slots just 72% of the time), and that dilution
+                        # drags the measured featured share DOWN. The guarantee
+                        # has a hard floor, so a diluted estimate can fall below
+                        # what the mechanism can produce; the clean subset is the
+                        # less biased estimate of the real rate.
+                        if int(valid.sum()) == NOMINAL_PULLS[d]:
+                            cls_clean[(banner, r)][k] += 1
                     within[(r, self.vocab.figure[p], self.vocab.lto[p])][p] += 1
 
         if not nslots:
@@ -189,6 +239,50 @@ class AcquisitionEnv:
             ids = np.array(sorted(c), dtype=np.int64)
             w = np.array([c[int(i)] for i in ids], dtype=np.float64)
             self.pool_p[key] = (ids, w / w.sum())
+
+        # ---- calibrate the 50/50 guarantee -------------------------------
+        # Which 5-star you receive depends on PREVIOUS results: lose the coin
+        # flip and the next 5-star is guaranteed featured (two losses on the
+        # weapon banner, the Epitomized Path). An unconditional mixture gets the
+        # featured RATE right on average but the SEQUENCING wrong, which shows
+        # up in how duplicate copies cluster -- and that is exactly the
+        # satiation signature the arm-C classifier leaned on.
+        #
+        # We keep the mechanism and calibrate its level: solve q so the long-run
+        # featured share matches the data, rather than assuming the published
+        # 0.5. Where the measured share sits below the mechanism's floor even
+        # after the dilution correction, no q exists and we fall back to the
+        # unconditional mixture for that banner, loudly.
+        self.guarantee_q = {}
+        self.guarantee_L = {}
+        for banner, L in LOSSES_TO_GUARANTEE.items():
+            key = (banner, 5)
+            clean, allrows = cls_clean.get(key), cls.get(key)
+            if not clean or sum(clean.values()) < 30:
+                clean = allrows
+            if not clean or sum(clean.values()) == 0:
+                continue
+            n = sum(clean.values())
+            share = clean["featured"] / n
+            q = solve_q(share, L)
+            floor = featured_share(0.0, L)
+            raw = (allrows["featured"] / max(sum(allrows.values()), 1)) if allrows else float("nan")
+            # A share that only just clears the floor fits q at the boundary,
+            # which is not a guarantee -- it is "always lose until forced", and
+            # switching it on would impose structure the data does not support.
+            # Require the share to beat the floor by two standard errors.
+            se = (share * (1.0 - share) / max(n, 1)) ** 0.5
+            if q is None or share - floor < 2.0 * se:
+                why = ("below" if q is None else "not separated from")
+                print(f"[env] {banner}: featured share {share:.3f} (raw {raw:.3f}, n={n}) is "
+                      f"{why} the guarantee floor {floor:.3f} for L={L}; falling back to "
+                      "the unconditional mixture for this banner")
+                continue
+            self.guarantee_q[banner] = q
+            self.guarantee_L[banner] = L
+            print(f"[env] {banner}: guarantee ON, L={L}, featured share {share:.3f} "
+                  f"(raw {raw:.3f}) -> q={q:.3f}")
+
         self._fitted = True
         return self
 
@@ -248,6 +342,22 @@ class AcquisitionEnv:
                 return self._from_pool(5, self.vocab.figure_of_banner(banner), 0, rng,
                                        exclude=featured)
             probs = self.p_class.get((banner, 5))
+            q = self.guarantee_q.get(banner)
+            if q is not None and probs is not None:
+                # Conditional on previous results: a run of L losses guarantees
+                # the next 5-star is featured. Only the featured/not split is
+                # governed by the guarantee; how a NON-featured 5-star divides
+                # between the standard pool and other limited products keeps the
+                # calibrated ratio.
+                L = self.guarantee_L[banner]
+                if st.losses[banner] >= L or rng.random() < q:
+                    st.losses[banner] = 0
+                    return int(rng.choice(featured))
+                st.losses[banner] += 1
+                rest = probs[1] + probs[2]
+                take_std = rest <= 0 or rng.random() < probs[1] / rest
+                return self._from_pool(5, self.vocab.figure_of_banner(banner),
+                                       0 if take_std else 1, rng, exclude=featured)
             if probs is not None and probs.sum() > 0:
                 k = int(rng.choice(3, p=probs))
                 if k == 0:
