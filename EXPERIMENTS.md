@@ -3063,3 +3063,42 @@ non-zero — right for legacy checkpoints, where those weights are untrained
 initialisation, but catastrophic for batches 33+, whose campaign effects are
 genuinely estimated. "Non-zero" cannot distinguish an initialisation from an
 estimate. Now an explicit `--legacy-camp-bias` flag, defaulting to KEEP.
+
+### R36e — RESULT: scheduled sampling cuts the generative gap by 61%, and is free
+
+Job 41897. Same cell, same protocol and same null band as R36c, so the numbers
+are directly comparable.
+
+| generator | energy | sd | C2ST AUC |
+|---|---|---|---|
+| first-order Markov | **0.711** | — | 0.879 |
+| scheduled sampling p = 0.35 | **0.928** | 0.260 | 0.827 |
+| scheduled sampling p = 0.15 | 1.390 | 0.358 | 0.847 |
+| independent draws | 2.190 | — | 0.903 |
+| b33 control (no scheduled sampling) | 2.352 | 0.198 | 0.859 |
+
+Null band q95 = 0.078.
+
+**It works, and the response is monotone in p**: 2.352 → 1.390 → 0.928 as p goes
+0 → 0.15 → 0.35. The classifier AUC falls with it (0.859 → 0.827). That dose
+response is what makes this a mechanism rather than a lucky seed.
+
+**And it is free.** On one-step accuracy p=0.35 scores 0.8801 validation against
+the control's 0.8810 — no penalty, where the expectation was that exposure
+correction would trade one-step fit for generative validity. The trade did not
+have to be made.
+
+**But T2 still fails.** 0.928 is twelve times the null band, and still worse than
+a 9x9 transition matrix. `sat_k1` remains the top discriminating functional, so
+the satiation signature is still what gives the model away.
+
+**What this says about the limitation.** The implementation corrupts the DECISION
+stream only; the obtained-products stream stays real. It was pre-registered that
+if this failed, the inventory channel was the binding one. It did not fail — it
+closed 61% of the gap — so the decision channel carries most of the exposure
+problem. Whether the rest is the inventory channel is now worth testing, by
+putting the acquisition environment inside the training loop.
+
+**Next, in order:** (1) push p higher (0.5, 0.75) and find where the one-step
+cost finally appears; (2) the environment in the training loop, if (1) plateaus
+above the band.
