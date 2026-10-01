@@ -77,6 +77,11 @@ def main() -> None:
     ap.add_argument("--chunk", type=int, default=32)
     ap.add_argument("--runs-dir", default=str(RUNS))
     ap.add_argument("--out", default="results/r36/r36c.json")
+    ap.add_argument("--legacy-camp-bias", action="store_true",
+                    help="checkpoint predates the 29 Sep collate fix, so its "
+                         "camp_bias is an untrained initialisation: zero it so the "
+                         "rollout reproduces the function that was trained. Do NOT "
+                         "pass this for batches 33+, whose campaign effects are real.")
     ap.add_argument("--probe", action="store_true",
                     help="time one chunk of one config and stop")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -127,7 +132,8 @@ def main() -> None:
     if a.tf_nll:
         import torch.nn.functional as Fn
         model, mcfg = load_checkpoint(ckpt_path(a.configs[0], a.seeds[0], runs),
-                                      device=a.device)
+                                      device=a.device,
+                                      legacy_camp_bias=a.legacy_camp_bias)
         tot = n = 0.0
         with torch.no_grad():
             for ch in chunks:
@@ -204,7 +210,8 @@ def main() -> None:
             except FileNotFoundError as e:
                 print(f"  skip {tag} s{sd}: {e}")
                 continue
-            model, mcfg = load_checkpoint(cp, device=a.device)
+            model, mcfg = load_checkpoint(cp, device=a.device,
+                                          legacy_camp_bias=a.legacy_camp_bias)
             # set_product_range is GLOBAL. A checkpoint from a different
             # vocabulary level would silently re-point the id range that the
             # already-built dataset and the functionals use, and the satiation

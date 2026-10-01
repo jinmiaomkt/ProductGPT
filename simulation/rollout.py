@@ -49,7 +49,7 @@ NOT_BUY = 9
 
 # --------------------------------------------------------------- model load
 def load_checkpoint(ckpt_path, device: str = "cpu", *, vocab_level: Optional[int] = None,
-                    neutralise_untrained_camp_bias: bool = True):
+                    legacy_camp_bias: bool = False):
     """Rebuild the trained model from a run's best.pt.
 
     The checkpoint carries `cfg` and `num_users`, so the architecture is
@@ -109,12 +109,18 @@ def load_checkpoint(ckpt_path, device: str = "cpu", *, vocab_level: Optional[int
     # start applying those untrained random offsets to the purchase logits and
     # the generator would no longer be the model that was trained.  Zero them,
     # so passing campaign is a no-op and the rollout reproduces training exactly.
-    if neutralise_untrained_camp_bias and getattr(model, "camp_bias", None) is not None:
+    #
+    # THIS MUST BE OPT-IN, not inferred from the weights.  A checkpoint trained
+    # AFTER the fix (batches 33+) has a genuinely estimated camp_bias that is
+    # also non-zero, and zeroing it would silently delete the control those runs
+    # exist to establish.  "Non-zero" cannot distinguish the two cases, so the
+    # caller has to say which era the checkpoint is from.
+    if legacy_camp_bias and getattr(model, "camp_bias", None) is not None:
         w = model.camp_bias.weight
         if float(w.abs().max()) > 0:
-            print(f"[ckpt] camp_bias is untrained (max|w|={float(w.abs().max()):.3e}); "
-                  "zeroing it so the rollout reproduces the trained function. "
-                  "Re-train with the collate fix to get real campaign fixed effects.")
+            print(f"[ckpt] legacy checkpoint: camp_bias is untrained "
+                  f"(max|w|={float(w.abs().max()):.3e}); zeroing it so the rollout "
+                  "reproduces the trained function.")
             with torch.no_grad():
                 w.zero_()
 
