@@ -3102,3 +3102,43 @@ putting the acquisition environment inside the training loop.
 **Next, in order:** (1) push p higher (0.5, 0.75) and find where the one-step
 cost finally appears; (2) the environment in the training loop, if (1) plateaus
 above the band.
+
+### R36f — ARM C: the lottery is not the problem, the closed loop is
+
+Prompted by a co-author's objection: loot boxes are innately random, so some of
+R36c's discrepancy might be the ACQUISITION ENVIRONMENT re-rolling the lottery
+rather than the model's decisions drifting. R36c's control confounded the two —
+free running re-draws decisions AND acquisitions, teacher forcing re-draws
+neither.
+
+Arm C replays each customer's TRUE decisions and lets the environment re-draw
+what they received. No model is involved, so it isolates the lottery. 300
+out-of-sample customers, 8 replicates, same cell and same null band.
+
+| | acquisitions REAL | acquisitions SIMULATED |
+|---|---|---|
+| **decisions REAL** | the data itself | **−0.010 — INSIDE** |
+| **decisions SAMPLED** | 0.307 — INSIDE (teacher-forced) | 2.352 — outside (free-running) |
+
+Null band q95 = 0.078. The i.i.d. reference scored 2.432 in the same run, so the
+metric was working.
+
+**Re-rolling the entire lottery eight times per customer produces sequences
+statistically indistinguishable from the real ones** (energy −0.010, z = −0.2;
+classifier AUC 0.543). Loot-box randomness contributes essentially nothing to
+the discrepancy, and the environment is validated far more strongly than by the
+V0 marginal checks.
+
+**The sharper statement this licenses.** Neither channel alone breaks anything:
+randomising acquisitions is free, and sampling decisions against real streams is
+free. Only closing BOTH — the model conditioning on its own decisions and on the
+acquisitions those decisions generate — produces the failure. It is not "the
+feedback loop" loosely; it is specifically the loop closed through both streams,
+and that is why decision-only scheduled sampling closed 61% of it rather than
+all of it.
+
+**One honest caveat.** The classifier's AUC CI (0.528–0.558) excludes 0.5 by a
+hair, and its top functionals are sat_k1, sat_k2, sat_k3 — the satiation
+signature. So the environment's duplicate structure is very slightly off. It is
+far too small to carry any part of the 2.352, but it is the next thing to tighten
+if the environment is ever used for a policy number.
