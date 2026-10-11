@@ -280,6 +280,55 @@ def additive_inventory(obtained_ids: torch.Tensor,
 
 
 
+# Decision -> banner index, for the pity stream. 0 regular, 1 figure A,
+# 2 figure B, 3 weapon; -1 for NotBuy and PAD. Matches BANNER_ID in
+# simulation/seq_metrics.py and BANNER_OF in simulation/gacha_env.py.
+BANNER_OF_DEC = [-1, 0, 0, 1, 1, 2, 2, 3, 3, -1]
+# Published hard-pity caps per banner, used only to scale the features to O(1).
+HARD_PITY5 = [90.0, 90.0, 90.0, 80.0]
+HARD_PITY4 = [10.0, 10.0, 10.0, 10.0]
+
+
+def pity_depth(obtained_ids: torch.Tensor, prev_dec_ids: torch.Tensor,
+               rarity_of: torch.Tensor) -> torch.Tensor:
+    """(B,S,8): pulls since the last 5-star and 4-star hit, per banner.
+
+    Causal by construction. Row t uses obtained[0..t], which carries the result
+    of the decision at t-1 and is therefore known before the decision at t --
+    the same convention as the inventory counts. Nothing from row t+1 onward can
+    enter, because every operation is a cumulative sum or a cummax along the
+    sequence axis.
+    """
+    B, S, _ = obtained_ids.shape
+    dev = obtained_ids.device
+    valid = (obtained_ids >= FIRST_PROD_ID) & (obtained_ids <= LAST_PROD_ID)
+    rar = rarity_of[obtained_ids.clamp(0, rarity_of.numel() - 1)]      # (B,S,L)
+    n_pull = valid.sum(-1).float()                                     # (B,S)
+    is5 = ((rar >= 4.5) & valid).any(-1)                               # (B,S)
+    is4 = ((rar >= 3.5) & valid).any(-1)                               # 4* or better
+
+    dec = prev_dec_ids.clamp(0, 9).long()
+    bmap = torch.tensor(BANNER_OF_DEC, device=dev, dtype=torch.long)
+    banner = bmap[dec]                                                 # (B,S) in -1..3
+
+    idx = torch.arange(S, device=dev).view(1, S).expand(B, S)
+    out = []
+    for b in range(4):
+        on = banner == b
+        pulls_b = torch.where(on, n_pull, torch.zeros_like(n_pull))
+        cum = pulls_b.cumsum(dim=1)                                    # (B,S)
+        for hit, cap in ((is5 & on, HARD_PITY5[b]), (is4 & on, HARD_PITY4[b])):
+            # index of the most recent hit at or before t, or -1 if none
+            last = torch.cummax(torch.where(hit, idx, torch.full_like(idx, -1)),
+                                dim=1).values                          # (B,S)
+            # cumulative pulls up to and including that hit row
+            safe = last.clamp(min=0)
+            cum_at = torch.gather(cum, 1, safe)
+            cum_at = torch.where(last < 0, torch.zeros_like(cum_at), cum_at)
+            out.append(((cum - cum_at) / cap).clamp(0.0, 4.0))
+    return torch.stack(out, dim=-1)                                    # (B,S,8)
+
+
 def _plain_rows(obtained_ids: torch.Tensor, dtype) -> torch.Tensor:
     """Unweighted acquisitions per occasion, (B,S,P)."""
     B, S, _ = obtained_ids.shape
@@ -852,6 +901,7 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         decay_freeze: bool = False,
         use_product_features: bool = True,
         use_obtained: bool = True,
+        pity_stream: bool = False,
         fuse: str = "gate",
     ):
         super().__init__()
@@ -908,6 +958,16 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         self.gate_mean = float("nan")
         self.use_offer_inventory_attn = bool(use_offer_inventory_attn)
         self.use_obtained = bool(use_obtained)
+        # R38: the sixth stream. Rarity is column 0 of the product feature
+        # table, so the information is already in the model -- what the stream
+        # adds is the RESET STRUCTURE, which the model would otherwise have to
+        # learn unsupervised from 118 product tokens.
+        self.pity_stream = bool(pity_stream)
+        if self.pity_stream:
+            self.register_buffer("rarity_of", feature_tensor[:, 0].float().clone(),
+                                 persistent=False)
+            self.pity_proj = nn.Sequential(
+                nn.Linear(8, d_model), nn.GELU(), nn.Linear(d_model, d_model))
 
         if ai_rate != lto_len + obtained_len + prev_dec_len:
             raise ValueError(
@@ -994,6 +1054,8 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         # removes one inventory route and keeps z_o and h_H.
         if not self.use_obtained:
             n_pieces = 2                                        # z_x, z_y
+        if self.pity_stream:
+            n_pieces += 1                                       # + z_pity
         fusion_in = n_pieces * d_model + (d_model if self.use_user_embedding else 0)
         self.event_fusion = nn.Sequential(
             nn.LayerNorm(fusion_in),
@@ -1221,6 +1283,10 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         else:
             pieces = [z_x, z_o, z_y, h_H] if z_sat is None else [z_x, z_sat, z_o, z_y, h_H]
 
+        if self.pity_stream:
+            pity = pity_depth(obtained_ids, prev_dec_ids, self.rarity_of)
+            pieces.append(self.pity_proj(pity.to(pieces[0].dtype)))
+
         if self.use_user_embedding and user_idx is not None:
             z_u = self.user_embed(user_idx.long())                 # (B,D)
             z_u = z_u.unsqueeze(1).expand(-1, z_x.size(1), -1)     # (B,S,D)
@@ -1383,6 +1449,7 @@ def build_transformer(
         decay_freeze=kwargs.get("decay_freeze", False),
         use_product_features=kwargs.get("use_product_features", True),
         use_obtained=kwargs.get("use_obtained", True),
+        pity_stream=kwargs.get("pity_stream", False),
         tier=kwargs.get("tier", False),
         fuse=kwargs.get("fuse", "gate"),
     )

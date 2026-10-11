@@ -153,6 +153,8 @@ CAMP_FE="${CAMP_FE:-}"
 #   SCHED_SAMPLING=0.25  R36d: feed the model its own previous decision with
 #                        this probability, ramped over SS_RAMP epochs
 #   NO_OBTAINED=1  R37 duplet: drop the obtained-products stream entirely
+#   PITY_STREAM=1  R38 / gen 6: pity depth as a sixth stream
+PITY_STREAM="${PITY_STREAM:-}"
 NO_OBTAINED="${NO_OBTAINED:-}"
 SCHED_SAMPLING="${SCHED_SAMPLING:-}"
 SS_RAMP="${SS_RAMP:-}"
@@ -292,6 +294,7 @@ args=(
 [[ -n "$DECAY" ]] && args+=(--decay "$DECAY")
 [[ -n "$TIER" ]] && args+=(--tier "$TIER")
 [[ -n "$CAMP_FE" ]] && args+=(--camp-fe "$CAMP_FE")
+[[ "$PITY_STREAM" == "1" ]] && args+=(--pity-stream)
 [[ "$NO_OBTAINED" == "1" ]] && args+=(--no-obtained)
 [[ -n "$SCHED_SAMPLING" ]] && args+=(--sched-sampling "$SCHED_SAMPLING")
 [[ -n "$SS_RAMP" ]] && args+=(--ss-ramp "$SS_RAMP")

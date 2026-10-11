@@ -713,6 +713,10 @@ def main() -> None:
     ap.add_argument("--decay-freeze", type=int, default=None,
                     help="R33: hold the half-life fixed, so a grid over --decay-init is a "
                          "profile likelihood")
+    ap.add_argument("--pity-stream", action="store_true",
+                    help="R38 / gen 6: add pity depth as a sixth stream -- pulls "
+                         "since the last 5-star and 4-star hit, per banner. The "
+                         "player observes this; the model otherwise has to infer it.")
     ap.add_argument("--no-obtained", action="store_true",
                     help="R37, the gen-5 DUPLET: drop every term derived from the "
                          "obtained-products stream, leaving the offer and the previous "
@@ -872,6 +876,8 @@ def main() -> None:
         cfg["block_len"] = args.block_len
     if args.camp_fe is not None:
         cfg["camp_fe"] = bool(args.camp_fe)
+    if args.pity_stream:
+        cfg["pity_stream"] = True
     if args.no_obtained:
         cfg["use_obtained"] = False
     if args.sched_sampling is not None:
@@ -960,6 +966,7 @@ def main() -> None:
             decay_freeze=cfg.get("decay_freeze", False),
             use_product_features=cfg.get("use_product_features", True),
             use_obtained=cfg.get("use_obtained", True),
+            pity_stream=cfg.get("pity_stream", False),
             tier=cfg.get("tier", False),
             block_len=cfg.get("block_len", 64),
             n_campaigns=(cfg.get("n_campaigns", 32) if cfg.get("camp_fe") else 0),
