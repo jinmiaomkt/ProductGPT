@@ -95,6 +95,11 @@ def load_checkpoint(ckpt_path, device: str = "cpu", *, vocab_level: Optional[int
         tier=cfg.get("tier", False), block_len=cfg.get("block_len", 64),
         n_campaigns=(cfg.get("n_campaigns", 32) if cfg.get("camp_fe") else 0),
         fuse=cfg.get("fuse", "gate"),
+        # R37/R38 flags. Without these a checkpoint trained with the pity
+        # stream fails to load (unexpected pity_proj keys, fusion width 672 vs
+        # 576), and a duplet checkpoint would load into the wrong shape.
+        use_obtained=cfg.get("use_obtained", True),
+        pity_stream=cfg.get("pity_stream", False),
     )
     model.load_state_dict(state["model_state_dict"])
 
