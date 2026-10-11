@@ -3299,3 +3299,50 @@ map rested on a mis-specified decomposition (FWL: a residual tested against a
 covariate the attributes already span) and an unfair identity-only arm (blind
 on half the holdout). Both withdrawn. The withdrawal of the figure itself now
 rests on R39 and on the fact that γ·W·attributes alone reproduces the picture.
+
+### R37 — RESULT: the inventory stream earns its place, once the ablation is done right
+
+Batches 36–37 (jobs 42434–42448), level 7, five seeds per cell, selection on
+validation.
+
+| cell | validation | holdout | params |
+|---|---|---|---|
+| triplet (frozen config) | 0.8810 ± 0.0149 | 0.8837 ± 0.0138 | 1,482,236 |
+| duplet — obtained stream severed | 0.9083 ± 0.0103 | 0.9002 ± 0.0128 | 1,370,876 |
+| duplet, capacity-matched (d_ff 360) | 0.8947 ± 0.0091 | 0.9034 ± 0.0180 | 1,502,852 |
+
+Paired by seed on validation: the duplet is worse than the triplet by +0.0462,
++0.0124, +0.0406, +0.0251, +0.0126 — **5/5 seeds, mean +0.0274**. With capacity
+restored: +0.0295, +0.0036, +0.0438, +0.0007, −0.0088 — **4/5 seeds, mean
++0.0138**.
+
+**Reading, per the pre-registered rule (> 1 seed sd and 4/5 paired seeds).**
+About half the raw gap was capacity; the other half, roughly 0.014 nats or one
+seed sd, is INFORMATION the previous decision does not carry. The satiation
+stream earns its place — modestly, and for the first time demonstrably, because
+this is the first run that actually removed it. The b18 "no stock path" arm kept
+z_o and the inventory GRU and cost 0.0137, which was the cost of the
+cross-attention, not of inventory.
+
+### R38 — RESULT (one-step): pity depth is a tie, which is what the hypothesis predicts
+
+Batch 38 (jobs 42449–42458), level 7, five seeds, the CONTROL carrying the
+matched capacity (d_ff 306).
+
+| cell | validation | holdout | params |
+|---|---|---|---|
+| control, capacity-matched | 0.8830 ± 0.0179 | 0.8945 ± 0.0145 | 1,522,142 |
+| + pity stream (8 features) | 0.8828 ± 0.0126 | 0.8899 ± 0.0047 | 1,520,252 |
+
+Paired on validation: +0.0024, −0.0185, +0.0122, −0.0190, +0.0220 — 3/5 worse,
+mean −0.0002. **An exact tie on one-step fit.** Holdout nominally better by
+0.0046 with a third of the variance, inside noise.
+
+This is the predicted pattern, not a disappointment. The pity hypothesis was
+never about one-step fit — the model already sees what arrived — it is about the
+SPIRAL: a model that knows pity resets after a hit has a reason to stop. That is
+a generative claim. The rollout that tests it is job 42465
+(`results/r36/r38_pity_rollout.json`, b38_pity vs b38_ctrl_capmatch, three
+seeds, same cell and band as R36c). If the rollout moves while one-step did not,
+it is the cleanest illustration the paper could have of a component a predictive
+criterion cannot see and a generative criterion can.
