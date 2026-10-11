@@ -3262,3 +3262,40 @@ Note what this does NOT settle: the satiation signature `sat_k1`–`sat_k3` is t
 top discriminating functional in every generative test, so the behaviour is
 real and unmatched by any model we have. A duplet tie would mean one-step
 likelihood cannot see it, not that it is absent.
+
+### R39 — RESULT: the identity embedding adds nothing in EITHER regime
+
+Job 42459. Attributes-only (b32) against both (b29_hl2), five seeds each, scored
+per row on the out-of-sample holdout cell and split by whether an UNTRAINED
+product index is on offer. Campaign 28 has one in 100% of its rows; campaigns
+29–30 have none. Legacy checkpoints, camp_bias neutralised.
+
+| rows | n | both (b29) | attributes-only (b32) | both − attr | paired: identity worse |
+|---|---|---|---|---|---|
+| all holdout | 217,303 | 0.8847 ± 0.0038 | 0.8833 ± 0.0033 | +0.0015 | — |
+| campaign 28 (untrained index on offer) | 105,076 | 0.9663 ± 0.0079 | 0.9653 ± 0.0071 | +0.0010 | 2 / 5 |
+| campaigns 29–30 (every index trained) | 112,227 | 0.8084 ± 0.0087 | 0.8065 ± 0.0054 | +0.0019 | 2 / 5 |
+
+**The cancellation hypothesis is refuted.** The pooled null is not identity
+hurting on new products and helping on returning ones; it is a null in both
+regimes separately. Differences of 0.001–0.002 against seed sds of 0.005–0.009,
+with paired signs splitting 2/5 each way.
+
+This is the controlled version of the embedding question — both arms carry
+attributes, so neither is blind to a new product, and the split removes the
+regime confound. Its answer: **the per-product identity branch does not improve
+one-step prediction, on returning products or new ones.** It may still carry
+product-specific appeal; it does not earn its place on this criterion.
+
+Two side findings. Campaign 28 is 0.16 nats harder than 29–30 for BOTH models
+(0.966 against 0.807) — the new-product cost, carried entirely by the attribute
+projection, which is the only route to a product the model has never seen.
+And within campaign 28, decisions on the banner hosting the new product are
+EASIER (0.819) than decisions on the other banners (1.031); the new product is
+not where the difficulty sits.
+
+**What this replaces.** The earlier justification for withdrawing the perception
+map rested on a mis-specified decomposition (FWL: a residual tested against a
+covariate the attributes already span) and an unfair identity-only arm (blind
+on half the holdout). Both withdrawn. The withdrawal of the figure itself now
+rests on R39 and on the fact that γ·W·attributes alone reproduces the picture.
