@@ -3346,3 +3346,40 @@ a generative claim. The rollout that tests it is job 42465
 seeds, same cell and band as R36c). If the rollout moves while one-step did not,
 it is the cleanest illustration the paper could have of a component a predictive
 criterion cannot see and a generative criterion can.
+
+### R38 — RESULT (generative): pity depth does NOT fix the spiral
+
+Job 42466 (after 42465 failed on a loader bug, now fixed). b38_pity against its
+capacity-matched control, three seeds, 300 out-of-sample customers, eight
+replicates, context 384, the same cell and null band as R36c.
+
+| generator | energy | sd | C2ST AUC | top discriminating functionals |
+|---|---|---|---|---|
+| first-order Markov | 0.711 | — | 0.879 | longest NotBuy run, sat_k1, acf lag 1 |
+| independent draws | 2.190 | — | 0.903 | switch rate, longest NotBuy run, share Buy1Reg |
+| + pity stream | 2.270 | 0.303 | 0.858 | share Buy10Reg, sat_k1, longest NotBuy run |
+| control, capacity-matched | 2.368 | 0.868 | 0.861 | longest NotBuy run, share Buy10Reg, sat_k1 |
+
+Null band q95 = 0.078. Paired by seed, pity minus control: −0.811, +0.785,
+−0.266 — better on 2/3, mean −0.097, against a control seed sd of 0.868.
+
+**A clean null.** The pity stream leaves the generative discrepancy where it was:
+both arms sit roughly thirty times outside the band, the classifier AUC is
+unchanged (0.858 against 0.861), and the functionals that give the model away
+are the same three as before. The hypothesis — that a model which sees the pity
+counter has a reason to stop, so the spiral into buying should ease — is not
+supported.
+
+**What that says about the failure.** Together with R38's one-step tie, pity
+depth is a null on BOTH criteria. Combined with the earlier controls, the
+picture is now consistent: teacher forcing passes, arm C passes, scheduled
+sampling cuts the gap by 61%, and adding a state variable the player observes
+changes nothing. The failure is not missing information about the state; it is
+the training objective, which never evaluates the model on the histories it
+will visit. The remedy that works is exposure, not more state.
+
+**Note on seed variance.** The control's three seeds span 1.365 to 2.881, so a
+three-seed comparison cannot resolve differences below about 0.5. The reading
+"no effect" is safe because the pity arm's own mean (2.270) sits inside the
+control's range; a small true effect in either direction cannot be excluded.
+Gen 6 as a configuration is therefore not adopted.
