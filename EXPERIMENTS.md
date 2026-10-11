@@ -1516,7 +1516,8 @@ Holdout NLL, out-of-sample customers. Level 6 / level 7: plain GRU 0.8809 /
 
 - **Rule 1 (crossover is an interaction): failing.** The difference-in-differences
   (transformer − GRU encoder, level 7 − level 6) is −0.0301 with the token
-  inventory, +0.0078 with no stock path and +0.0008 with per-product counts.
+  inventory, +0.0078 with cross-attention off (inventory GRU retained) and +0.0008
+  with per-product counts.
   It appears in 1 of 3 stock variants, not the 2 required — i.e. only in the
   configuration batch 12 happened to run.
 - **Rule 2 (capacity is not the explanation): failing.** At level 7 the
@@ -1814,7 +1815,7 @@ decimals (e.g. level-6 GRU 0.8891 vs 0.8892; level-7 transformer 0.8986 vs 0.898
    −0.0198 (vs +0.0026 at level 6); hybrid −0.0222 (2 seeds); transformer +0.0010.
 4. **Identity does not replace recency — holds.** +0.116 (L6), +0.136 (L7).
 5. **Hybrid adopted only if it beats the transformer by >0.02 at level 7 —
-   borderline.** −0.0200 with no stock path (3/3), −0.0094 with counts (2/2),
+   borderline.** −0.0200 with cross-attention off (3/3), −0.0094 with counts (2/2),
    +0.0131 with the token inventory.
 
 **What the factorial says overall.**
@@ -2230,7 +2231,17 @@ out-of-sample customers x holdout period. Typical seed sd **0.0075**.
 | per-product counts, single attention step | 0.8890 ± 0.0190 |
 | per-product counts, 2 satiation layers (frozen) | 0.8962 ± 0.0138 |
 | token inventory (inventory GRU + cross-attention) | 0.8998 ± 0.0075 |
-| **no stock path at all** | 0.9027 ± 0.0119 |
+| **no offer-inventory cross-attention** (inventory GRU retained) | 0.9027 ± 0.0119 |
+
+**MISLABEL CORRECTED (11 Oct 2026).** The last arm was recorded as "no stock
+path at all". It is not. It is defined as `CROSS_ATTN=0` only, and in the model
+`pieces = [z_x, z_o, z_y, h_H]` when `z_sat is None` — so the per-event
+acquisition embedding `z_o` and the inventory GRU state `h_H` both survive.
+The arm removes one of two inventory routes. **0.0137 is the cost of removing
+the cross-attention, not of removing inventory.** Every arm in this table has
+an inventory stream, so the table shows that the REPRESENTATION does not
+matter; it says nothing about whether having the stream matters. No run to
+date answers that — see R37.
 
 **Decision rules, applied.**
 
@@ -2272,7 +2283,7 @@ out-of-sample x holdout cell (job 41552).
 |---|---|---|---|
 | transformer, level 7 | **1.0220** | 0.7035 | +0.3185 |
 | hybrid, level 7 | 1.0313 | 0.6991 | +0.3322 |
-| hybrid, NO stock path | 1.0427 | 0.6985 | +0.3442 |
+| hybrid, no cross-attention (GRU retained) | 1.0427 | 0.6985 | +0.3442 |
 | plain GRU, level 6 | 1.0644 | **0.6246** | +0.4398 |
 | GRU encoder, level 7 | 1.0742 | 0.6321 | +0.4420 |
 | plain GRU, level 7 | 1.0809 | 0.6442 | +0.4367 |
@@ -2492,7 +2503,8 @@ half-life through softplus, initialised at 30.
 
 **Cause 2, weight decay.** `AdamW(model.parameters(), weight_decay=...)` decays
 every parameter, including the structural ones. Stage 5 had already shown the
-likelihood is nearly flat in the stock path (removing it entirely costs 0.0137),
+likelihood is nearly flat across stock REPRESENTATIONS (0.0137 between the best
+and the cross-attention-free arm; no arm lacks an inventory stream),
 so decay dominated the gradient and the parameters sat at their initial values:
 `tier_raw` at exactly 0 gives [1, 0.5, 0.25], `attr_w` at ~0. Fixed: structural
 parameters (`half_life_raw`, `tier_raw`, `attr_w`, `attr_self`, `camp_bias`,
@@ -2633,14 +2645,16 @@ numbers mean nothing.
 |---|---|---|
 | 1 | i.i.d. sampler from the empirical decision marginals | matches marginals by construction; must fail dependence. Sanity floor. |
 | 2 | first-order Markov chain on the 9 decisions, fit on calibration | cheap dependence baseline; the bar a deep model must clear |
-| 3 | ProductGPT with NO stock path (`b18_hyb_stock_nostock`) | the critical cell — see H1 |
+| 3 | ProductGPT without offer-inventory cross-attention (`b18_hyb_stock_nostock`; the inventory GRU is retained) | the critical cell — see H1 |
 | 4 | ProductGPT, frozen R33 config (`b29_hl2`) | the incumbent |
 | 5 | plain GRU level 6 | stage-4 rank 1 on the decision-level criterion |
 
 #### H1 — the headline hypothesis
 
 Stage 4 found NO family wins: eight cells spread 0.0194 nats against a seed sd of
-0.0075, and removing the stock path entirely cost 0.0137 — a statistical tie. The
+0.0075, and the spread across stock REPRESENTATIONS was 0.0137 — a statistical
+tie. (Not "removing the stock path": every arm kept an inventory stream. See the
+mislabel correction at the stock-path ablation table.) The
 decision-level criterion therefore cannot distinguish a model that has a satiation
 mechanism from one that does not. But satiation is a sequence-level mechanism: it
 governs whether a customer who has just acquired five copies stops pulling.
@@ -2961,7 +2975,7 @@ replicates each, context 384 (approximation priced at +0.0011 nats), on the same
 |---|---|---|---|
 | first-order Markov | **0.711** | 19.8 | 0.879 |
 | b18 counts, single step | 1.907 ± 0.103 | 55.2 | 0.85 |
-| b18 no stock path | 2.255 ± 0.262 | 59–71 | 0.86 |
+| b18 no cross-attention (GRU retained) | 2.255 ± 0.262 | 59–71 | 0.86 |
 | b29_hl2 (incumbent) | 2.269 ± 0.303 | 54–71 | 0.87 |
 | b18 token inventory | 2.372 ± 0.423 | 52–73 | 0.86 |
 | independent draws | 2.190 | 60.9 | 0.903 |
@@ -3197,3 +3211,54 @@ changes. What has changed is that the omission is now measured rather than
 unexamined, and it is a finding about the DATA: this panel is inconsistent with
 the published 50/50 guarantee, by a wide margin and not because of the
 acquisition-attribution noise we had already documented.
+
+### R37 — does the inventory satiation stream earn its place? (PLAN, batch 36)
+
+**Why no existing run answers this.** The b18 arm recorded as "no stock path at
+all" is `CROSS_ATTN=0` only. In the model,
+`pieces = [z_x, z_o, z_y, h_H]` when `z_sat is None`, so the per-event
+acquisition embedding `z_o` and the inventory GRU state `h_H` both survive. It
+removed one of two inventory routes. **Every arm in that table has an inventory
+stream**, so the 0.0137 spread ranks REPRESENTATIONS and is silent on whether
+the stream is needed. The mislabel was propagated to both decks, the executive
+report and the manuscript revision, and has been corrected in all four.
+
+**The right ablation, and gen 4 already ran it.** `--no-obtained` is the gen-5
+DUPLET: it drops every term derived from the obtained stream — `z_o`, `h_H` and,
+under slots, `z_sat` / `z_inv` / `z_stock` — leaving the offer and the PREVIOUS
+DECISION. That separates **satiation** (what you hold, cumulatively) from
+**state dependence** (whether the last occasion was a purchase). A naive
+with/without test that also removed the previous decision would come out
+"useful" for the wrong reason, because the obtained block is a near-perfect
+proxy for "did I buy last time" — the R20 leak measured
+P(NotBuy | all-zero block) = 1.000.
+
+**Verified before submitting**, which is the check the mislabel went without:
+
+| inventory | `--no-obtained` | max abs change in logits from scrambling OBTAINED | from scrambling PREV_DEC |
+|---|---|---|---|
+| slots | off | 1.87 | 0.36 |
+| slots | **on** | **0.00** | 0.42 |
+| tokens | off | 1.68 | 0.40 |
+| tokens | **on** | **0.00** | 0.42 |
+
+The stream is severed exactly, and state dependence is untouched. Parameter
+count drops 93,014 -> 84,566 (slots), confirming the fusion was resized.
+
+**Batch 36**: 10 runs at vocabulary level 7, five seeds each, triplet (frozen
+control) vs duplet. Selection on validation.
+
+**Pre-registered reading.** The outcome is informative either way, and the
+interesting case is the one we do NOT expect:
+- duplet clearly worse -> the satiation stream earns its place, and the b18
+  table was measuring the wrong thing all along.
+- duplet ties -> the inventory contributes nothing beyond what the previous
+  decision already carries, and the stock machinery is justified only by the
+  identification argument, not by fit. That would make the R33 kernel work a
+  structural contribution with no predictive support, which is a sharper and
+  more awkward claim than "the representation does not matter".
+
+Note what this does NOT settle: the satiation signature `sat_k1`–`sat_k3` is the
+top discriminating functional in every generative test, so the behaviour is
+real and unmatched by any model we have. A duplet tie would mean one-step
+likelihood cannot see it, not that it is absent.

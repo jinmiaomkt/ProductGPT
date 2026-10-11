@@ -713,6 +713,11 @@ def main() -> None:
     ap.add_argument("--decay-freeze", type=int, default=None,
                     help="R33: hold the half-life fixed, so a grid over --decay-init is a "
                          "profile likelihood")
+    ap.add_argument("--no-obtained", action="store_true",
+                    help="R37, the gen-5 DUPLET: drop every term derived from the "
+                         "obtained-products stream, leaving the offer and the previous "
+                         "decision. Separates satiation from state dependence, which "
+                         "--no-cross-attn does NOT do.")
     ap.add_argument("--sched-sampling", type=float, default=None,
                     help="R36d: max probability of feeding the model its OWN "
                          "previous decision during training (0 = teacher forcing "
@@ -867,6 +872,8 @@ def main() -> None:
         cfg["block_len"] = args.block_len
     if args.camp_fe is not None:
         cfg["camp_fe"] = bool(args.camp_fe)
+    if args.no_obtained:
+        cfg["use_obtained"] = False
     if args.sched_sampling is not None:
         cfg["sched_sampling"] = float(args.sched_sampling)
     if args.ss_ramp is not None:
@@ -952,6 +959,7 @@ def main() -> None:
             decay_init=cfg.get("decay_init", 30.0),
             decay_freeze=cfg.get("decay_freeze", False),
             use_product_features=cfg.get("use_product_features", True),
+            use_obtained=cfg.get("use_obtained", True),
             tier=cfg.get("tier", False),
             block_len=cfg.get("block_len", 64),
             n_campaigns=(cfg.get("n_campaigns", 32) if cfg.get("camp_fe") else 0),

@@ -169,9 +169,11 @@ Reviewer Comment~1 asks whether cross-attention should pool the three streams
 instead of concatenating them into triplets. We implemented both. The
 offer-inventory cross-attention --- in which the current offer token attends to
 the full history of obtained products --- is the architecture the comment
-describes, and it is worth approximately nothing: removing the entire stock
-path, cross-attention included, costs 0.0137 nats, inside the seed noise of the
-comparison.
+describes, and it is worth approximately nothing: removing it costs 0.0137 nats,
+inside the seed noise of the comparison. The scope of that number matters --- it
+is the cost of removing the \emph{cross-attention}, with the recurrent inventory
+summary retained. Whether an inventory stream is needed at all is a separate
+question, which Section~\ref{sec:results} returns to.
 
 We therefore keep the triplet structure, and we say why in the language the
 comment invites: the choice is \emph{intentional and empirically grounded},
@@ -289,7 +291,7 @@ they never saw'' does not.
 \toprule
 Component removed or added & $\Delta$ NLL & Verdict \\
 \midrule
-stock path removed entirely & $+0.0137^{\dagger}$ & inside the margin \\
+offer--inventory cross-attention removed & $+0.0137^{\dagger}$ & inside the margin \\
 per-customer embedding added & $+0.0046$ & no gain \\
 mixture over output projections added & $+0.0000$ & exact tie \\
 both added & $+0.0073$ & no gain \\

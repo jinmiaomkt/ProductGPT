@@ -851,6 +851,7 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         decay_init: float = 30.0,
         decay_freeze: bool = False,
         use_product_features: bool = True,
+        use_obtained: bool = True,
         fuse: str = "gate",
     ):
         super().__init__()
@@ -906,6 +907,7 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         # retrieval. Updated under no_grad in forward.
         self.gate_mean = float("nan")
         self.use_offer_inventory_attn = bool(use_offer_inventory_attn)
+        self.use_obtained = bool(use_obtained)
 
         if ai_rate != lto_len + obtained_len + prev_dec_len:
             raise ValueError(
@@ -983,6 +985,15 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         n_pieces = 5 if self.use_offer_inventory_attn else 4   # z_x, [z_sat], z_o, z_y, h_H
         if self.inventory_kind == "slots":
             n_pieces = 6                                        # z_x, z_sat, z_o, z_y, z_inv, z_stock
+        # R37: the gen-5 DUPLET. Drops every term derived from the obtained
+        # stream -- z_o, h_H and, under slots, z_sat / z_inv / z_stock -- leaving
+        # [z_x, z_y]: the offer and the PREVIOUS DECISION. This is the ablation
+        # gen 4 ran as triplet-vs-duplet, and it is the one that separates
+        # SATIATION (what you hold, cumulatively) from STATE DEPENDENCE (whether
+        # the last occasion was a purchase). CROSS_ATTN=0 does not do this: it
+        # removes one inventory route and keeps z_o and h_H.
+        if not self.use_obtained:
+            n_pieces = 2                                        # z_x, z_y
         fusion_in = n_pieces * d_model + (d_model if self.use_user_embedding else 0)
         self.event_fusion = nn.Sequential(
             nn.LayerNorm(fusion_in),
@@ -1201,7 +1212,11 @@ class MultiStreamStateSpaceTransformer(nn.Module):
             sat_attn = None
 
         # 5. Event representation r_t.
-        if self.inventory_kind == "slots":
+        if not self.use_obtained:
+            # R37 duplet: offer + previous decision only. Nothing derived from
+            # the obtained stream enters the event representation.
+            pieces = [z_x, z_y]
+        elif self.inventory_kind == "slots":
             pieces = [z_x, z_sat, z_o, z_y, z_inv, z_stock]
         else:
             pieces = [z_x, z_o, z_y, h_H] if z_sat is None else [z_x, z_sat, z_o, z_y, h_H]
@@ -1367,6 +1382,7 @@ def build_transformer(
         decay_init=kwargs.get("decay_init", 30.0),
         decay_freeze=kwargs.get("decay_freeze", False),
         use_product_features=kwargs.get("use_product_features", True),
+        use_obtained=kwargs.get("use_obtained", True),
         tier=kwargs.get("tier", False),
         fuse=kwargs.get("fuse", "gate"),
     )
