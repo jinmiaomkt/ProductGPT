@@ -3408,3 +3408,91 @@ model's predicted probability of buying on that banner with the observed rate,
 bin by bin. Predicted tracking observed through the soft-pity rise and the
 post-hit drop means "learned"; flat predicted against rising observed means
 "reset cue only".
+
+### R37 — RESULT (generative): the duplet is the BETTER generator — H1 reversed
+
+Job 42578 (`results/r36/r37_duplet_rollout.json`). The triplet (frozen
+incumbent; the same checkpoints as the R36e control, and it re-rolls to the
+same 2.352), the duplet and the capacity-matched duplet, three seeds each, 300
+out-of-sample customers, eight replicates, context 384, the same cell and null
+band (q95 = 0.078) as R36c.
+
+| generator | energy | sd | C2ST AUC | top discriminating functionals |
+|---|---|---|---|---|
+| first-order Markov | 0.711 | — | 0.879 | longest NotBuy run, sat_k1, acf lag 1 |
+| duplet — obtained stream severed | 1.495 | 0.484 | 0.839 | longest NotBuy run, sat_k1, share Buy10Wep |
+| duplet, capacity-matched (d_ff 360) | 1.667 | 0.142 | 0.842 | sat_k1, longest NotBuy run, share Buy10Wep |
+| independent draws | 2.190 | — | 0.903 | switch rate, longest NotBuy run |
+| triplet — the incumbent | 2.352 | 0.198 | 0.859 | longest NotBuy run, sat_k1, share Buy10Reg |
+
+Paired by seed, duplet minus triplet: −1.126, −0.431, −1.015 (**3/3, mean
+−0.857**); capacity-matched: −0.895, −0.640, −0.521 (**3/3, mean −0.685**).
+The classifier AUC falls from 0.859 to 0.839 / 0.842.
+
+**H1, finally tested — and reversed.** The pre-registered prediction was that
+the model WITHOUT an inventory stream would be the one distinguishable from
+real data on the satiation signature. Both are distinguishable, and the model
+without the stream is the closer one, on every seed. The two criteria rank the
+three cells in exactly opposite order: on validation NLL, triplet < capacity
+matched < duplet (0.8810, 0.8947, 0.9083); on energy, duplet < capacity matched
+< triplet (1.495, 1.667, 2.352). Spearman −1 across the three cells. The
+information that earns the inventory stream its place one-step (+0.014 nats,
+R37) is the channel through which the free-running spiral runs.
+
+**What this corrects in the R36f reading.** "Neither channel alone breaks
+anything" was too strong a summary of the 2×2: the duplet has NO acquisition
+input, so its only feedback is the decision channel, and that alone produces
+roughly two-thirds of the failure (1.5–1.7 of 2.35). The accurate summary is:
+the lottery's randomness is not the cause (arm C, inside), the one-step
+conditionals are not the cause (teacher forcing, inside), feedback through the
+decision channel alone is sufficient to break it, and the acquisition channel
+adds the remaining third. That is consistent with decision-only scheduled
+sampling recovering 61%, and it says the remaining share needs the environment
+inside the training loop.
+
+**Caveat.** The duplet and the triplet are different fitted models, not one
+model with a channel switched off, so the gap attributes to the stream's
+presence — the channel plus whatever was learned through it. And the duplet
+still FAILS T2: 19–21× the band, behind the Markov chain, given away by the
+same two functionals (longest NotBuy run, sat_k1). A diagnosis, not a remedy.
+
+### R40 — RESULT: the pity gradient is LEARNED, not just the reset cue
+
+Job 42579 (`results/r40/pity_gradient.json`; figure
+`results/figs/pity_gradient.{png,pdf}`). The incumbent (`b29_hl2`, three
+seeds, legacy camp-bias zeroed) scored on every holdout row where a banner was
+on offer — 217,303 rows for each figure banner A and the weapon banner,
+163,796 for figure banner B — binned by externally computed pulls since the
+customer's last five-star on that banner, nine bins from 0 to 91+.
+
+| banner | corr(observed, predicted) over 9 bins | mean offset, predicted − observed | ratio |
+|---|---|---|---|
+| figure A | 0.996–0.998 | +0.007 to +0.009 | 1.03 |
+| figure B | 0.997 | +0.037 to +0.043 | 1.39–1.45 |
+| weapon | 0.995–0.996 | +0.028 to +0.035 | 1.46–1.57 |
+
+**Shape: learned.** The observed hazard is non-monotone — lowest right after
+a hit (bin 0), rising over the first thirty to fifty pulls, dipping at 51–70,
+rising again in the soft-pity region (figure A 81–90: 0.289 against 0.234 at
+71–80; weapon 81–90: 0.117 against 0.038 at 61–70). The model reproduces every
+turn of that profile on all three banners and all three seeds, including the
+post-hit drop and the late rise. By the rule set before the run, that is
+"learned", and the R38 reading is upgraded from "information equivalent to
+pity depth" to "the model builds the counter from raw acquisitions".
+
+**Level: a constant shift on the rare banners.** On figure A the predicted
+curve sits on the observed one. On figure B and the weapon banner it sits
+0.03–0.04 above it in every bin — a 40–55% relative over-prediction of
+buying. This is a level error, not a shape error, and it is the same
+direction as the teacher-forced decision shares in R36c (NotBuy 0.410 against
+0.503 observed; Buy10 FigB 0.048 against 0.021). The likely cause is the
+class-weighted training loss (inverse-frequency weights tempered by tau = 0.5, `config5.py`), which
+up-weights the rare purchase classes and therefore inflates their predicted
+probabilities. Two consequences: (1) the one-step conditionals that free
+running starts from already over-state purchases on the rare banners, which
+is the direction of the spiral, so a per-class recalibration of the per-step
+probabilities before rolling out (temperature or weight removal; inference
+only, `scripts/r36g_temperature.py`) is the cheapest untested remedy; (2) any
+"the per-step distribution is right" statement should be read as "right in
+shape, inside the band on the sequence functionals, but level-shifted on the
+rare banners".

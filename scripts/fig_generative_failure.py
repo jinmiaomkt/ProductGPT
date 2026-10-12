@@ -120,7 +120,7 @@ def main() -> None:
     # ============================================================ panel A
     ax = fig.add_subplot(gs[1, 0])
     ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.axis("off")
-    ax.set_title("A.  Which feedback breaks it?  Only closing the loop through BOTH",
+    ax.set_title("A.  Which feedback breaks it?  Feeding the model its own outputs",
                  loc="left", fontsize=12, fontweight="bold", color=INK, pad=6)
     cells = [  # (col, row, text, fc, ec, tc)
         (0, 0, "the data itself", GREYBG, GREY, MUTED),
@@ -141,9 +141,9 @@ def main() -> None:
     ax.text(0.27, y0 + 0.5 * ch, "decisions\nSAMPLED\nby the model", ha="right", va="center",
             fontsize=10, color=INK)
     ax.text(0.5, -0.04,
-            "Randomising the lottery alone is fine. Sampling decisions alone is fine.\n"
-            "Only when the model’s decisions determine what it receives, AND what it\n"
-            "receives informs its next decision, do the sequences stop looking real.",
+            "Re-rolling the lottery alone is fine. Sampling decisions without feeding them back is fine.\n"
+            "Feeding the model its own decisions breaks it — the duplet, which never sees acquisitions,\n"
+            "already fails at 1.5 — and feeding back its own acquisitions too takes it to 2.35.",
             ha="center", va="top", fontsize=8.6, color=INK, linespacing=1.35)
 
     # ============================================================ panel B
