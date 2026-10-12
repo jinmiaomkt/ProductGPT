@@ -3383,3 +3383,28 @@ three-seed comparison cannot resolve differences below about 0.5. The reading
 "no effect" is safe because the pity arm's own mean (2.270) sits inside the
 control's range; a small true effect in either direction cannot be excluded.
 Gen 6 as a configuration is therefore not adopted.
+
+### R38 — reframed (12 Oct): the one-step tie is a POSITIVE capability result
+
+Jin's reading, and the right one. Pity depth is informative on its own (its
+worst bin predicts the majority class at 0.548 against a 0.313 marginal), yet
+adding it changes one-step fit by −0.0002 on 3/5 seeds. A feature that is
+informative in isolation but adds nothing to the model is already spanned by
+what the model computes — the same logic as an omitted-variable test. So the
+tie shows the sequence memory had already extracted the count-and-reset
+structure from raw acquisitions, without being told the rule.
+
+Two precisions. Rarity itself is observed (column 0 of the feature table), so
+the learned part is the TEMPORAL integration — counting pulls since the last
+five-star and resetting on a hit — and the stage-4 tie means recurrence and
+attention cannot be separately credited. And the tie shows information
+EQUIVALENT to pity depth for prediction, not that the model represents the
+goal-gradient; much of the counter's standalone information may be the simpler
+cue that a hit just happened.
+
+R40 (`scripts/r40_pity_gradient.py`) is the test that separates the two: bin
+holdout rows by externally computed pulls-since-last-five-star and compare the
+model's predicted probability of buying on that banner with the observed rate,
+bin by bin. Predicted tracking observed through the soft-pity rise and the
+post-hit drop means "learned"; flat predicted against rising observed means
+"reset cue only".
