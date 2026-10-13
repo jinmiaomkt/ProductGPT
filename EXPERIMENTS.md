@@ -3496,3 +3496,82 @@ only, `scripts/r36g_temperature.py`) is the cheapest untested remedy; (2) any
 "the per-step distribution is right" statement should be read as "right in
 shape, inside the band on the sequence functionals, but level-shifted on the
 rare banners".
+
+### R41 — RESULT: what follows a five-star win, in the real data (13 Oct 2026)
+
+**Why.** Jin's reading of the free-running arm: when decisions AND acquisitions
+are sampled, the model explores branches the single realised path never shows
+— a customer who never won the limited-time figure could win it in a re-roll,
+and that experience generates a different, heavier sequence (the root of
+compulsive buying) — so the ground truth for that arm is not one path.
+Reference supplied: Hong, Hou, Zhang & Zhang (2026), "Learning to Simulate:
+Generative Metamodeling via Quantile Regression", INFORMS J. Computing: the
+target of a generative metamodel is the conditional DISTRIBUTION of the output
+given the covariates, decision variables held fixed; validity is
+distributional proximity, evaluated either at a covariate point with many
+replications from the true simulator or "unconditionally" over the covariate
+distribution with one true draw per point.
+
+**Probe** (`scripts/r41_post_hit.py`, CPU, aggregates only): holdout cell,
+campaigns 28–30, 2,502 customers, full 2048-event history. Row t carries the
+outcome of the decision at t−1 and the decision at t. Table 2 is the
+quasi-experiment: previous decision = a TEN-pull on a figure banner, stratified
+by pity depth before that pull, so only the lottery outcome differs.
+
+Table 1 — what follows a pull, by what it delivered (next decision; next 5 and 20 occasions):
+
+| previous pull delivered | n | P(NotBuy) | P(reg) | P(fig) | P(wep) | E[rev] | rev/occ next 5 | NotBuy next 5 | rev/occ next 20 | NotBuy next 20 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| featured figure 5★ | 2,592 | 0.150 | 0.342 | 0.391 | 0.117 | 3.72 | 3.16 | 0.218 | 2.37 | 0.367 |
+| featured weapon 5★ | 599 | 0.204 | 0.125 | 0.317 | 0.354 | 4.63 | 4.23 | 0.199 | 3.28 | 0.293 |
+| other 5★ (50/50 lost or standard) | 1,991 | 0.151 | 0.190 | 0.585 | 0.074 | 4.37 | 3.62 | 0.217 | 2.50 | 0.331 |
+| no 5★ | 123,754 | 0.192 | 0.207 | 0.522 | 0.080 | 2.08 | 1.83 | 0.245 | 1.50 | 0.338 |
+
+Table 2 — ten-pull on a figure banner, same pity stratum (rev/occ next 20; NotBuy next 20):
+
+| pity before the pull | won the featured figure | 50/50 lost | no 5★ |
+|---|---|---|---|
+| < 30 | 3.80 (0.285), n = 197 | 3.53 (0.314), n = 159 | 3.59 (0.272), n = 6,141 |
+| 30–69 | 4.54 (0.225), n = 269 | 3.78 (0.243), n = 260 | 3.63 (0.285), n = 5,710 |
+| ≥ 70 | 4.57 (0.266), n = 317 | 4.05 (0.245), n = 532 | 2.92 (0.333), n = 5,622 |
+
+**Reading.**
+1. The mechanism is real and measurable. Same action, same pity depth: winning
+   the featured figure raises spending over the next 20 occasions by 6%, 25%
+   and 57% in the three strata relative to the identical ten-pull that
+   delivered nothing, and lowers the NotBuy share over that window. The next
+   decision moves off the figure banner toward the weapon banner (0.117 vs
+   0.080) and the regular banner (0.342 vs 0.207): the signature-weapon and
+   spare-currency patterns. Losing the 50/50 keeps the customer on the figure
+   banner (P(fig) 0.887 at pity ≥ 70, NotBuy next five 0.083): the guarantee.
+   A correct generator must produce heavier sequences on lucky branches, and a
+   free-running model that re-rolls the lottery is right to explore them.
+2. The lucky branch cannot carry the generative discrepancy. It is rare (783
+   featured wins in 19,207 figure-banner ten-pulls; 2,592 in 128,936 pull
+   occasions). It is bounded: winners' NotBuy share over the next 20 occasions
+   is 0.23–0.29, not the 0.18 the free-running population shows for everyone.
+   Arm C re-rolls the whole lottery for every customer with the real decisions
+   and lands inside the band, so the environment produces lucky branches at the
+   real frequency without moving the population distribution. And the duplet,
+   which never sees what it won, fails at 1.5: two-thirds of the discrepancy
+   arises with no lucky branch at all.
+3. What the ground truth is. In the paper's notation Y(x) = Φ((x, d), ξ): x is
+   the customer's pre-period history and the campaign calendar, d the firm's
+   assortment policy (held fixed, as the paper does), ξ the lottery plus the
+   consumer's idiosyncratic noise. The ground truth is the conditional law of
+   Y given x, never the realised path. R36 is the paper's "unconditional"
+   evaluation (one real draw per covariate point against generated draws,
+   pooled over customers) with a real-vs-real null band as the floor. A
+   counterfactual d — a different calendar — has no ground truth in the data;
+   that is the T3 licensing question (R34–R35), not T2.
+4. Decisive test, not yet run (inference only): dump generated trajectories,
+   split replicates by whether the simulated lottery delivered a featured
+   figure early, and compare generated post-win behaviour with Table 2. If the
+   model's post-win behaviour matches reality while its population shares do
+   not, the lucky branch is modelled correctly and the failure is exposure.
+
+**Tooling note.** A CPU probe that calls `pity_depth` without building a model
+must call `model_multistream_state_space.set_product_range(first, last, unk)`;
+the module default is the level-6 range 13–56, which silently corrupts the
+counters on level-7 data (ids to 130). The loader must also run at
+`max_events` 2048, or the counter starts mid-history.
