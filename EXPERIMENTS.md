@@ -3588,3 +3588,54 @@ lucky and unlucky replicates both at NotBuy ≈ 0.18 means exposure bias; drift
 concentrated in lucky replicates whose post-win behaviour matches R41 means the
 branch is modelled correctly and carries the gap. Output
 `results/r42/generated_post_hit.json`, log `logs/r42.log`.
+
+### R42 — RESULT: the lucky branch is not what drives the drift, and free running does not reproduce it
+
+Job 42592 (`results/r42/generated_post_hit.json`). Incumbent (b36_triplet) and
+duplet, three seeds, free-running on the R36 cell: the same 300 customers,
+seeds, context 384, eight replicates (165 customers have holdout rows inside
+the window, so 1,320 replicates per arm against 175 real sequences). R41's
+tables computed on the generated sequences and on the real sequences of the
+same customers and rows; every replicate split by whether the simulated
+lottery delivered a featured figure within its first 30 holdout occasions.
+
+| arm | NotBuy share | spend / occasion | figure ten-pulls per sequence | featured wins per ten-pull | lucky replicates: NotBuy, spend | unlucky: NotBuy, spend |
+|---|---|---|---|---|---|---|
+| real | 0.425 | 1.47 | 11.1 | 0.041 | 0.433, 1.90 (n = 66) | 0.420, 1.20 (n = 109) |
+| incumbent s1 | 0.154 | 4.15 | 22.0 | 0.028 | 0.145, 4.95 | 0.157, 3.90 |
+| incumbent s2 | 0.157 | 4.34 | 25.8 | 0.023 | 0.157, 5.05 | 0.157, 4.21 |
+| incumbent s3 | 0.214 | 4.18 | 24.3 | 0.030 | 0.190, 5.28 | 0.222, 3.81 |
+| duplet s1 | 0.398 | 3.07 | 14.0 | 0.035 | 0.317, 3.86 | 0.410, 2.97 |
+| duplet s2 | 0.243 | 3.57 | 15.2 | 0.032 | 0.220, 4.43 | 0.247, 3.41 |
+| duplet s3 | 0.476 | 2.59 | 12.2 | 0.038 | 0.326, 4.17 | 0.487, 2.47 |
+
+Table 2 on the generated sequences (ten-pull on a figure banner, same pity
+stratum; spend per occasion over the next 20, winners vs the same pull with no
+five-star): incumbent 6.39 vs 6.71, 6.77 vs 6.85, 6.43 vs 6.30 — −5%, −1%,
++2%. Real, same customers and rows: 3.58 vs 3.06, 4.49 vs 3.28, 3.34 vs 2.51 —
++17%, +37%, +33% (R41 on the full cell: +6%, +25%, +57%). Duplet, which cannot
+see the win: 6.15 vs 6.23, 6.48 vs 6.38, 6.33 vs 5.50.
+
+**Reading, by the rule fixed before the run.**
+1. Lucky and unlucky replicates drift TOGETHER. The incumbent's unlucky
+   replicates sit at NotBuy 0.16–0.22 and its lucky ones at 0.15–0.19, where
+   real non-winners and winners sit at 0.42 and 0.43. The population drift is
+   not concentrated in the lucky branch: exposure bias.
+2. The lucky-vs-unlucky split is itself confounded by selection — replicates
+   that pull more win more — which the duplet shows as a placebo: blind to
+   what it won, it still shows "lucky" replicates spending 30–70% more. Table
+   2, which conditions on the same action and the same pity depth, is the
+   causal comparison, and there the generated post-win uplift is nil.
+3. So free running does not even reproduce the branch. Every generated
+   replicate is already at the spending ceiling — 6.3–7.0 per occasion after a
+   figure-banner ten-pull against 2.5–4.5 in the data — so a win has nowhere
+   to push it. The incumbent makes 2.0–2.3 times as many figure-banner
+   ten-pulls per sequence as the real customers, and because so many of them
+   fall right after a reset the simulated lottery pays a featured figure on
+   2.3–3.0% of them against 4.1% in the data.
+4. Jin's mechanism therefore stands as a property of the DATA (R41) and of the
+   model under real histories (R40 tracks the post-hit profile), and it is a
+   second thing the free-running generator gets wrong rather than the reason
+   it looks wrong. The ground-truth point stands as framing (the conditional
+   law, never the path; the counterfactual calendar is T3), not as an
+   explanation of the gap.
