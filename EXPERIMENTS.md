@@ -3575,3 +3575,16 @@ must call `model_multistream_state_space.set_product_range(first, last, unk)`;
 the module default is the level-6 range 13–56, which silently corrupts the
 counters on level-7 data (ids to 130). The loader must also run at
 `max_events` 2048, or the counter starts mid-history.
+
+### R42 — QUEUED: the lucky branch on the generated side (job 42592, 13 Oct 2026)
+
+`scripts/r42_generated_post_hit.py`: the incumbent (b36_triplet) and the
+duplet, three seeds, free-running on the R36 cell (same 300 customers, seeds,
+context 384, eight replicates). Computes R41's post-hit tables on the generated
+sequences and on the real sequences of the same customers and rows, and splits
+every replicate by whether the simulated lottery delivered a featured figure
+within its first 30 holdout occasions. Reading rule, fixed before the result:
+lucky and unlucky replicates both at NotBuy ≈ 0.18 means exposure bias; drift
+concentrated in lucky replicates whose post-win behaviour matches R41 means the
+branch is modelled correctly and carries the gap. Output
+`results/r42/generated_post_hit.json`, log `logs/r42.log`.
