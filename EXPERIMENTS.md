@@ -2814,6 +2814,10 @@ This reproduces R15's verdict at five seeds with the kernel present.
 | validation NLL | 0.8795 | **0.8735** | 0.8756 | 0.8801 | 0.8817 |
 | sd | 0.0113 | 0.0046 | 0.0085 | 0.0109 | 0.0146 |
 
+> Correction, 16 Oct: the columns are DECAY_INIT values. The half-lives actually
+> trained were 0.97, 1.31, 2.13, 5.01 and 10.0, under the rev-1 stock bugs. See
+> Bug (2026-10-16).
+
 **The optimum is interior**, which is what batch 31 was for: 0.5 is worse than
 1, and the curve rises monotonically from 1 to 10. The 1-vs-2 gap is 0.0021,
 about a quarter of a seed sd, so the point estimate is not pinned down; the
@@ -2828,6 +2832,10 @@ interior minimum rather than an argmin at the edge of the grid.
 | identity embedding only (b26, n=3) | 0.8820 ± 0.0101 | 0.8883 |
 | attributes only (b32, PROD_ID=0) | 0.8757 ± 0.0078 | **0.8832 ± 0.0033** |
 | both (b29_hl2) | 0.8756 ± 0.0085 | 0.8846 ± 0.0036 |
+
+> Correction, 16 Oct: b26 was NOT identity only. `NO_PROD_FEAT=1` was a no-op, so
+> b26 is the full model at 3 seeds, and the 0.0064 "attribute cost" below is void.
+> See Bug (2026-10-16).
 
 **The learned per-product identity embedding contributes nothing.** Deleting it
 costs 0.0001 nats on validation and is slightly better on the holdout, while
@@ -3639,3 +3647,104 @@ see the win: 6.15 vs 6.23, 6.48 vs 6.38, 6.33 vs 5.50.
    it looks wrong. The ground-truth point stands as framing (the conditional
    law, never the path; the counterfactual calendar is T3), not as an
    explanation of the gap.
+
+### Bug (2026-10-16): three gen-5 code bugs, and a half-life unit slip
+
+Found in a code review after the laptop was rebuilt. Bugs 1–3 are reproduced on
+synthetic inputs by `scripts/test_stock_fixes.py` (6 of its checks failed before
+the fix; all 15 pass after). Bug 3 was also checked on the batch-26 run directories.
+
+**Bug 1 — duplicate weights were shifted one tier.** `InventorySlots` passed
+`copy_weights` the inventory count INCLUDING the row being weighted. So every copy
+was weighted one tier late: a first copy got g[1], every later copy got g[2]
+(g = [1, s1, s1·s2]), and g[0] = 1 was never used. On a two-copy history with
+g = [1, 0.5, 0.25], the stock came to 0.75 instead of 1.5.
+
+**Bug 2 — the R33 stock lagged twice.** With TIER, DECAY or KERNEL on, the stock
+at row t summed rows < t. But rows already carry o_(t−1) (the R1 shift), so this
+dropped the acquisitions of occasion t−1. The plain count path includes them, and
+so does `simulation/kernel_sim.py` (S_t = Σ_{τ<t}). On the test history the plain
+count reads [0, 1, 1, 2, 2] and the R33 path read [0, 0, 1, 1, 2]. It is not a
+leak: the model saw less than it could, never more. It does confound rung L2b,
+because switching TIER on changed two things at once.
+
+Bugs 1 and 2 affect every run with `TIER=1`: the R33 ladder from batch 20 on, and
+every run on the frozen STOCK config, including the incumbent (b29_hl2, b33 hl2,
+b36_triplet).
+
+**Bug 3 — `--no-product-features` (`NO_PROD_FEAT=1`) did nothing.** Commit c47b84b
+(28 Sep) set `use_features` on gen 5's own `SpecialPlusFeatureLookup`, whose
+forward never read it. The flag that works lives in `shared/embeddings.py`, which
+gen 5 does not use.
+
+This is confirmed on the run directories. All three `b26_idonly` checkpoints
+carry `use_product_features: False`, yet `product_embed.gamma` is 0.922 / 0.960
+/ 0.945. Had the branch been cut, gamma would get no gradient and stay at exactly
+1.0. **Batch 26 was the full model.** Two things are void:
+
+- the "identity embedding only" row of the batches 30–32 table, with its claim
+  that "deleting the ATTRIBUTES costs 0.0064";
+- `docs/executive_report.tex` line 72.
+
+That 0.0064 compared the same model at 3 and 5 seeds, and sits inside one seed
+sd. R39 (attributes only vs both) is unaffected, because `--no-product-id` always
+worked. The GRU/LSTM baseline ignored the flag too; it is now wired.
+
+**Finding 4 — the frozen half-lives were not the values in the tags.** The
+half-life is softplus(`half_life_raw`), and DECAY_INIT sets the RAW value.
+softplus is close to the identity above about 5, but not below:
+
+| DECAY_INIT (tag) | 0.5 | 1 | 2 | 5 | 10 and up |
+|---|---|---|---|---|---|
+| half-life actually trained | 0.974 | 1.313 | 2.127 | 5.007 | unchanged |
+
+So batch 31's "0.5 is worse than 1" compared 0.97 against 1.31, and every "hl2"
+run trained at 2.13. The half-life claim was already withdrawn (batches 33–35)
+and that profile is flat, so no conclusion changes; quote trained values, not
+tags. The 2026-09-27 note "the parameter now IS the half-life" holds only at large
+values. This one is NOT fixed in code, because changing the transform would change
+every frozen config. To freeze at a target h, set DECAY_INIT = log(e^h − 1).
+
+**The fix: model_rev 2.**
+
+- `copy_weights` now gets the holdings before the row, and the stock includes
+  row t.
+- With decay on, a copy from occasion τ weighs ρ^(t−τ), as in `kernel_sim.py`.
+- `use_product_features=False` now removes the attribute branch, in the
+  transformer and the GRU/LSTM baseline.
+- The trainer writes `MODEL_REV = 2` into each run's cfg. A cfg without it is
+  rev 1, and `simulation/rollout.load_checkpoint` rebuilds it exactly as trained.
+  The tests check that rev 1 reproduces the old numbers, and that rev 1 equals
+  rev 2 when no R33 option is on. Every R36–R42 analysis of b29/b33/b36
+  therefore still scores the model that was trained.
+- `--resume` refuses a rev-1 `last.pt` when the change touches its configuration
+  (TIER, DECAY, KERNEL or NO_PROD_FEAT): resubmit under a new TAG.
+
+Every repository test passes after the fix, including the data checks, and the
+trainer completes pilot runs with the R33 stock on and with `--arch gru`.
+
+**What stands, and what has to be re-run.**
+
+- **Stands:** every prediction comparison as a statement about the models that
+  were trained; the R30 tie (the stock path is worth ≤ 0.014 nats, R37); and
+  R36–R42 as statements about the rev-1 incumbent.
+- **Re-run before quoting: the duplicate weights.** Decks 44–46 quote [1.00,
+  0.45, 0.21] and "a second copy is worth about half the first". Under rev 1, s1
+  scaled every FIRST copy and s1·s2 every later one. The only duplicate ratio rev
+  1 could express was therefore s2 ≈ 0.47, applied to every later copy, with 2nd
+  and 3rd+ copies indistinguishable. Whether "about half" survives is for the
+  re-run to say, not this note.
+- **Re-run:** the incumbent STOCK config under rev 2, and a genuine batch 26.
+  Rev-2 numbers: not recorded.
+- **Unchanged approximations:** the decay path still ignores acquisitions before
+  the window. `NO_PROD_FEAT` still leaves the slots' attribute stock and
+  `KERNEL=attr` reading the attribute table, so a "behaviour alone" test needs
+  those off too.
+
+**Lessons.**
+
+1. A switch that only sets an attribute is not a switch until a test shows the
+   output change.
+2. A test that encodes the code's own convention cannot catch a convention error.
+   `test_r32_r33.py` checks `decayed_counts` against cumsum − rows, so it passed
+   throughout. Test against the simulation's definition instead.

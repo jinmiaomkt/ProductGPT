@@ -15,6 +15,15 @@ LAST_PROD_ID = 56
 N_PRODUCTS = LAST_PROD_ID - FIRST_PROD_ID + 1   # 44 inventory slots
 UNK_PROD_ID = 59
 
+# Model revision, written into each run's cfg by the trainer. Checkpoints whose
+# cfg has no "model_rev" are revision 1 and must be rebuilt with model_rev=1 so
+# they compute the function they were trained as.
+#   2 (16 Oct 2026): the k-th copy of a product gets tier weight g[k-1] (rev 1
+#     gave g[k]); the R33 stock at row t includes occasion t-1, as the plain
+#     count does (rev 1 dropped it); use_product_features=False really removes
+#     the attribute branch (rev 1 ignored it).
+MODEL_REV = 2
+
 
 def set_product_range(first: int, last: int, unk: int) -> None:
     """R28: switch to a per-product vocabulary (13-130, UNK 133).
@@ -70,6 +79,9 @@ class SpecialPlusFeatureLookup(nn.Module):
         self.register_buffer("prod_mask", prod_mask, persistent=False)
 
         self.gamma = nn.Parameter(torch.tensor(1.0))
+        # False drops the attribute branch, so products are represented from
+        # behaviour alone (--no-product-features).
+        self.use_features = True
 
     def forward(self, ids: torch.Tensor) -> torch.Tensor:
         """
@@ -89,6 +101,8 @@ class SpecialPlusFeatureLookup(nn.Module):
         feat_vec = feat_vec * keep.unsqueeze(-1)
         if not self.product_id_embed:
             id_vec = id_vec * (~keep).unsqueeze(-1)
+        if not self.use_features:
+            return id_vec
 
         return id_vec + self.gamma * feat_vec
 
@@ -462,9 +476,12 @@ class InventorySlots(nn.Module):
     def __init__(self, d_model: int, n_heads: int, d_ff: int, dropout: float,
                  feature_tensor: torch.Tensor, sat_layers: int = 0,
                  kernel: str = "none", decay: str = "none", tier: bool = False,
-                 n_tiers: int = 3, decay_init: float = 30.0, decay_freeze: bool = False):
+                 n_tiers: int = 3, decay_init: float = 30.0, decay_freeze: bool = False,
+                 legacy_stock: bool = False):
         super().__init__()
         self.sat_layers = int(sat_layers)
+        # True reproduces model_rev 1's stock timing (see MODEL_REV).
+        self.legacy_stock = bool(legacy_stock)
         # R33, the stock's WRITE side: `kernel` says which products an
         # acquisition touches, `decay` how it fades, `tier` how a duplicate
         # counts. R34 found decay and duplicate weights identified under our
@@ -558,28 +575,47 @@ class InventorySlots(nn.Module):
             logits = (q @ k.transpose(0, 1) / math.sqrt(q.size(-1))).to(dtype)
         return torch.softmax(logits, dim=1)
 
+    def stock_counts(self, obtained_ids, count, init_count=None):
+        """(B,S,P) satiation stock at each row: `count` when no R33 option is on,
+        else the duplicate-weighted, decayed, kernel-mixed stock.
+
+        Row t carries o_(t-1) (the R1 shift), so its acquisitions are already
+        known at t and belong in the stock, exactly as in `count`. A copy from
+        occasion tau weighs rho^(t - tau) at occasion t, as in
+        simulation/kernel_sim.py.
+        """
+        if not (self.use_tier or self.decay == "exp" or self.kernel != "none"):
+            return count
+        g = self.tier_weights(count.dtype, count.device)
+        if self.use_tier:
+            # Holdings BEFORE this row's acquisitions; `count` already includes them.
+            before = count if self.legacy_stock else count - _plain_rows(obtained_ids, count.dtype)
+            per_row = copy_weights(obtained_ids, before.long(), g)
+        else:
+            per_row = _plain_rows(obtained_ids, count.dtype)
+        if self.decay == "exp":
+            hl = F.softplus(self.half_life_raw).clamp_min(1e-2)
+            rho = torch.exp(-math.log(2.0) / hl)
+            stock_cnt = decayed_counts(per_row, rho)
+            if not self.legacy_stock:
+                stock_cnt = rho * (stock_cnt + per_row)
+        else:
+            stock_cnt = torch.cumsum(per_row, dim=1)
+            if self.legacy_stock:
+                stock_cnt = stock_cnt - per_row
+            if init_count is not None:
+                stock_cnt = stock_cnt + init_count.to(count.device, count.dtype)[:, None, :]
+        kap = self.kernel_matrix(count.dtype, count.device)
+        if kap is not None:
+            stock_cnt = stock_cnt @ kap.transpose(0, 1)
+        return stock_cnt
+
     def forward(self, product_embed, offer_tok, offer_mask, obtained_ids,
                 init_count=None, init_last=None):
         B, S, Lx, D = offer_tok.shape
         count, since = additive_inventory(obtained_ids, init_count, init_last)
         owned = count > 0                                                     # (B,S,44)
-
-        stock_cnt = count
-        if self.use_tier or self.decay == "exp" or self.kernel != "none":
-            g = self.tier_weights(count.dtype, count.device)
-            per_row = (copy_weights(obtained_ids, count.long(), g) if self.use_tier
-                       else _plain_rows(obtained_ids, count.dtype))
-            if self.decay == "exp":
-                hl = F.softplus(self.half_life_raw).clamp_min(1e-2)
-                rho = torch.exp(-math.log(2.0) / hl)
-                stock_cnt = decayed_counts(per_row, rho)
-            else:
-                stock_cnt = torch.cumsum(per_row, dim=1) - per_row
-                if init_count is not None:
-                    stock_cnt = stock_cnt + init_count.to(count.device, count.dtype)[:, None, :]
-            kap = self.kernel_matrix(count.dtype, count.device)
-            if kap is not None:
-                stock_cnt = stock_cnt @ kap.transpose(0, 1)
+        stock_cnt = self.stock_counts(obtained_ids, count, init_count)
 
         state = torch.stack([torch.log1p(stock_cnt.clamp_min(0)), torch.log1p(since),
                              owned.float()], dim=-1)
@@ -903,8 +939,10 @@ class MultiStreamStateSpaceTransformer(nn.Module):
         use_obtained: bool = True,
         pity_stream: bool = False,
         fuse: str = "gate",
+        model_rev: int = MODEL_REV,
     ):
         super().__init__()
+        self.model_rev = int(model_rev)
         # inventory: "tokens" = the original path (inventory GRU + attention over
         # every obtained token). "slots" = additive per-product inventory (R23),
         # read by one attention step (sat_layers=0) or stacked SatiationBlocks
@@ -996,7 +1034,9 @@ class MultiStreamStateSpaceTransformer(nn.Module):
             vocab_size_src=vocab_size_src,
             product_id_embed=product_id_embed,
         )
-        if not use_product_features:
+        # Rev 1 ignored this flag, so a rev-1 checkpoint trained with it was
+        # trained WITH the attribute branch and must be rebuilt that way.
+        if not use_product_features and self.model_rev >= 2:
             self.product_embed.use_features = False
 
         self.decision_embed = nn.Embedding(vocab_size_src, d_model)
@@ -1023,7 +1063,8 @@ class MultiStreamStateSpaceTransformer(nn.Module):
                                                   feature_tensor, sat_layers,
                                                   kernel=kernel, decay=decay, tier=tier,
                                                   decay_init=decay_init,
-                                                  decay_freeze=decay_freeze)
+                                                  decay_freeze=decay_freeze,
+                                                  legacy_stock=self.model_rev < 2)
 
         # Campaign fixed effects (R33b). A calendar-level demand shock moves in
         # lockstep with "time since the product left the assortment", so without
@@ -1452,4 +1493,5 @@ def build_transformer(
         pity_stream=kwargs.get("pity_stream", False),
         tier=kwargs.get("tier", False),
         fuse=kwargs.get("fuse", "gate"),
+        model_rev=kwargs.get("model_rev", MODEL_REV),
     )

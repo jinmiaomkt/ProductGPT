@@ -42,7 +42,7 @@ from dataset_multistream import (
     collate_multistream,
     load_json_dataset,
 )
-from model_multistream_state_space import build_transformer
+from model_multistream_state_space import MODEL_REV, build_transformer
 from shared.features import load_feature_tensor
 
 PAD_ID = 0
@@ -916,6 +916,8 @@ def main() -> None:
                                first_prod_id=cfg["first_prod_id"],
                                last_prod_id=cfg["last_prod_id"],
                                max_token_id=cfg["vocab_size_src"] - 1)
+    # Saved with every checkpoint, so loaders can rebuild old runs as trained.
+    cfg["model_rev"] = MODEL_REV
     arch = cfg.get("arch", "transformer")
     if arch != "transformer":
         if cfg.get("num_mix_heads", 0):
@@ -933,6 +935,7 @@ def main() -> None:
             num_users=num_users,
             use_user_embedding=cfg["use_user_embedding"],
             product_id_embed=cfg.get("product_id_embed", True),
+            use_product_features=cfg.get("use_product_features", True),
         ).to(device)
     else:
         model = build_transformer(
@@ -971,6 +974,7 @@ def main() -> None:
             block_len=cfg.get("block_len", 64),
             n_campaigns=(cfg.get("n_campaigns", 32) if cfg.get("camp_fe") else 0),
             fuse=cfg.get("fuse", "gate"),
+            model_rev=cfg["model_rev"],
         ).to(device)
 
     n_par = sum(p.numel() for p in model.parameters())
@@ -1030,6 +1034,17 @@ def main() -> None:
     # ---- resume (HPCC: a walltime kill should not lose the run) ----------
     if args.resume and last_path.exists():
         state = torch.load(last_path, map_location=device, weights_only=False)
+        old_rev = state.get("cfg", {}).get("model_rev", 1)
+        # Rev 2 changed only the R33 stock (tier / decay / kernel) and the
+        # --no-product-features flag; other configurations compute the same function.
+        changed = (cfg.get("tier") or cfg.get("decay", "none") != "none"
+                   or cfg.get("kernel", "none") != "none"
+                   or not cfg.get("use_product_features", True))
+        if old_rev != cfg["model_rev"] and changed:
+            raise SystemExit(
+                f"[resume] {last_path} was trained as model_rev {old_rev}; this code is "
+                f"model_rev {cfg['model_rev']}. Resuming would switch the model's function "
+                "mid-run. Start the run under a new TAG instead.")
         model.load_state_dict(state["model_state_dict"])
         opt.load_state_dict(state["optimizer_state_dict"])
         sched.load_state_dict(state["scheduler_state_dict"])

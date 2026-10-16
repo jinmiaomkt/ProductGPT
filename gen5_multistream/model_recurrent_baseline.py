@@ -66,6 +66,7 @@ class RecurrentBaseline(nn.Module):
         num_users: Optional[int] = None,
         use_user_embedding: bool = False,
         product_id_embed: bool = True,
+        use_product_features: bool = True,
     ):
         super().__init__()
         cell = cell.lower()
@@ -79,6 +80,7 @@ class RecurrentBaseline(nn.Module):
             d_model=d_model, feature_tensor=feature_tensor,
             product_ids=product_ids, vocab_size_src=vocab_size_src,
             product_id_embed=product_id_embed)
+        self.product_embed.use_features = bool(use_product_features)
         self.decision_embed = nn.Embedding(vocab_size_src, d_model)
         self.offer_pool = AttentionPool(d_model, dropout)
         self.outcome_pool = AttentionPool(d_model, dropout)
@@ -160,10 +162,12 @@ def build_recurrent_baseline(cell: str, vocab_size_src: int, vocab_size_tgt: int
                              num_users: Optional[int] = None,
                              use_user_embedding: bool = False,
                              product_id_embed: bool = True,
+                             use_product_features: bool = True,
                              **_ignored) -> RecurrentBaseline:
     return RecurrentBaseline(
         cell=cell, vocab_size_src=vocab_size_src, vocab_size_tgt=vocab_size_tgt,
         d_model=d_model, n_layers=n_layers, d_ff=d_ff, dropout=dropout,
         feature_tensor=feature_tensor, num_users=num_users,
         use_user_embedding=use_user_embedding,
-        product_id_embed=product_id_embed)
+        product_id_embed=product_id_embed,
+        use_product_features=use_product_features)

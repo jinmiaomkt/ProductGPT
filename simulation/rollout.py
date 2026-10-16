@@ -100,6 +100,8 @@ def load_checkpoint(ckpt_path, device: str = "cpu", *, vocab_level: Optional[int
         # 576), and a duplet checkpoint would load into the wrong shape.
         use_obtained=cfg.get("use_obtained", True),
         pity_stream=cfg.get("pity_stream", False),
+        # No "model_rev" in cfg = trained before the 16 Oct 2026 fixes (rev 1).
+        model_rev=cfg.get("model_rev", 1),
     )
     model.load_state_dict(state["model_state_dict"])
 
