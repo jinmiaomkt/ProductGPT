@@ -64,7 +64,7 @@ def arm_c(batch, env, vocab, *, start: int, n_rep: int, seed: int):
     gen = np.zeros((B, S), dtype=np.int64)
     for t in range(start, S):
         if not alive[:, t].any():
-            break
+            continue
         y = np.where(alive[:, t], truth[:, t], 0)
         gen[:, t] = y
         if t + 1 >= S:

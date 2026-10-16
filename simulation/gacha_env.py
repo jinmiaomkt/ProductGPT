@@ -158,6 +158,10 @@ class AcquisitionEnv:
         self.p_rarity: Dict[str, np.ndarray] = {}
         self.p_class: Dict[Tuple[str, int], np.ndarray] = {}
         self.pool_p: Dict[Tuple[int, int, int], Tuple[np.ndarray, np.ndarray]] = {}
+        # (banner, rarity) -> what that banner actually yielded at that rarity
+        self.banner_pool: Dict[Tuple[str, int], Tuple[np.ndarray, np.ndarray]] = {}
+        self.guarantee_q: Dict[str, float] = {}
+        self.guarantee_L: Dict[str, int] = {}
         self._fitted = False
 
     # ---------------------------------------------------------------- fit
@@ -172,6 +176,7 @@ class AcquisitionEnv:
         cls: Dict[Tuple[str, int], Counter] = defaultdict(Counter)
         cls_clean: Dict[Tuple[str, int], Counter] = defaultdict(Counter)
         within: Dict[Tuple[int, int, int], Counter] = defaultdict(Counter)
+        by_banner: Dict[Tuple[str, int], Counter] = defaultdict(Counter)
 
         for it in items:
             lto = np.asarray(it["lto"])
@@ -222,6 +227,7 @@ class AcquisitionEnv:
                         if int(valid.sum()) == NOMINAL_PULLS[d]:
                             cls_clean[(banner, r)][k] += 1
                     within[(r, self.vocab.figure[p], self.vocab.lto[p])][p] += 1
+                    by_banner[(banner, r)][p] += 1
 
         if not nslots:
             raise RuntimeError("fit() saw no calibration rows -- check holdout_from "
@@ -234,11 +240,8 @@ class AcquisitionEnv:
             tot = sum(c.values())
             self.p_class[key] = np.array([c["featured"], c["standard"], c["other_lto"]],
                                          dtype=np.float64) / max(tot, 1)
-        self.pool_p = {}
-        for key, c in within.items():
-            ids = np.array(sorted(c), dtype=np.int64)
-            w = np.array([c[int(i)] for i in ids], dtype=np.float64)
-            self.pool_p[key] = (ids, w / w.sum())
+        self.pool_p = {key: _freq(c) for key, c in within.items()}
+        self.banner_pool = {key: _freq(c) for key, c in by_banner.items()}
 
         # ---- calibrate the 50/50 guarantee -------------------------------
         # Which 5-star you receive depends on PREVIOUS results: lose the coin
@@ -365,6 +368,13 @@ class AcquisitionEnv:
                 is_fig = self.vocab.figure_of_banner(banner)
                 return self._from_pool(5, is_fig, 0 if k == 1 else 1, rng,
                                        exclude=featured)
+        # What this banner actually yielded at this rarity in calibration. The
+        # pooled tables below cannot tell a weapon banner's 4-stars (mostly
+        # weapons) from a character banner's, nor that the regular banner's
+        # 5-stars include weapons; they are only the fallback for an unseen pair.
+        hit = self.banner_pool.get((banner, rarity))
+        if hit is not None:
+            return _draw(hit, rng, exclude=featured)
         is_fig = self.vocab.figure_of_banner(banner) if rarity == 5 else None
         return self._from_pool(rarity, is_fig, None, rng, exclude=featured)
 
@@ -377,16 +387,45 @@ class AcquisitionEnv:
         """
         for key in self.vocab.pool_keys(rarity, is_fig, lto):
             hit = self.pool_p.get(key)
-            if hit is None:
-                continue
-            ids, w = hit
-            if exclude:
-                keep = ~np.isin(ids, np.asarray(exclude, dtype=np.int64))
-                if keep.any():
-                    ids, w = ids[keep], w[keep]
-                    w = w / w.sum()
-            return int(rng.choice(ids, p=w))
+            if hit is not None:
+                return _draw(hit, rng, exclude=exclude)
         return 0
+
+    # ------------------------------------------------------------- observe
+    def observe(self, decision: int, offer: Sequence[int], row: Sequence[int],
+                state: PityState) -> None:
+        """Advance `state` over a REAL acquisition row by the rules `step` uses.
+
+        Warms a simulated customer on their observed history, so the pity
+        counters and the guarantee enter a rollout where they really were.
+        `offer` is the assortment shown when the decision was made.
+        """
+        d = int(decision)
+        if d not in BANNER_OF:
+            return
+        banner = BANNER_OF[d]
+        offer = [int(x) for x in offer]
+        featured = {offer[s] for s in FEATURED_SLOTS[banner] if s < len(offer) and offer[s] > 0}
+        for p in row:
+            p = int(p)
+            if not (self.vocab.first_id <= p <= self.vocab.last_id):
+                continue
+            r = self.vocab.rarity.get(p, 3)
+            if r == 5:
+                state.since5[banner] = 0
+                state.since4[banner] = 0
+                if featured:
+                    won = p in featured
+                    if self.identity_mode == "published":
+                        state.guaranteed[banner] = not won
+                    elif banner in self.guarantee_q:
+                        state.losses[banner] = 0 if won else state.losses[banner] + 1
+            elif r == 4:
+                state.since5[banner] += 1
+                state.since4[banner] = 0
+            else:
+                state.since5[banner] += 1
+                state.since4[banner] += 1
 
 
 class ProductTable:
@@ -427,6 +466,24 @@ class ProductTable:
         for f in (1, 0):
             for l in (0, 1):
                 yield (rarity, f, l)
+
+
+def _freq(counter) -> Tuple[np.ndarray, np.ndarray]:
+    """Counter of product ids -> (ids, probabilities)."""
+    ids = np.array(sorted(counter), dtype=np.int64)
+    w = np.array([counter[int(i)] for i in ids], dtype=np.float64)
+    return ids, w / w.sum()
+
+
+def _draw(pool: Tuple[np.ndarray, np.ndarray], rng: np.random.Generator,
+          exclude: Sequence[int] = ()) -> int:
+    """One product from (ids, probabilities), leaving out `exclude` when possible."""
+    ids, w = pool
+    if len(exclude):
+        keep = ~np.isin(ids, np.asarray(list(exclude), dtype=np.int64))
+        if keep.any():
+            ids, w = ids[keep], w[keep] / w[keep].sum()
+    return int(rng.choice(ids, p=w))
 
 
 def _to_prob(counter, size: int) -> np.ndarray:

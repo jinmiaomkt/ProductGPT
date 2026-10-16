@@ -100,10 +100,15 @@ def simulate(batch: Dict[str, torch.Tensor], env, vocab, sampler: Callable, *,
     if env is not None:
         _warm_pity(states, buf, vocab, env, start)
 
-    prev = buf["prev_decision"].cpu().numpy()[:, start].copy()
+    real_prev = buf["prev_decision"].cpu().numpy()
+    prev = real_prev[:, start].copy()
     for t in range(start, S):
+        # Holdout spans are staggered: a later sequence may start after an empty
+        # row, and it must enter with its real previous decision.
         if not alive[:, t].any():
-            break
+            if t + 1 < S:
+                prev = real_prev[:, t + 1].copy()
+            continue
         y = np.asarray(sampler(prev, t, rng), dtype=np.int64)
         y = np.where(alive[:, t], np.clip(y, 1, N_CLASSES), 0)
         gen[:, t] = y
@@ -114,7 +119,7 @@ def simulate(batch: Dict[str, torch.Tensor], env, vocab, sampler: Callable, *,
         act = alive[:, t] & (y > 0)
         for b in np.flatnonzero(act):
             obtained[b, t + 1] = env.step(int(y[b]), offers[b, t], states[b], rng)
-        prev = np.where(act, y, buf["prev_decision"].cpu().numpy()[:, t + 1])
+        prev = np.where(act, y, real_prev[:, t + 1])
     return {"decisions": gen, "alive": alive, "start": start,
             "obtained": obtained, "lto": offers}
 

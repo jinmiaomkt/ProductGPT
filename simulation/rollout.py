@@ -144,6 +144,13 @@ def _forward_logits(model, buf: Dict[str, torch.Tensor], upto: int) -> torch.Ten
         kw["ipt"] = buf["ipt"][:, s]
     if buf.get("campaign") is not None and getattr(model, "camp_bias", None) is not None:
         kw["campaign"] = buf["campaign"][:, s]
+    # Everything acquired before the context window, for the additive slots. The
+    # same rule as the trainer's inventory_kwargs; without it a rollout on a
+    # shortened window starts every customer with an empty inventory.
+    if getattr(model, "inventory_kind", "tokens") == "slots":
+        for k in ("inv_init_count", "inv_init_last"):
+            if buf.get(k) is not None:
+                kw[k] = buf[k]
     out = model(buf["lto"][:, s], buf["obtained"][:, s], buf["prev_decision"][:, s],
                 buf.get("user_idx"), **kw)
     logits = out[0] if isinstance(out, (tuple, list)) else out
@@ -198,8 +205,10 @@ def rollout(model, batch: Dict[str, torch.Tensor], env, vocab, *, start: int,
 
     offers = buf["lto"].cpu().numpy()
     for t in range(start, S):
+        # Holdout spans are staggered, so an empty row is not the end: a later
+        # sequence may start after it.
         if not alive[:, t].any():
-            break
+            continue
         logits = _forward_logits(model, buf, t).float()
         if temperature != 1.0:
             logits = logits / temperature
@@ -235,31 +244,26 @@ def rollout(model, batch: Dict[str, torch.Tensor], env, vocab, *, start: int,
 
 
 def _warm_pity(states, buf, vocab, env, start: int) -> None:
-    """Replay the real prefix so pity counters enter the rollout where they were."""
-    from gacha_env import BANNER_OF
-    obt = buf["obtained"][:, :start].cpu().numpy()
-    prv = buf["prev_decision"][:, :start].cpu().numpy()
+    """Replay each sequence's real prefix so its pity and guarantee state enter the
+    rollout where they were.
+
+    A sequence generates from its own first live row s >= start. Row t holds the
+    outcome of the decision made at t-1 (the R1 shift), so rows 1..s are all real
+    outcomes known before that first decision -- row s included. The transitions
+    are the environment's own (`env.observe`), so warm-up and step cannot disagree.
+    """
+    obt = buf["obtained"].cpu().numpy()
+    prv = buf["prev_decision"].cpu().numpy()
+    lto = buf["lto"].cpu().numpy()
+    alive = (buf["label"] != 0).cpu().numpy()
+    S = obt.shape[1]
     for b in range(obt.shape[0]):
-        st = states[b]
-        for t in range(obt.shape[1]):
-            d = int(prv[t] if prv.ndim == 1 else prv[b, t])
-            banner = BANNER_OF.get(d)
-            if banner is None:
-                continue
-            for p in obt[b, t]:
-                p = int(p)
-                if not (vocab.first_id <= p <= vocab.last_id):
-                    continue
-                r = vocab.rarity.get(p, 3)
-                if r == 5:
-                    st.since5[banner] = 0
-                    st.since4[banner] = 0
-                elif r == 4:
-                    st.since5[banner] += 1
-                    st.since4[banner] = 0
-                else:
-                    st.since5[banner] += 1
-                    st.since4[banner] += 1
+        live = np.flatnonzero(alive[b, start:])
+        if live.size == 0:
+            continue
+        own_start = start + int(live[0])
+        for t in range(1, min(own_start, S - 1) + 1):
+            env.observe(int(prv[b, t]), lto[b, t - 1], obt[b, t], states[b])
 
 
 def first_row_of_campaign(campaign: torch.Tensor, first_holdout: int) -> np.ndarray:

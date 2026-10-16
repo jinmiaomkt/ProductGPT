@@ -3748,3 +3748,106 @@ trainer completes pilot runs with the R33 stock on and with `--arch gru`.
 2. A test that encodes the code's own convention cannot catch a convention error.
    `test_r32_r33.py` checks `decayed_counts` against cumsum − rows, so it passed
    throughout. Test against the simulation's definition instead.
+
+### Bug (2026-10-16): four defects in the rollout engine — every R36–R42 rollout ran on it
+
+Found in the same review. Each defect is reproduced on synthetic inputs by
+`scripts/test_rollout_fixes.py` (9 checks failed before the fix; all 11 pass
+after). The data tests, `test_rollout.py` included, still pass.
+
+**Defect 1 — the pre-window inventory was dropped.** `rollout._forward_logits`
+never passed `inv_init_count` / `inv_init_last`. So at the 384-occasion rollout
+window, every slots-model rollout (free-running and teacher-forced) began with
+everything acquired before the window set to zero. The R36c method note priced
+the 384 truncation at +0.0011 nats WITH those inputs, so that price did not
+describe the rollouts. This reaches slots configurations only: b29_hl2, b18
+counts, b33/b35, b36 triplet, b38. It does not reach the token-inventory arms or
+the duplet.
+
+**Defect 2 — the item mix was wrong.** In `gacha_env`:
+- A 4-star always came from the 4-star CHARACTER pool, even on the weapon banner.
+- A regular-banner 5-star was always a character.
+
+Measured on calibration rows of 150 customers held out of the environment fit:
+
+| banner | 4-star weapon share, real | old engine | fixed engine |
+|---|---|---|---|
+| regular | 0.398 | 0.000 | 0.400 |
+| figure A | 0.319 | 0.000 | 0.315 |
+| figure B | 0.318 | 0.000 | 0.318 |
+| weapon | 0.741 | 0.000 | 0.747 |
+
+Weapons among regular-banner 5-stars: 0.228 real, 0.000 old, 0.234 fixed.
+
+The scored functionals cannot see this: 23 of the 27 use decisions only, and
+the four satiation functionals count copies of FEATURED 5-stars, which this
+defect never touched. It reaches results only through what a free-running model
+reads back: its inventory and attribute stock.
+
+**Defect 3 — the loop exited early.** `rollout`, `baselines.simulate` and arm C
+stopped at the first row where no sequence in the chunk was alive. A sequence
+whose holdout began after such a gap was never generated, and it scored as an
+empty sequence. This reaches every arm, teacher forcing and arm C included. How
+many customers it hit was not recorded.
+
+**Defect 4 — the pity warm-up was off by one.**
+- The real prefix was replayed only up to the chunk's earliest start, so it
+  missed the outcome of each sequence's last real decision.
+- Sequences that entered the holdout later lost all their real rows in between.
+- The 50/50 guarantee state was never warmed. No run had the guarantee active
+  (R36h), so that part changed nothing.
+
+This reaches every arm that draws acquisitions: through the model's inputs, and
+through the four satiation functionals.
+
+**Which results ran on the old engine.**
+
+| result (job) | arm | defects that reach it |
+|---|---|---|
+| R36c baselines (41840) | i.i.d., Markov | 3; 4 via satiation functionals |
+| R36c free running (41840) | b29_hl2, b18 counts | 1, 2, 3, 4 |
+| R36c free running (41840) | b18 tokens, b18 no-cross-attention | 2, 3, 4 |
+| R36c teacher-forced control (41859) | b29_hl2 | 1, 3 |
+| R36e scheduled sampling (41897) | b35 and its b33 control | 1, 2, 3, 4 |
+| R36f arm C (local CPU) | real decisions, simulated lottery | 3; 4 via satiation functionals |
+| R37 generative (42578) | b36 triplet | 1, 2, 3, 4 |
+| R37 generative (42578) | duplet | 3; 4 via satiation functionals |
+| R38 generative (42466) | b38 arms | 1, 2, 3, 4 |
+| R42 (42592) | b36 triplet / duplet | as R37 |
+
+The R36c decision-share table and the R41 point that cites arm C inherit their
+arms' rows above.
+
+**Not affected:**
+- every one-step number (NLL, AUC, ECE)
+- R36h, which was measured on real calibration rows
+- R39 and R40, which are teacher-forced forwards on real histories
+- R41's real-data tables
+
+**What this does and does not undo.** Both controls ran on the same engine:
+teacher forcing passed with defects 1 and 3, and arm C passed with 3 and 4. So
+the diagnosis "the per-step law is sound, the closed loop is not" is not
+obviously an artefact.
+
+But defects 1 and 2 alter exactly what a free-running model feeds itself: an
+inventory that starts empty, and acquisitions with no 4-star weapons. Neither
+control can see that combination, because teacher forcing keeps the real
+acquisitions and arm C has no model. Two consequences follow:
+- **R37's "the duplet is the better generator" (H1 reversed) is the result most
+  at risk.** The duplet is immune to defects 1 and 2 by construction, and the
+  triplet it beat is exposed to both.
+- **Arm C's verdict that the environment is faithful could not have detected
+  defect 2**, because no scored functional reads it. The environment check has
+  to be repeated with a statistic that does.
+
+**Status:** every generative number in R36c–R42 is "measured on the pre-fix
+engine" until it is re-run, and should not be quoted without that qualifier.
+The fixed engine scores the same cell with the same null band, so the re-runs
+are directly comparable.
+
+**Not changed, flagged for a modelling decision:**
+- Featured A and Featured B keep separate pity and guarantee counters, in the
+  environment and in the model's `pity_depth`. In the game the two character
+  banners share them.
+- The fixed occasion grid still carries the real activity pattern (row density,
+  IPT), so "free running" conditions on when the real customer was active.
