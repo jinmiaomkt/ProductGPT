@@ -3927,11 +3927,20 @@ CPU short queue. All four gates must pass:
 |---|---|
 | G1 load | `rollout.load_checkpoint` rebuilds the gen-6 model from `best.pt` |
 | G2 same function | teacher-forced NLL on the out-of-sample × holdout cell (fp32) equals the trainer's `final.json` (bf16) within 0.01, over the same events |
-| G3 same draws | on 8 real customers × 2 replicates with the fitted environment, streaming and prefix-recompute rollouts give identical decisions and acquisitions, free running and teacher forced |
+| G3 same draws | on the 8 real customers whose holdout starts earliest × 2 replicates, over their first 60 generated occasions, with the fitted environment, streaming and prefix-recompute rollouts give identical decisions and acquisitions, free running and teacher forced |
 | G4 runs | a 32-customer × 8-replicate streaming rollout gives every live holdout row a valid decision and generates nothing anywhere else; it reports the time per step |
 
 On any failure: fix, re-run `scripts/gen6_tests_cpu.pbs`, and probe again.
 Nothing is trained until all four gates pass.
+
+*First probe run, job 42863 (19 Oct): cancelled after an hour, a design flaw
+in the probe, not a model failure.* G1 passed. G2 passed: 1.8129 against
+1.8130 in `final.json`, over the same 12,292 events. G3 as first written
+compared whole holdout spans, but the reference loop re-reads the whole prefix
+at every step, so its cost grows with the square of history length. G2's
+throughput on that CPU node (about 390 rows/s) put it at about 13 hours, past
+the job's 3-hour limit. G3 is now bounded as in the table: same gate, same
+real customers and environment, about 0.3 million row-passes per mode.
 
 **Step 1: prediction.** The headline is NLL on
 `outsample_users_holdout_period`, paired by seed. All arms share one customer

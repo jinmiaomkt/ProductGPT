@@ -14,7 +14,10 @@ Gates -- all four must pass:
   G3  same draws on real customers and the fitted environment, the streaming
                  rollout and gen 5's prefix-recompute loop give identical
                  decisions and acquisitions from the same seed, free running and
-                 teacher forced. (The synthetic version is test T9.)
+                 teacher forced, over the first 60 generated occasions of the 8
+                 customers whose holdout starts earliest (the reference loop's
+                 cost grows with the square of history length). The synthetic
+                 version is test T9.
   G4  runs       a larger streaming rollout completes: every live holdout row gets
                  a valid decision and nothing is generated anywhere else. Reports
                  the time per generated occasion, which prices step 2.
@@ -75,11 +78,34 @@ def live_customers(cell, n: int):
     return out
 
 
+def earliest_holdout(cell, n: int):
+    """The n customers whose holdout starts earliest (shortest real prefix)."""
+    rows = []
+    for i in range(len(cell)):
+        live = torch.nonzero(cell[i]["label"] != 0).view(-1)
+        if live.numel():
+            rows.append((int(live[0]), i))
+    return [i for _, i in sorted(rows)[:n]]
+
+
+def cut(b, n: int):
+    """Keep rows [0, n) of every per-row tensor in a collated batch."""
+    out = dict(b)
+    for k, v in b.items():
+        if torch.is_tensor(v) and v.dim() >= 2 and k not in ("inv_init_count", "inv_init_last"):
+            out[k] = v[:, :n]
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-dir", required=True)
     ap.add_argument("--equiv-users", type=int, default=8)
     ap.add_argument("--equiv-rep", type=int, default=2)
+    ap.add_argument("--equiv-steps", type=int, default=60,
+                    help="generated occasions compared in G3. The reference loop re-reads "
+                         "the whole prefix at every step, so its cost grows with the square "
+                         "of history length")
     ap.add_argument("--big-users", type=int, default=32)
     ap.add_argument("--big-rep", type=int, default=8)
     ap.add_argument("--threads", type=int, default=4)
@@ -137,9 +163,19 @@ def main() -> None:
     vocab = ProductTable.from_xlsx(config5.feature_file_path(cfg))
     fit_items = [train_ds[i] for i in range(min(len(train_ds), 600))]
     env = AcquisitionEnv(vocab).fit(fit_items, holdout_from=HOLDOUT_FROM)
-    b = collate(cell, live_customers(cell, a.equiv_users))
+    # The reference loop re-reads the whole prefix at every step, so its cost
+    # grows with the square of history length: the first version of this probe
+    # (job 42863) needed about 13 h on a CPU node. Compare the first
+    # `equiv_steps` generated occasions of the customers whose holdout starts
+    # earliest -- same gate, bounded cost.
+    b = collate(cell, earliest_holdout(cell, a.equiv_users))
     start = int(first_row_of_campaign(b["campaign"], HOLDOUT_FROM).min())
-    rec["G3"] = {}
+    b = cut(b, start + a.equiv_steps)
+    S3 = int(b["label"].shape[1])
+    passes = a.equiv_users * a.equiv_rep * sum(t + 1 for t in range(start, S3))
+    print(f"  {a.equiv_users} customers x {a.equiv_rep} replicates, rows {start}..{S3 - 1}; "
+          f"the reference loop processes ~{passes:,} rows per mode", flush=True)
+    rec["G3"] = {"start": start, "rows": S3}
     g3 = True
     for tf in (False, True):
         name = "teacher forced" if tf else "free running"
