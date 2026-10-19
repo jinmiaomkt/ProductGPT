@@ -1,0 +1,49 @@
+#!/bin/bash
+# ============================================================================
+# R43 secondary: headline-cell NLL by history length (scripts/r43_strata.py).
+#
+# After batch 39 (GPU):
+#   cd ~/ProductGPT/work_gen6
+#   qsub -v TAGS=b39_g5rev2:b39_g6full:b39_g6w384:b39_g6w128,SEEDS=1:2:3:4:5 scripts/r43_strata.pbs
+# Test on old checkpoints (CPU queue):
+#   qsub -q short -l select=1:ncpus=8:mem=48GB \
+#        -v DEVICE=cpu,RUN_DIRS=<dir1>:<dir2>,OUT=results/r43/strata_test.json scripts/r43_strata.pbs
+# Lists are colon-separated (qsub -v splits on commas).
+# Log: ~/ProductGPT/logs/r43_strata_<jobid>.log
+# ============================================================================
+#PBS -N r43_strata
+#PBS -l select=1:ncpus=8:ngpus=1:mem=64GB
+#PBS -q GPU
+#PBS -l walltime=06:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+
+set -o pipefail
+module purge
+module load python/3.11.4 cuda/12.5
+cd "$PBS_O_WORKDIR"
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
+export PYTHONUNBUFFERED=1
+export OMP_NUM_THREADS=8
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+DEVICE="${DEVICE:-cuda}"
+OUT="${OUT:-results/r43/strata.json}"
+[[ "$DEVICE" == "cpu" ]] && export CUDA_VISIBLE_DEVICES=""
+log=/storage/home/jinmiao/ProductGPT/logs/r43_strata_${PBS_JOBID%%.*}.log
+mkdir -p "$(dirname "$log")"
+exec >"$log" 2>&1
+echo "PBS job: $PBS_JOBID on $(hostname)  device=$DEVICE"
+echo "Git:     $(git log --oneline -1)"
+
+args=(--device "$DEVICE" --threads 8 --out "$OUT")
+[[ -n "${RUN_DIRS:-}" ]] && args+=(--run-dirs ${RUN_DIRS//:/ })
+[[ -n "${TAGS:-}" ]] && args+=(--tags ${TAGS//:/ })
+[[ -n "${SEEDS:-}" ]] && args+=(--seeds ${SEEDS//:/ })
+echo "Command: python scripts/r43_strata.py ${args[*]}"
+python scripts/r43_strata.py "${args[@]}"
+rc=$?
+echo "exit=$rc"
+exit $rc
