@@ -1,0 +1,105 @@
+#!/bin/bash
+# ============================================================================
+# R36i: the R36 two-by-two and yardstick on the fixed rollout engine, ONE job.
+# Pre-registered in EXPERIMENTS.md (R36i). One GPU.
+#
+# Runs from its own worktree, pinned to the commit Jin approved, so a later
+# pull in ~/ProductGPT/work or ~/ProductGPT/work_gen6 cannot change the code
+# under a queued job:
+#
+#     cd ~/ProductGPT/work_gen6 && git fetch origin
+#     git worktree add --detach ~/ProductGPT/work_r36i <approved sha>
+#     cd ~/ProductGPT/work_r36i && qsub scripts/r36i_rerun.pbs
+#
+# Wiring check first, on the free CPU queue (gates and smoke only, no GPU):
+#     qsub -q short -l select=1:ncpus=4:mem=32GB -l walltime=02:00:00 \
+#          -v SMOKE_ONLY=1 scripts/r36i_rerun.pbs
+#
+# Stages, in order; a gate failure stops the job before any GPU hour is spent:
+#   0  gates   test_rollout_fixes.py and test_seq_metrics.py, then every arm on
+#              12 customers (--smoke), including the nine-checkpoint check
+#   1  R36i    every arm on 300 customers x 8 replicates, context 384
+#   2  price   teacher-forced NLL of b33_campfe_hl2 s1 at context 384 and 1024
+#              on the same 300 customers (secondary; prices the window for the
+#              checkpoint the two-by-two uses)
+#
+# Log: ~/ProductGPT/logs/r36i_<jobid>.log
+# Results: results/r36i/r36i.json (and smoke.json) inside the worktree.
+# Time: stage 1 is twelve rollouts at about 13 min each plus the CPU arms and
+# the classifiers, about 3 h; walltime 8 h for headroom.
+# ============================================================================
+#PBS -N r36i_rerun
+#PBS -l select=1:ncpus=8:ngpus=1:mem=64GB
+#PBS -q GPU
+#PBS -l walltime=08:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+
+set -o pipefail
+module purge
+module load python/3.11.4 cuda/12.5
+cd "$PBS_O_WORKDIR"
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
+export PYTHONUNBUFFERED=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export OMP_NUM_THREADS=8
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+jid=${PBS_JOBID%%.*}
+log=/storage/home/jinmiao/ProductGPT/logs/r36i_${jid}.log
+mkdir -p "$(dirname "$log")"
+exec >"$log" 2>&1
+
+echo "PBS job: $PBS_JOBID on $(hostname)   start $(date --iso-8601=seconds)"
+echo "Dir:     $PBS_O_WORKDIR"
+echo "Git:     $(git log --oneline -1)"
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+python -c "import torch, numpy, sklearn; print('torch', torch.__version__, 'numpy', numpy.__version__, 'sklearn', sklearn.__version__, 'cuda', torch.cuda.is_available())"
+
+finish() {
+  echo
+  echo "Finish: $(date --iso-8601=seconds)   $1"
+  bash scripts/notify.sh "r36i ${jid}: $1" || true
+  exit "$2"
+}
+
+# ---------------------------------------------------------------- stage 0
+for t in scripts/test_rollout_fixes.py scripts/test_seq_metrics.py; do
+  echo
+  echo "===== gate: $t"
+  python -W ignore "$t"
+  rc=$?
+  echo "===== gate: $t exit $rc"
+  [[ $rc -eq 0 ]] || finish "STOPPED at gate $t (exit $rc)" 3
+done
+
+echo
+echo "===== gate: smoke, every arm on 12 customers"
+python scripts/r36i_rerun.py --smoke --out results/r36i/smoke.json
+rc=$?
+echo "===== gate: smoke exit $rc"
+[[ $rc -eq 0 ]] || finish "STOPPED at the smoke gate (exit $rc)" 4
+[[ "${SMOKE_ONLY:-0}" == "1" ]] && finish "smoke-only run: every gate passed" 0
+
+# ---------------------------------------------------------------- stage 1
+echo
+echo "===== stage 1: R36i"
+python scripts/r36i_rerun.py --out results/r36i/r36i.json
+rc1=$?
+echo "===== stage 1 exit $rc1"
+
+# ---------------------------------------------------------------- stage 2
+echo
+echo "===== stage 2: teacher-forced NLL, b33_campfe_hl2 s1, context 384 then 1024"
+python scripts/r36c_generate.py --configs b33_campfe_hl2 --seeds 1 --tf-nll --max-events 384
+rc2a=$?
+python scripts/r36c_generate.py --configs b33_campfe_hl2 --seeds 1 --tf-nll --chunk 4
+rc2b=$?
+echo "===== stage 2 exit $rc2a / $rc2b"
+
+if [[ $rc1 -eq 0 && $rc2a -eq 0 && $rc2b -eq 0 ]]; then
+  finish "done, all stages exit 0; read the log before quoting anything" 0
+fi
+finish "stage 1 exit $rc1, stage 2 exit $rc2a/$rc2b; read the log" 1

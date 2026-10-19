@@ -4006,3 +4006,160 @@ B and D say why.
 - Scheduled sampling on gen 6.
 - Capacity tuning. Both families keep the incumbent's hyperparameters, which
   makes the comparison symmetric by construction.
+
+### R36i — PLAN (approved by Jin, 19 Oct 2026): the R36 two-by-two and yardstick, re-run on the fixed engine
+
+**Why.** Panels A and B of `results/figs/generative_failure` cannot be quoted as
+they stand, for two reasons.
+1. **The engine.** Every number ran before the four rollout defects were fixed
+   (`7aca2a3`; see Bug (2026-10-16)). Free running met all four, teacher forcing
+   defects 1 and 3, arm C and the baselines defect 3 and, through the satiation
+   functionals, defect 4.
+2. **The design.** The two-by-two joins three runs that share neither customers,
+   checkpoint nor band. Teacher forcing is b29_hl2 on 60 customers (job 41859),
+   judged against that run's band of 0.373. Free running is the b33 control on
+   300 (41897), and arm C a separate local run. Energy distance estimates a
+   distance that does not shrink with the sample, while the band does. So
+   teacher forcing's 0.307 is about four times the 300-customer band of 0.078,
+   and "INSIDE the band" held for the 60-customer band only.
+
+**What runs.** One job and one process (`scripts/r36i_rerun.py`, submitted by
+`scripts/r36i_rerun.pbs`): one dataset build, one draw of 300 customers, one
+scaler, one split-half band, every arm.
+
+| arm | what is re-drawn | runs |
+|---|---|---|
+| real data | nothing: the split-half band itself | 120 splits |
+| arm C | acquisitions; decisions are the customer's own | draw seeds 11, 12, 13 |
+| teacher-forced | decisions; both input streams stay real | b33_campfe_hl2, seeds 1–3 |
+| free-running | decisions and acquisitions, both fed back | b33_campfe_hl2, seeds 1–3 |
+| independent draws | decisions and acquisitions | draw seeds 17, 18, 19 |
+| first-order Markov | decisions and acquisitions | draw seeds 17, 18, 19 |
+| scheduled sampling p = 0.15 | as free-running | b35_ss015, seeds 1–3 |
+| scheduled sampling p = 0.35 | as free-running | b35_ss035, seeds 1–3 |
+
+The b33 free-running arm is also the scheduled-sampling control, as in R36e.
+
+**Fixed settings, all R36c/e's.**
+- The `outsample_users_holdout_period` cell, 300 customers drawn with
+  `default_rng(0)`, 8 replicates, chunks of 32.
+- Context 384, with the pre-window inventory now carried.
+- Environment and baselines fitted on 600 training customers' calibration rows;
+  scaler fitted on the real set.
+- Band: 120 split halves, seed 3. C2ST: 5 folds, seed 0.
+- Rollout seed 1000 + training seed, the same for teacher-forced and
+  free-running.
+
+Model seeds are training seeds. The draw seeds of the arms without a model vary
+only the sampling, at 8 replicates.
+
+**Why b33 and not b29_hl2.** Both model cells need one checkpoint.
+b33_campfe_hl2 is the free-running number the figure already shows (2.352) and
+the matched control for scheduled sampling, so panels A, B and D then share a
+checkpoint. Its campaign effects are estimated, so they are kept
+(`legacy_camp_bias` off). It is model_rev 1 and is rebuilt exactly as trained.
+b29_hl2 is not re-run: its campaign bias is an untrained initialisation, and it
+has no scheduled-sampling siblings. The pre-fix teacher-forced number (b29_hl2,
+60 customers) therefore has no like-for-like successor; the new row replaces it.
+
+**Checks the job makes, each logged.**
+- Gates before any GPU time: `test_rollout_fixes.py`, `test_seq_metrics.py`,
+  and every arm on 12 customers (`--smoke`).
+- The code: HEAD contains `7aca2a3` and the scored code is committed. The job
+  runs in its own worktree, pinned to the approved commit.
+- The checkpoints: all nine agree with the dataset's configuration on every key
+  that decides customers, rows and inputs. b33 carries scheduled sampling 0,
+  b35 0.15 and 0.35, and all carry campaign FE.
+- The customers: the band must reproduce the pre-fix q95 of 0.0781258. If it
+  does not, the new numbers stand but the pre-fix comparison is void.
+- Every arm: a decision on every live holdout row and on no other row; real
+  acquisitions on every row up to each customer's own holdout start (every row
+  when teacher-forced); the same band in every comparison.
+- Defect 3's reach: the job counts the customers and rows the pre-fix loop
+  dropped at this chunking, which the bug note left unrecorded.
+
+**Reported for each arm.**
+- Energy as the mean over three seeds, with sd and range; the band's q95; z.
+- C2ST AUC with its fold CI, and whether the CI contains 0.5.
+- The top five functionals by mean permutation importance.
+- The pooled decision shares, for panel C.
+
+**Decision rules.** "Inside" means energy ≤ q95 of the shared band. This is a
+tolerance criterion, not a 5% test of equality. It asks whether a generator is
+as close to the real customers as one random half of them is to the other. The
+energy reported is an unbiased estimate of a population distance, which does
+not shrink with n, while the band does (0.373 at 30 against 30, 0.078 at 150
+against 150). So any fixed non-zero distance ends up outside a large enough
+sample's band. That is why the old teacher-forced verdict, judged on 60
+customers, does not carry over. As in R43, a difference between two arms counts
+only if it has the same sign on all three seed pairs and its mean exceeds q95.
+
+| verdict | holds when |
+|---|---|
+| V1 lottery harmless | arm C inside on 3 of 3 draw seeds |
+| V2 closed loop fails | free-running outside on 3 of 3 seeds |
+| V3 per-step law indistinguishable | teacher-forced inside on 3 of 3 seeds |
+| V4 the loop makes most of the gap | free-running minus teacher-forced counts as a difference, and teacher forcing removes more than half of the free-running distance (teacher-forced / free-running < 0.5) on 3 of 3 seeds |
+| V5 the ordering | mean energies run arm C < teacher-forced < first-order Markov < free-running |
+
+The diagnosis "the per-step law is sound, the closed loop is not":
+- **survives as stated** if V1–V5 all hold;
+- **survives in weak form** if V1, V2, V4 and V5 hold but V3 fails. Panel A's
+  teacher-forced cell then reads OUTSIDE, with its multiple of the band, and the
+  text says the per-step law is close, not exact;
+- **does not survive** if V1, V2, V4 or V5 fails. A V1 failure means the
+  lottery contributes. A V2 failure means free running is indistinguishable
+  from real on the fixed engine, and the paper's spine changes. A V4 failure
+  means the per-step law carries half or more of the gap. A V5 failure means
+  either that teacher forcing, with both streams real, is no closer than a 9×9
+  transition matrix run on its own output, or that free running is no worse.
+
+The share of the free-running distance that teacher forcing removes,
+1 − teacher-forced / free-running, is reported per seed (pre-fix, on the 60
+customers of job 41859: 0.83).
+
+Panel D is reported with no gate attached:
+- whether energy is monotone in p across the three means;
+- whether each b35 arm differs from b33 under the rule above;
+- the share of the gap closed, 1 − E(b35) / E(b33), by means (pre-fix: 61% at
+  p = 0.35).
+
+The script computes the verdicts by these rules and prints them at the end of
+the log.
+
+**Predictions.**
+- V1 holds. Defect 2 changed which non-featured items arm C draws, and no
+  scored functional reads them.
+- V2 holds, with the satiation buckets still among the top functionals. The fix
+  gives the free-running model its real pre-window holdings, so its energy may
+  move either way; no direction is predicted.
+- V3 fails: teacher forcing lands outside the 300-customer band, as 0.307
+  against 0.078 suggests. The decision shares agree: teacher forcing generated
+  NotBuy on 41.0% of occasions, against 50.3% observed.
+- V4 and V5 hold, so the diagnosis survives in weak form.
+- The dose response stays monotone.
+
+**Secondary (stage 2).** Teacher-forced NLL of b33 s1 on the same 300 customers
+at context 384 and 1024, both with the pre-window inventory. This prices the
+window for the checkpoint the two-by-two uses; b29_hl2's price was +0.0011.
+Expectation: within 0.002 nats, on the same events.
+
+**After the job.**
+- Read the whole log, gates and integrity lines included, before any number
+  moves.
+- Then write a RESULT entry comparing every arm with its pre-fix value, and
+  update `scripts/fig_generative_failure.py` (panels A and B; C and D come from
+  the same job) and its caption.
+- Panel A's caption also cites the duplet at 1.5. That is R37's pre-fix number,
+  not re-run here, so it is dropped or qualified.
+
+**Budget.**
+- One GPU job: twelve rollouts at about 13 minutes each, plus the CPU arms and
+  the classifiers. About 3 hours; walltime 8.
+- Optionally, the gates and smoke alone first, on the free `short` CPU queue
+  (`SMOKE_ONLY=1`).
+- It competes with batch 39 (R43) for the two-GPU cap if both are queued at
+  once.
+
+**Out of scope.** The R36c H1 table (the b18 cells and b29_hl2), R37, R38 and
+R42. Each needs its own re-run on the fixed engine.
