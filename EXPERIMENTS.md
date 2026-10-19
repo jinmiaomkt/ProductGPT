@@ -3979,6 +3979,14 @@ Job 42880's log confirms that arm A runs the b36 triplet's exact command line
 R36i GPU job held one of the two GPU slots at submission, so the batch began
 one run at a time.
 
+*Strata script tested before any batch-39 result was read* (job 42898, CPU,
+old checkpoints only). `scripts/r43_strata.py` reproduces each run's
+`final.json` NLL on the headline cell: 1.8129 against 1.8130 for the gen-6
+smoke run, and 0.8782 against 0.8784 for the rev-1 b36 triplet seed 1. The
+residual is bf16 noise, inside the 0.003 tolerance. On that old triplet the
+209 customers with more than 1,024 occasions (33,467 events) score 0.8839,
+against 0.8772 for the rest.
+
 **Step 1: prediction.** The headline is NLL on
 `outsample_users_holdout_period`, paired by seed. All arms share one customer
 partition (`split_seed` 33).
