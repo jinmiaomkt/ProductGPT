@@ -312,9 +312,16 @@ def main() -> None:
            "arms": {}, "problems": []}
     dest = Path(a.out)
     dest.parent.mkdir(parents=True, exist_ok=True)
+    # The raw (unstandardised) per-sequence functionals of every arm run, so the
+    # 27 per-statistic tables can be computed afterwards on CPU. In an arm's
+    # matrix, row j is a replicate of real row j // n_rep.
+    raw = {"real": F_real}
+    npz = dest.with_name(dest.stem + "_functionals.npz")
 
     def save() -> None:
         dest.write_text(json.dumps(out, indent=2, default=float), encoding="utf-8")
+        np.savez_compressed(npz, functionals=np.array(sm.functional_names()),
+                            n_rep=n_rep, customer_sha256=uid_sha, **raw)
 
     def run_arm(name: str, label: int, gen, teacher_forced: bool = False) -> None:
         t0 = time.time()
@@ -326,7 +333,8 @@ def main() -> None:
             cnt += pooled_counts(r["decisions"], r["alive"])
             for k, v in integrity(r, b, st, n_rep, teacher_forced).items():
                 integ[k] += v
-        rec = evaluate(Zr, scaler(np.vstack(F)), n_boot)
+        raw[f"{name}__{label}"] = np.vstack(F)
+        rec = evaluate(Zr, scaler(raw[f"{name}__{label}"]), n_boot)
         rec.update(shares=(cnt / max(cnt.sum(), 1)).tolist(), integrity=integ,
                    seconds=round(time.time() - t0))
         if rec["null_q95"] != q95:
@@ -406,7 +414,7 @@ def main() -> None:
         print("\nPROBLEMS:")
         for p in out["problems"]:
             print("  " + p)
-    print(f"\nwrote {dest}")
+    print(f"\nwrote {dest} and {npz} ({len(raw) - 1} arm runs + real)")
     if out["problems"]:
         raise SystemExit(1)
 

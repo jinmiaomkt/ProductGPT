@@ -24,7 +24,9 @@
 #              checkpoint the two-by-two uses)
 #
 # Log: ~/ProductGPT/logs/r36i_<jobid>.log
-# Results: results/r36i/r36i.json (and smoke.json) inside the worktree.
+# Results: results/r36i/r36i.json and r36i_functionals.npz (the raw per-sequence
+# functionals of every arm run), and smoke.json / smoke_functionals.npz, inside
+# the worktree.
 # Time: stage 1 is twelve rollouts at about 13 min each plus the CPU arms and
 # the classifiers, about 3 h; walltime 8 h for headroom.
 # ============================================================================

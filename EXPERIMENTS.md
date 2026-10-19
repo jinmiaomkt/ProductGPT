@@ -4092,6 +4092,10 @@ has no scheduled-sampling siblings. The pre-fix teacher-forced number (b29_hl2,
 - C2ST AUC with its fold CI, and whether the CI contains 0.5.
 - The top five functionals by mean permutation importance.
 - The pooled decision shares, for panel C.
+- Saved for later CPU work: every arm run's raw per-sequence functionals
+  (`results/r36i/r36i_functionals.npz`). These give the 27 per-statistic energy
+  tables, each against its own band from the same splits. Added at Jin's
+  request before the GPU job; the scoring is unchanged.
 
 **Decision rules.** "Inside" means energy ≤ q95 of the shared band. This is a
 tolerance criterion, not a 5% test of equality. It asks whether a generator is
@@ -4161,6 +4165,12 @@ Expectation: within 0.002 nats, on the same events.
   the same job) and its caption.
 - Panel A's caption also cites the duplet at 1.5. That is R37's pre-fix number,
   not re-run here, so it is dropped or qualified.
+- Jin, 19 Oct: "arm C and teacher forcing are useless for managerial
+  decisions". Both condition on the realised holdout, so the figure shows them
+  as diagnostic controls, apart from the generators a manager could use (free
+  running, scheduled sampling, Markov, i.i.d.), and does not rank the two
+  groups on one yardstick. V5 stays: it places the failure, it does not rank
+  generators for use.
 
 **Budget.**
 - One GPU job: twelve rollouts at about 13 minutes each, plus the CPU arms and
