@@ -206,11 +206,19 @@ def main() -> None:
         n_users, n_rep, chunk, n_boot = 12, 2, 6, 20
         train_seeds, draws_c, draws_b = (1,), (11,), (17,)
     else:
-        n_users, n_rep, chunk, n_boot = 300, 8, 32, 120
+        # chunk 6 is what R36c (41840) and R36e (41897) actually ran (/tmp/r36e.pbs),
+        # not r36c_generate's default of 32; job 42868 crashed at 32.
+        n_users, n_rep, chunk, n_boot = 300, 8, 6, 120
         train_seeds, draws_c, draws_b = (1, 2, 3), (11, 12, 13), (17, 18, 19)
         if a.device != "cuda":
             raise SystemExit("the full run needs a GPU (twelve rollouts of about 13 min "
                              "each on an L40S); use --smoke for a wiring check")
+    # The satiation blocks attend over (sequences x prefix rows) as one batch, and
+    # CUDA's efficient attention cannot launch more than 65,535 of them: beyond
+    # that it fails with "invalid configuration argument" (job 42868 at 256 x 384).
+    if chunk * n_rep * MAX_EVENTS > 65535:
+        raise SystemExit(f"chunk {chunk} x {n_rep} replicates x {MAX_EVENTS} rows = "
+                         f"{chunk * n_rep * MAX_EVENTS:,} attention batches; the limit is 65,535")
 
     # ------------------------------------------------------------- the code
     head = git("rev-parse", "--short", "HEAD").stdout.strip()

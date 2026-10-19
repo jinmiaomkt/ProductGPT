@@ -4070,7 +4070,8 @@ The b33 free-running arm is also the scheduled-sampling control, as in R36e.
 
 **Fixed settings, all R36c/e's.**
 - The `outsample_users_holdout_period` cell, 300 customers drawn with
-  `default_rng(0)`, 8 replicates, chunks of 32.
+  `default_rng(0)`, 8 replicates, chunks of 6 (corrected from 32; see the
+  note below).
 - Context 384, with the pre-window inventory now carried.
 - Environment and baselines fitted on 600 training customers' calibration rows;
   scaler fitted on the real set.
@@ -4201,3 +4202,39 @@ Expectation: within 0.002 nats, on the same events.
 
 **Out of scope.** The R36c H1 table (the b18 cells and b29_hl2), R37, R38 and
 R42. Each needs its own re-run on the fixed engine.
+
+#### R36i — job 42868 stopped at the first model arm; the chunk size is corrected (19 Oct 2026)
+
+**What ran.**
+- The gates passed: 11 of 11 rollout-fix checks, 35 of 35 metric checks, and
+  the 12-customer smoke, on the GPU node (CPU smoke-only job 42865 also passed).
+- The band reproduced the pre-fix q95 exactly (0.0781258), on 22,490 holdout
+  rows, so the cell and the 300 customers are R36c/e's.
+- The arms without a model completed.
+- The first model arm (teacher-forced b33 s1) failed with the CUDA error
+  "invalid configuration argument", inside the satiation blocks' attention.
+
+**Why.** The satiation blocks run attention over sequences × prefix rows as one
+batch, and CUDA's efficient-attention kernel cannot launch more than 65,535 of
+them. This plan's "chunks of 32" came from `r36c_generate.py`'s default, and
+32 × 8 replicates × 384 rows is 98,304. R36c (41840) and R36e (41897) actually
+ran `--chunk 6` (`/tmp/r36e.pbs` on HPCC), as did R37 and R38. R36c's probe at
+chunk 32 failed the same way (`r36c_probe.log`), and its method note read the
+error as memory. The 12-customer smoke could not reach the limit.
+
+**The fix.** Chunk 6, the setting R36c/e actually used. The script now refuses
+any setting where chunk × replicates × context exceeds 65,535. Chunking changes
+only which random numbers each sequence draws, not what is estimated. The real
+set and the band do not depend on it.
+
+**What 42868 still gives.**
+- The arms without a model at chunk 32. These are kept as a consistency check
+  on the re-run and are not reported as results.
+- The count "defect 3 dropped 0 of 300 customers" was taken at chunk 32. It
+  does NOT describe R36c/e; the re-run counts it at chunk 6.
+- Stage 2 completed. Teacher-forced NLL of b33 s1 is 0.8615 at context 384 and
+  0.8608 at 1024, both on 22,490 events. The window costs this checkpoint
+  +0.0007 nats (b29_hl2: +0.0011), inside the expected 0.002.
+
+**Lesson.** A script's default is not the setting a job ran. Read the job
+script before copying a setting into a plan.
