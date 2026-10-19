@@ -78,12 +78,15 @@ def live_customers(cell, n: int):
     return out
 
 
-def earliest_holdout(cell, n: int):
-    """The n customers whose holdout starts earliest (shortest real prefix)."""
+def earliest_holdout(cell, n: int, min_prefix: int = 0):
+    """The n customers whose holdout starts earliest, among those with at least
+    `min_prefix` real occasions before it. min_prefix > 0 keeps the case R43 is
+    about -- generation that continues a real history -- in the comparison;
+    with 0, customers who join in campaign 28 (no history at all) come first."""
     rows = []
     for i in range(len(cell)):
         live = torch.nonzero(cell[i]["label"] != 0).view(-1)
-        if live.numel():
+        if live.numel() and int(live[0]) >= min_prefix:
             rows.append((int(live[0]), i))
     return [i for _, i in sorted(rows)[:n]]
 
@@ -106,6 +109,9 @@ def main() -> None:
                     help="generated occasions compared in G3. The reference loop re-reads "
                          "the whole prefix at every step, so its cost grows with the square "
                          "of history length")
+    ap.add_argument("--equiv-min-prefix", type=int, default=100,
+                    help="G3 uses customers with at least this many real occasions "
+                         "before their holdout, so the comparison continues a real history")
     ap.add_argument("--big-users", type=int, default=32)
     ap.add_argument("--big-rep", type=int, default=8)
     ap.add_argument("--threads", type=int, default=4)
@@ -168,9 +174,11 @@ def main() -> None:
     # (job 42863) needed about 13 h on a CPU node. Compare the first
     # `equiv_steps` generated occasions of the customers whose holdout starts
     # earliest -- same gate, bounded cost.
-    b = collate(cell, earliest_holdout(cell, a.equiv_users))
+    b = collate(cell, earliest_holdout(cell, a.equiv_users, a.equiv_min_prefix))
     start = int(first_row_of_campaign(b["campaign"], HOLDOUT_FROM).min())
     b = cut(b, start + a.equiv_steps)
+    print(f"  real prefix before generation: {start} occasions (at least "
+          f"{a.equiv_min_prefix} required)", flush=True)
     S3 = int(b["label"].shape[1])
     passes = a.equiv_users * a.equiv_rep * sum(t + 1 for t in range(start, S3))
     print(f"  {a.equiv_users} customers x {a.equiv_rep} replicates, rows {start}..{S3 - 1}; "
@@ -214,8 +222,9 @@ def main() -> None:
     steps = dec.shape[1] - start
     ok = valid and silent and int(alive.sum()) > 0
     check("every live row gets a valid decision, nothing else is generated", ok,
-          f"{int(alive.sum()):,} live rows over {dec.shape[0]} sequences; {steps} steps in "
-          f"{dt:.0f}s = {1000 * dt / max(steps, 1):.0f} ms per step for the whole batch")
+          f"{int(alive.sum()):,} live rows over {dec.shape[0]} sequences; rows {start}.."
+          f"{dec.shape[1] - 1}; {steps} steps in {dt:.0f}s = "
+          f"{1000 * dt / max(steps, 1):.0f} ms per step for the whole batch")
     shares = np.bincount(dec[alive], minlength=10)[1:10] / max(int(alive.sum()), 1)
     real = b["label"].repeat_interleave(a.big_rep, dim=0).numpy()
     real_sh = np.bincount(real[alive], minlength=10)[1:10] / max(int(alive.sum()), 1)
@@ -223,7 +232,8 @@ def main() -> None:
     print("   " + " ".join(f"{x:.3f}" for x in shares))
     print("   " + " ".join(f"{x:.3f}" for x in real_sh))
     rec["gates"]["G4"] = ok
-    rec["G4"] = {"sequences": int(dec.shape[0]), "live_rows": int(alive.sum()), "steps": steps,
+    rec["G4"] = {"sequences": int(dec.shape[0]), "live_rows": int(alive.sum()),
+                 "start": start, "rows": int(dec.shape[1]), "steps": steps,
                  "secs": dt, "shares_generated": shares.tolist(), "shares_real": real_sh.tolist()}
 
     out = Path(a.out)
