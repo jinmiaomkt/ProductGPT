@@ -3851,3 +3851,158 @@ are directly comparable.
   banners share them.
 - The fixed occasion grid still carries the real activity pattern (row density,
   IPT), so "free running" conditions on when the real customer was active.
+
+### R43 — PLAN, DRAFT FOR JIN'S REVIEW (19 Oct 2026; nothing submitted): the gen-6 streaming hybrid against the rev-2 incumbent
+
+**Question.** Gen 6 (`gen6_streaming/`, branch `gen6-streaming`, commit
+`eb70e52`) reads every customer from their first occasion, and it generates at
+any history length at a fixed cost per occasion. Does that cost one-step
+accuracy against the incumbent, and does full-history state change the
+generator?
+
+**What gen 6 keeps and what it changes.** It keeps the b36 triplet's input
+side, inventory read and head, with the same 1,482,236 parameters; a gen-5
+stack checkpoint loads into it unchanged. Three things change:
+1. **No truncation.** Gen 5 keeps each customer's last 1,024 occasions, which
+   cuts 9.1% of customers and 2.09% of events, all from the heaviest spenders
+   (R10).
+2. **The encoder.** Attention sees only the last `W` occasions, a sliding
+   window. The GRU state and the computed state (inventory counts, the R33
+   stock, pity) run over the whole history.
+3. **Training.** Chunks of `C` occasions with gradients stopped at chunk
+   boundaries, and batches bucketed by length.
+
+**Verified so far.**
+- 34 checks in `scripts/test_gen6_streaming.py` pass on HPCC (job 42861, CPU
+  node). With `W` and `C` unlimited, gen 6 reproduces the gen-5 stack exactly
+  (maximum difference 0). Every chunk length gives the same function.
+  Generating one occasion at a time equals one pass. On synthetic data, the
+  streaming rollout draws exactly what gen 5's prefix-recompute loop draws.
+- Smoke job 42862 (300 customers, 2 epochs) ran end to end in 46 s, peaking
+  at 5.5 GB. Its NLLs mean nothing.
+- Nothing has run on the laptop since 19 Oct: three pilot runs on its GPU
+  crashed the machine (fatal PCIe error), and the gen-6 trainer now refuses
+  to run there.
+
+**Why the control is re-trained.** The b36 triplet checkpoints are model_rev
+1, trained before the 16 Oct stock fixes, and gen 6 refuses rev 1. So the
+control is the same configuration re-trained at rev 2, from the same commit as
+gen 6. For context only, the rev-1 triplet's holdout NLL was 0.8837 (mean of
+five seeds), and it is not a comparator here.
+
+**Arms (batch 39).** Level 7, hyperparameters frozen at the b36 triplet's for
+every arm (no tuning on either side), all submitted from
+`~/ProductGPT/work_gen6` by `scripts/submit_batch39.sh`:
+
+| arm | tag | model | history read | attention sees | trained | seeds |
+|---|---|---|---|---|---|---|
+| A | `b39_g5rev2` | gen-5 stack, rev 2 (control) | last 1,024 | all of it | whole window | 1–5 |
+| B | `b39_g6full` | gen-6 code, `W` and `C` unlimited: gen 5's function on full histories | full | everything | one chunk | 1–5 |
+| C | `b39_g6w384` | gen 6 as proposed | full | last 384 | chunks of 512 | 1–5 |
+| D | `b39_g6w128` | window sensitivity | full | last 128 | chunks of 512 | 1–3 |
+
+A→B isolates reading full histories, together with the batching that comes
+with it. B→C isolates the streaming approximation. 18 runs in all.
+
+**The window is fixed, not selected.**
+- `W` = 384 is six average campaigns. An active customer-campaign has 63.6
+  occasions on average (median 53), counted from the data file without
+  reference to any outcome.
+- R36c's pricing table (+0.0011 nats at 384) agrees, but it is not the reason.
+  It was measured on the holdout cell, so choosing from it would be selecting
+  on the holdout.
+- B (unlimited) and D (128) bracket the choice. Both are reported; neither is
+  used to pick `W`.
+- `C` = 512, about the median history (556), so most customers fit in one or
+  two chunks. `C` does not change the function at evaluation.
+
+**Selection.** Every run picks its epoch on campaign-27 validation, as always.
+The holdout is read once, after all 18 runs finish.
+
+**Step 0: rollout probe on the smoke checkpoint, before batch 39.**
+`qsub scripts/r43_probe_cpu.pbs` runs `scripts/r43_rollout_probe.py` on the
+CPU short queue. All four gates must pass:
+
+| gate | passes when |
+|---|---|
+| G1 load | `rollout.load_checkpoint` rebuilds the gen-6 model from `best.pt` |
+| G2 same function | teacher-forced NLL on the out-of-sample × holdout cell (fp32) equals the trainer's `final.json` (bf16) within 0.01, over the same events |
+| G3 same draws | on 8 real customers × 2 replicates with the fitted environment, streaming and prefix-recompute rollouts give identical decisions and acquisitions, free running and teacher forced |
+| G4 runs | a 32-customer × 8-replicate streaming rollout gives every live holdout row a valid decision and generates nothing anywhere else; it reports the time per step |
+
+On any failure: fix, re-run `scripts/gen6_tests_cpu.pbs`, and probe again.
+Nothing is trained until all four gates pass.
+
+**Step 1: prediction.** The headline is NLL on
+`outsample_users_holdout_period`, paired by seed. All arms share one customer
+partition (`split_seed` 33).
+
+Predictions:
+- **C vs A: a tie**, with |mean difference| < 0.02. Attention adds nothing over
+  the GRU on this data (R19, R25), and once inventory is carried, context
+  beyond a few hundred occasions carries little one-step information (R36c).
+- **A vs B: a tie overall.** If reading full histories helps anywhere, it is
+  among customers with more than 1,024 occasions, whose early history A drops.
+- **B vs C: a tie.** The streaming approximation should cost little.
+- **D within 0.02 of C.** The recurrent state carries the history.
+
+Decision rules:
+- **Non-inferior:** C − A ≤ +0.02 on the five-seed mean, and ≤ +0.02 on at
+  least 4 of 5 paired seeds.
+- **Better:** the standard adoption rule, C − A < −0.02 on the mean and
+  negative on at least 4 of 5 seeds. Not expected.
+- **Inferior:** B says where the cost lies. If B ties A, the window or the
+  chunking is to blame, and the fallback is `W` unlimited, which gen 6 still
+  streams at a cost per step that grows with history. If B is also worse,
+  reading full histories or the batching is to blame.
+
+Reported with no decision attached: the other two cells, validation NLL, the
+per-class tables, the >1,024 / ≤1,024 length strata on the headline cell, and
+training time and peak memory. The strata script, `scripts/r43_strata.py`, is
+written and tested before any step-1 result is read.
+
+**Step 2: generation, after step 1.**
+- **Engine and protocol:** the fixed engine (`7aca2a3`) and R36c's protocol:
+  the same cell, 300 out-of-sample customers drawn as in R36c, 8 replicates,
+  the real-vs-real null band (q95 = 0.078), energy, C2ST AUC and the top
+  functionals.
+- **Arms:** A at context 384 with the inventory carried, as in R36c and R37. B
+  and C over full histories. Five seeds each.
+- **Controls:** teacher-forced runs for A and C with `r36c_diagnose.py`, using
+  `--max-events 384` for A and `0` for C.
+- **Separate invocations:** gen 5 and gen 6 run separately, because
+  `r36c_generate.py` refuses to mix them.
+
+Prediction: neither family enters the band, because R42 traced the drift to
+exposure bias, not to context. Teacher-forced C sits inside the band, as A's
+counterpart did in R36c.
+
+Decision rule: C − A energy counts as a difference only if it has the same
+sign on at least 4 of 5 paired seeds and |mean| > 0.078. A difference smaller
+than the real-vs-real q95 is within the statistic's own noise. Otherwise the
+verdict is "no difference". The pre-fix numbers in R36c–R42 are not used; A is
+re-rolled here on the fixed engine.
+
+**Adoption.** Gen 6 becomes the generator for all later generative work
+(scheduled sampling, the environment in the training loop, R35) if C is
+non-inferior in step 1 and not worse in step 2. The expected outcome is a tie
+on both. In that case gen 6 is adopted for what it can do (any history length,
+a fixed cost per generated occasion), not for accuracy. Otherwise A stays, and
+B and D say why.
+
+**Budget.**
+- Step 0: one CPU job.
+- Step 1: 18 GPU runs, about 5–6 hours of wall time at the two-GPU cap.
+  - Gen-5 runs take about 30 minutes each.
+  - The smoke epoch took 3 s for 147 customers, which extrapolates to about a
+    minute per full-data epoch for gen 6. That is unverified until the first
+    run.
+- Step 2: 15 free-running rollouts and 10 teacher-forced controls. A gen-5
+  rollout takes about 13 minutes, and step 0 prices gen 6's.
+
+**Out of scope.**
+- Purchase timing: the occasion grid stays fixed; timing needs the duration
+  head (R36e).
+- Scheduled sampling on gen 6.
+- Capacity tuning. Both families keep the incumbent's hyperparameters, which
+  makes the comparison symmetric by construction.
