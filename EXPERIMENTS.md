@@ -3927,7 +3927,7 @@ CPU short queue. All four gates must pass:
 |---|---|
 | G1 load | `rollout.load_checkpoint` rebuilds the gen-6 model from `best.pt` |
 | G2 same function | teacher-forced NLL on the out-of-sample × holdout cell (fp32) equals the trainer's `final.json` (bf16) within 0.01, over the same events |
-| G3 same draws | on the 8 real customers whose holdout starts earliest × 2 replicates, over their first 60 generated occasions, with the fitted environment, streaming and prefix-recompute rollouts give identical decisions and acquisitions, free running and teacher forced |
+| G3 same draws | on the 8 real customers whose holdout starts earliest among those with at least 100 real occasions before it, × 2 replicates, over their first 60 generated occasions, with the fitted environment, streaming and prefix-recompute rollouts give identical decisions and acquisitions, free running and teacher forced |
 | G4 runs | a 32-customer × 8-replicate streaming rollout gives every live holdout row a valid decision and generates nothing anywhere else; it reports the time per step |
 
 On any failure: fix, re-run `scripts/gen6_tests_cpu.pbs`, and probe again.
@@ -3941,6 +3941,25 @@ at every step, so its cost grows with the square of history length. G2's
 throughput on that CPU node (about 390 rows/s) put it at about 13 hours, past
 the job's 3-hour limit. G3 is now bounded as in the table: same gate, same
 real customers and environment, about 0.3 million row-passes per mode.
+
+*Second run, job 42866: all four gates passed, but G3 was too weak.* Taking
+the earliest holdout start selected customers who join in campaign 28, so G3
+generated from row 0 with no real history (120 occasions). G3 now requires at
+least 100 real occasions before the holdout.
+
+**Step 0 — RESULT (19 Oct 2026): all four gates passed, job 42867**, on the
+smoke checkpoint:
+
+| gate | result |
+|---|---|
+| G1 load | the gen-6 model was rebuilt from `best.pt` (window 384, chunk 512) |
+| G2 same function | teacher-forced NLL 1.8129 against 1.8130 in `final.json`, over the same 12,292 events |
+| G3 same draws | after a real history of 114 occasions (8 customers × 2 replicates, rows 114–173), decisions and acquisitions were identical in all 330 generated occasions, free running and teacher forced. Streaming took 3 s, against 109–115 s for prefix recompute |
+| G4 runs | 32 customers × 8 replicates after a real history of 82 occasions (rows 82–1169): 36,792 live holdout rows, every one a valid decision, nothing generated anywhere else. 441 ms per step for the whole batch of 256 sequences on 4 CPU threads |
+
+The rollout engine therefore generates from gen-6 checkpoints on real data,
+and does so exactly as gen 5's loop would on the same model. G4's speed
+prices step 2. The smoke model's generated decision shares are not results.
 
 **Step 1: prediction.** The headline is NLL on
 `outsample_users_holdout_period`, paired by seed. All arms share one customer
