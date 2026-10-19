@@ -43,6 +43,7 @@ set "PYTHONPATH=%PYTHONPATH%;%REPO%\gen12_encdec_lto"
 set "PYTHONPATH=%PYTHONPATH%;%REPO%\gen2_lp_duplet"
 set "PYTHONPATH=%PYTHONPATH%;%REPO%\gen4_full_productgpt"
 set "PYTHONPATH=%PYTHONPATH%;%REPO%\gen5_multistream"
+set "PYTHONPATH=%PYTHONPATH%;%REPO%\gen6_streaming"
 set "PYTHONPATH=%PYTHONPATH%;%REPO%\baselines"
 set "PYTHONPATH=%PYTHONPATH%;%REPO%\evaluation"
 set "PYTHONPATH=%PYTHONPATH%;%REPO%\tuning"
@@ -50,7 +51,7 @@ set "PYTHONPATH=%PYTHONPATH%;%REPO%\crossval"
 set "PYTHONPATH=%PYTHONPATH%;%REPO%\analysis"
 set "PYTHONPATH=%PYTHONPATH%;%REPO%\vendor\transformer_xl"
 
-echo PYTHONPATH set for ProductGPT (11 folders + repo root).
+echo PYTHONPATH set for ProductGPT (12 folders + repo root).
 echo Repo root: %REPO%
 if defined PRODUCTGPT_DATA (
     echo PRODUCTGPT_DATA: %PRODUCTGPT_DATA%

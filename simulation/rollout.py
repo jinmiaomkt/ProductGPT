@@ -39,7 +39,7 @@ import numpy as np
 import torch
 
 REPO = Path(__file__).resolve().parent.parent
-for p in (REPO, REPO / "gen5_multistream", REPO / "shared"):
+for p in (REPO, REPO / "gen5_multistream", REPO / "gen6_streaming", REPO / "shared"):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
@@ -72,6 +72,14 @@ def load_checkpoint(ckpt_path, device: str = "cpu", *, vocab_level: Optional[int
                                first_prod_id=cfg["first_prod_id"],
                                last_prod_id=cfg["last_prod_id"],
                                max_token_id=cfg["vocab_size_src"] - 1)
+    if cfg.get("gen") == 6:
+        # The streaming hybrid: full histories, generated one occasion at a
+        # time by rollout() below (see _rollout_streaming).
+        from model6_streaming import build_from_cfg
+        model = build_from_cfg(cfg, feat, state["num_users"])
+        model.load_state_dict(state["model_state_dict"])
+        model.to(device).eval()
+        return model, cfg
     model = mm.build_transformer(
         vocab_size_src=cfg["vocab_size_src"], vocab_size_tgt=cfg["vocab_size_tgt"],
         max_seq_len=cfg["max_events"], d_model=cfg["d_model"], n_layers=cfg["N"],
@@ -190,6 +198,11 @@ def rollout(model, batch: Dict[str, torch.Tensor], env, vocab, *, start: int,
     """
     from gacha_env import PityState
 
+    if getattr(model, "streaming", False):
+        return _rollout_streaming(model, batch, env, vocab, start=start, n_rep=n_rep,
+                                  seed=seed, temperature=temperature, device=device,
+                                  teacher_forced=teacher_forced)
+
     buf = _replicate({k: (v.to(device) if torch.is_tensor(v) else v)
                       for k, v in batch.items()}, n_rep)
     B, S = buf["label"].shape
@@ -228,6 +241,78 @@ def rollout(model, batch: Dict[str, torch.Tensor], env, vocab, *, start: int,
         # row that is not generating yet must keep its REAL streams: writing
         # zeros there would delete history the model still has to condition on,
         # and silently empty the inventory.  Only overwrite where we generated.
+        act = alive[:, t] & (y > 0)
+        if act.any():
+            nxt = buf["obtained"][:, t + 1].cpu().numpy().copy()
+            prv = buf["prev_decision"][:, t + 1].cpu().numpy().copy()
+            for b in np.flatnonzero(act):
+                nxt[b] = env.step(int(y[b]), offers[b, t], states[b], rng)
+                prv[b] = y[b]
+            buf["obtained"][:, t + 1] = torch.as_tensor(nxt, device=device)
+            buf["prev_decision"][:, t + 1] = torch.as_tensor(prv, device=device)
+
+    return {"decisions": gen, "alive": alive, "start": start,
+            "obtained": buf["obtained"].cpu().numpy(),
+            "lto": buf["lto"].cpu().numpy()}
+
+
+@torch.no_grad()
+def _rollout_streaming(model, batch, env, vocab, *, start: int, n_rep: int, seed: int,
+                       temperature: float, device: str,
+                       teacher_forced: bool) -> Dict[str, np.ndarray]:
+    """rollout() for the gen-6 streaming hybrid, one occasion at a time.
+
+    Same sampling, same random-number order and same feedback rules as the
+    loop above, so on the same model the two give the same draws
+    (scripts/test_gen6_streaming.py). The difference is the cost and the
+    context: the model carries its state, so each step reads one new row
+    instead of re-reading the prefix, over the customer's whole history.
+    """
+    from gacha_env import PityState
+
+    buf = _replicate({k: (v.to(device) if torch.is_tensor(v) else v)
+                      for k, v in batch.items()}, n_rep)
+    B, S = buf["label"].shape
+    rng = np.random.default_rng(seed)
+    alive = (buf["label"] != 0).cpu().numpy()
+    gen = np.zeros((B, S), dtype=np.int64)
+    states = [PityState() for _ in range(B)]
+    if env is not None and not teacher_forced:
+        _warm_pity(states, buf, vocab, env, start)
+
+    uid = buf.get("user_idx")
+    camp = buf.get("campaign") if getattr(model, "camp_bias", None) is not None else None
+
+    def advance(a: int, b: int, st):
+        return model.advance(buf["lto"][:, a:b], buf["obtained"][:, a:b],
+                             buf["prev_decision"][:, a:b], st, uid,
+                             camp[:, a:b] if camp is not None else None)
+
+    st = model.init_stream(B, device)
+    for a in range(0, start, model.chunk):               # the real prefix
+        _, st = advance(a, min(start, a + model.chunk), st)
+
+    offers = buf["lto"].cpu().numpy()
+    for t in range(start, S):
+        # Row t's inputs are final here: generation writes row t+1 only after
+        # sampling at t. Advance through every row, live or not.
+        logits, st = advance(t, t + 1, st)
+        if not alive[:, t].any():
+            continue
+        logits = logits[:, 0, 1:1 + N_CLASSES].float()
+        if temperature != 1.0:
+            logits = logits / temperature
+        probs = torch.softmax(logits, dim=-1).cpu().numpy()
+        u = rng.random((B, 1))
+        draw = (probs.cumsum(axis=1) < u).sum(axis=1)
+        y = np.clip(draw + 1, 1, N_CLASSES)
+        y = np.where(alive[:, t], y, 0)
+        gen[:, t] = y
+
+        if t + 1 >= S:
+            break
+        if teacher_forced:
+            continue
         act = alive[:, t] & (y > 0)
         if act.any():
             nxt = buf["obtained"][:, t + 1].cpu().numpy().copy()

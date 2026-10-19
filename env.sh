@@ -29,6 +29,7 @@ _productgpt_dirs=(
     "gen2_lp_duplet"
     "gen4_full_productgpt"
     "gen5_multistream"
+    "gen6_streaming"
     "baselines"
     "evaluation"
     "tuning"

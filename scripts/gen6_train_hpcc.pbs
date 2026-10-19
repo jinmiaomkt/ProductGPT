@@ -1,0 +1,142 @@
+#!/bin/bash
+# ============================================================================
+# Train the gen-6 streaming hybrid on SMU HPCC.
+#
+# SUBMIT FROM THE REPO ROOT so $PBS_O_WORKDIR is the repo root:
+#     cd ~/ProductGPT/work_gen6
+#     qsub -v SEED=1,TAG=g6_w384 scripts/gen6_train_hpcc.pbs
+#
+# Defaults reproduce the b36 triplet incumbent's configuration (see INCUMBENT
+# in gen6_streaming/train6_streaming.py); the knobs below override it. Unlike
+# gen 5 there is no MAX_EVENTS: every customer is read in full.
+#
+# Run directories: runs/gen6_<profile>_W<window>_C<chunk>_b<batch>_<TAG>_s<SEED>
+# The seed is appended to TAG, so scripts/r36c_generate.py finds a run as
+# --configs <TAG> --seeds <SEED>.
+#
+# Monitor:
+#     qstat -u $USER
+#     tail -f ~/ProductGPT/logs/gen6_train_<jobid>.log
+# ============================================================================
+
+#PBS -N gen6_train
+#PBS -l select=1:ncpus=8:ngpus=1:mem=64GB
+#PBS -q GPU
+#PBS -l walltime=24:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+
+set -eo pipefail
+
+module purge
+module load python/3.11.4 cuda/12.5
+cd "$PBS_O_WORKDIR"
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
+
+export PYTHONUNBUFFERED=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export OMP_NUM_THREADS=${OMP_NUM_THREADS:-8}
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+# ---------------------------------------------------------------- knobs
+PROFILE="${PROFILE:-hpcc}"
+WINDOW="${WINDOW:-384}"        # occasions per attention query, itself included; 0 = all
+CHUNK="${CHUNK:-512}"          # occasions per training chunk (gradient truncation)
+EPOCHS="${EPOCHS:-}"           # empty = incumbent's 40
+BATCH_SIZE="${BATCH_SIZE:-4}"
+GRAD_ACCUM="${GRAD_ACCUM:-}"
+SEED="${SEED:-1}"
+TAG="${TAG:-g6}"
+RESUME="${RESUME:-0}"
+MAX_USERS="${MAX_USERS:-}"
+TRACK_HOLDOUT="${TRACK_HOLDOUT:-}"
+UIDS_DIR="${UIDS_DIR:-}"
+LR="${LR:-}"; WD="${WD:-}"; WARMUP="${WARMUP:-}"; DROPOUT="${DROPOUT:-}"; PATIENCE="${PATIENCE:-}"
+D_MODEL="${D_MODEL:-}"; N_LAYERS="${N_LAYERS:-}"; N_HEADS="${N_HEADS:-}"; D_FF="${D_FF:-}"
+SAT_LAYERS="${SAT_LAYERS:-}"; KERNEL="${KERNEL:-}"; DECAY="${DECAY:-}"
+DECAY_INIT="${DECAY_INIT:-}"; DECAY_FREEZE="${DECAY_FREEZE:-}"; TIER="${TIER:-}"
+CAMP_FE="${CAMP_FE:-}"; ALIBI="${ALIBI:-}"; PITY_STREAM="${PITY_STREAM:-}"; VAL_FROM="${VAL_FROM:-}"
+TIME_BUDGET_MIN="${TIME_BUDGET_MIN:-1410}"
+
+job_tag="${PBS_JOBID%%.*}"
+log_dir=/storage/home/jinmiao/ProductGPT/logs
+mkdir -p "$log_dir"
+run_id="gen6_${PROFILE}_W${WINDOW}_C${CHUNK}_b${BATCH_SIZE}_${TAG}_s${SEED}"
+output_dir="/storage/home/jinmiao/ProductGPT/runs/${run_id}"
+mkdir -p "$output_dir"
+export PRODUCTGPT_OUTPUT="$output_dir"
+job_log="$log_dir/gen6_train_${job_tag}.log"
+exec >"$job_log" 2>&1
+
+on_exit() {
+  rc=$?
+  local last
+  last="$(grep -aE 'val_nll|Traceback|Error|OOM|Killed' "$job_log" 2>/dev/null | tail -n 1)"
+  if [[ $rc -eq 0 ]]; then
+    bash "$PBS_O_WORKDIR/scripts/notify.sh" "OK  ${run_id} (job ${job_tag}) finished. ${last}" || true
+  else
+    bash "$PBS_O_WORKDIR/scripts/notify.sh" "FAIL ${run_id} (job ${job_tag}) exit=${rc}. ${last}" || true
+  fi
+}
+trap on_exit EXIT
+
+echo "Start time:  $(date --iso-8601=seconds)"
+echo "PBS job:     $PBS_JOBID"
+echo "Host:        $(hostname)"
+echo "Work dir:    $PBS_O_WORKDIR"
+echo "Git:         $(git -C "$PBS_O_WORKDIR" log --oneline -1)"
+echo "Run id:      $run_id"
+nvidia-smi
+echo
+
+for f in gen6_streaming/train6_streaming.py gen6_streaming/model6_streaming.py \
+         gen5_multistream/train5_multistream.py gen5_multistream/model_multistream_state_space.py \
+         gen5_multistream/dataset_multistream.py paths.py shared/features.py; do
+  [[ -f "$PBS_O_WORKDIR/$f" ]] || { echo "ERROR: missing $f" >&2; exit 2; }
+done
+
+python - <<'PY'
+import torch
+if not torch.cuda.is_available():
+    raise SystemExit("ERROR: no usable CUDA device in this job")
+p = torch.cuda.get_device_properties(0)
+print(f"PyTorch {torch.__version__} | GPU {p.name} {p.total_memory/1024**3:.1f} GB")
+PY
+
+args=(--profile "$PROFILE" --window "$WINDOW" --chunk "$CHUNK" --batch-size "$BATCH_SIZE"
+      --seed "$SEED" --time-budget-min "$TIME_BUDGET_MIN")
+[[ -n "$EPOCHS" ]] && args+=(--epochs "$EPOCHS")
+[[ -n "$GRAD_ACCUM" ]] && args+=(--grad-accum "$GRAD_ACCUM")
+[[ "$RESUME" == "1" ]] && args+=(--resume)
+[[ -n "$MAX_USERS" ]] && args+=(--max-users "$MAX_USERS")
+[[ "$TRACK_HOLDOUT" == "1" ]] && args+=(--track-holdout)
+[[ -n "$UIDS_DIR" ]] && args+=(--uids-dir "$UIDS_DIR")
+[[ -n "$LR" ]] && args+=(--lr "$LR")
+[[ -n "$WD" ]] && args+=(--weight-decay "$WD")
+[[ -n "$WARMUP" ]] && args+=(--warmup-frac "$WARMUP")
+[[ -n "$DROPOUT" ]] && args+=(--dropout "$DROPOUT")
+[[ -n "$PATIENCE" ]] && args+=(--patience "$PATIENCE")
+[[ -n "$D_MODEL" ]] && args+=(--d-model "$D_MODEL")
+[[ -n "$N_LAYERS" ]] && args+=(--n-layers "$N_LAYERS")
+[[ -n "$N_HEADS" ]] && args+=(--n-heads "$N_HEADS")
+[[ -n "$D_FF" ]] && args+=(--d-ff "$D_FF")
+[[ -n "$SAT_LAYERS" ]] && args+=(--sat-layers "$SAT_LAYERS")
+[[ -n "$KERNEL" ]] && args+=(--kernel "$KERNEL")
+[[ -n "$DECAY" ]] && args+=(--decay "$DECAY")
+[[ -n "$DECAY_INIT" ]] && args+=(--decay-init "$DECAY_INIT")
+[[ -n "$DECAY_FREEZE" ]] && args+=(--decay-freeze "$DECAY_FREEZE")
+[[ -n "$TIER" ]] && args+=(--tier "$TIER")
+[[ -n "$CAMP_FE" ]] && args+=(--camp-fe "$CAMP_FE")
+[[ -n "$ALIBI" ]] && args+=(--alibi "$ALIBI")
+[[ -n "$PITY_STREAM" ]] && args+=(--pity-stream "$PITY_STREAM")
+[[ -n "$VAL_FROM" ]] && args+=(--val-from "$VAL_FROM")
+
+echo "Command: python gen6_streaming/train6_streaming.py ${args[*]}"
+echo
+python gen6_streaming/train6_streaming.py "${args[@]}"
+
+echo
+echo "Finish time: $(date --iso-8601=seconds)"
+ls -la "$output_dir"

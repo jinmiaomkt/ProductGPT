@@ -47,7 +47,8 @@ HOLDOUT_FROM = 28
 
 
 def ckpt_path(tag: str, seed: int, runs: Path) -> Path:
-    hits = sorted(runs.glob(f"*_{tag}_s{seed}/gen5_multistream/hpcc/best.pt"))
+    # gen 5 writes <run>/gen5_multistream/hpcc/, gen 6 <run>/gen6_streaming/hpcc/
+    hits = sorted(runs.glob(f"*_{tag}_s{seed}/*/hpcc/best.pt"))
     if not hits:
         raise FileNotFoundError(f"no checkpoint for {tag} seed {seed} under {runs}")
     return hits[0]
@@ -222,6 +223,13 @@ def main() -> None:
                     f"({mcfg['first_prod_id']}-{mcfg['last_prod_id']}), but the "
                     f"dataset was built for {cfg['first_prod_id']}-"
                     f"{cfg['last_prod_id']}. Run one level per invocation.")
+            # Gen 6 reads whole histories (max_events=None); gen 5 a window.
+            # The dataset is built once from the FIRST config, so mixing them
+            # would hand one family the other's context. Refuse instead.
+            if mcfg.get("gen", 5) != cfg.get("gen", 5):
+                raise SystemExit(
+                    f"{tag} s{sd} is gen {mcfg.get('gen', 5)} but the dataset was built for "
+                    f"gen {cfg.get('gen', 5)}. Run gen 5 and gen 6 in separate invocations.")
             t0 = time.time()
             F = []
             for ci, (ch, st) in enumerate(zip(chunks, starts)):

@@ -59,7 +59,8 @@ KEYS = ["n", "notbuy", "reg", "fig", "wep", "rev"] + \
 
 
 def ckpt_path(tag: str, seed: int, runs: Path) -> Path:
-    hits = sorted(runs.glob(f"*_{tag}_s{seed}/gen5_multistream/hpcc/best.pt"))
+    # gen 5 writes <run>/gen5_multistream/hpcc/, gen 6 <run>/gen6_streaming/hpcc/
+    hits = sorted(runs.glob(f"*_{tag}_s{seed}/*/hpcc/best.pt"))
     if not hits:
         raise FileNotFoundError(f"no checkpoint for {tag} seed {seed} under {runs}")
     return hits[0]

@@ -1,0 +1,56 @@
+#!/bin/bash
+# ============================================================================
+# Gen-6 test suite on a CPU node (no GPU, synthetic data except test_rollout.py).
+#
+#   cd ~/ProductGPT/work_gen6
+#   qsub scripts/gen6_tests_cpu.pbs
+#
+# Runs here rather than on the laptop: on 19 Oct 2026 three runs on the
+# laptop's NVIDIA GPU each crashed the machine (fatal PCIe error, bugcheck
+# 0x20001), so nothing heavy runs locally. The tests themselves never touch a
+# GPU (CUDA_VISIBLE_DEVICES is emptied below and in the test script).
+# Log: ~/ProductGPT/logs/gen6_tests_<jobid>.log
+# ============================================================================
+#PBS -N gen6_tests
+#PBS -l select=1:ncpus=4:mem=16GB
+#PBS -q short
+#PBS -l walltime=01:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+
+set -o pipefail
+module purge
+module load python/3.11.4
+cd "$PBS_O_WORKDIR"
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
+export PYTHONUNBUFFERED=1
+export OMP_NUM_THREADS=4
+export CUDA_VISIBLE_DEVICES=""
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+log=/storage/home/jinmiao/ProductGPT/logs/gen6_tests_${PBS_JOBID%%.*}.log
+mkdir -p "$(dirname "$log")"
+exec >"$log" 2>&1
+
+echo "PBS job: $PBS_JOBID on $(hostname)"
+echo "Git:     $(git log --oneline -1)"
+python -c "import torch, numpy; print('torch', torch.__version__, 'numpy', numpy.__version__, 'cuda visible:', torch.cuda.is_available())"
+
+rc=0
+for t in scripts/test_gen6_streaming.py scripts/test_rollout_fixes.py \
+         scripts/test_rollout.py scripts/test_hybrid_encoder.py; do
+  echo
+  echo "===== $t"
+  if python -W ignore "$t"; then
+    echo "===== $t: exit 0"
+  else
+    status=$?
+    echo "===== $t: exit $status"
+    rc=1
+  fi
+done
+echo
+echo "ALL SUITES: $([[ $rc -eq 0 ]] && echo PASSED || echo FAILED)"
+exit $rc
