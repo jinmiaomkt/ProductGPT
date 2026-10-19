@@ -29,6 +29,7 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 41557–41581 | `b20_*` (25 runs) | 2026-09-26 | R33: the identified stock ladder (decay, duplicates, attribute kernel, free kernel as a bound) | 2 running, rest queued (qstat 2026-09-26) |
 | 41582–41617 | `b19_*` (36 runs) | 2026-09-26 | R32: hybrid designs seq_ra / seq_ar / block | queued (qstat 2026-09-26) |
 | 41643–41692 | `b22_*`, `b23_*` (50 runs) | 2026-09-27 | R33 ladder re-run after the parameterisation and weight-decay fixes | queued (qstat 2026-09-27) |
+| 42880–42897 | `b39_*` (18 runs, from `~/ProductGPT/work_gen6` at `93dcfbf`) | 2026-10-20 | R43 step 1: gen 6 against the rev-2 incumbent | 42880 running, rest queued (qstat 2026-10-20) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -3960,6 +3961,23 @@ smoke checkpoint:
 The rollout engine therefore generates from gen-6 checkpoints on real data,
 and does so exactly as gen 5's loop would on the same model. G4's speed
 prices step 2. The smoke model's generated decision shares are not results.
+
+**Step 1 — SUBMITTED (20 Oct 2026): batch 39, jobs 42880–42897**, approved by
+Jin after step 0. All 18 runs come from `~/ProductGPT/work_gen6` at `93dcfbf`.
+The only code change since the probe is the separate R36i script, so the
+training code is the code step 0 tested.
+
+| arm | jobs (seeds 1–5, or 1–3 for D) |
+|---|---|
+| A `b39_g5rev2` | 42880, 42883, 42886, 42889, 42892 |
+| B `b39_g6full` | 42881, 42884, 42887, 42890, 42893 |
+| C `b39_g6w384` | 42882, 42885, 42888, 42891, 42894 |
+| D `b39_g6w128` | 42895, 42896, 42897 |
+
+Job 42880's log confirms that arm A runs the b36 triplet's exact command line
+(1,482,236 parameters, window 1,024, level 7, 2,502 training customers). An
+R36i GPU job held one of the two GPU slots at submission, so the batch began
+one run at a time.
 
 **Step 1: prediction.** The headline is NLL on
 `outsample_users_holdout_period`, paired by seed. All arms share one customer
