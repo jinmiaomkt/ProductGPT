@@ -4,12 +4,14 @@ measured, and what goes wrong.
     python scripts/fig_generative_failure.py
 
 Writes results/figs/generative_failure.{png,pdf}. Every number is taken from
-the ledger (EXPERIMENTS.md R36c/e/f); nothing here is recomputed.
+the ledger (EXPERIMENTS.md R36i, job 42879: the fixed rollout engine, 300
+customers x 8 replicates, one shared band); nothing here is recomputed.
 
 Panels
   0  the generative process: what the model conditions on, and what feeds back
-  A  the 2x2 of controls: which feedback breaks it
-  B  the yardstick: energy distance against the real-vs-real band
+  A  the 2x2 of diagnostic controls: which feedback breaks it
+  B  the yardstick, for the generators a manager could run only. The controls
+     condition on the realised holdout, so they are not ranked with them (Jin).
   C  what goes wrong: decision shares, observed vs teacher-forced vs free-running
   D  the remedy: scheduled sampling, a dose response
 """
@@ -31,27 +33,30 @@ GREEN, GREENBG = "#1E6B34", "#DDEFE0"
 RED, REDBG = "#8C1D18", "#F6DADA"
 BLUE, AMBER = "#2A4A9C", "#B8710A"
 GREY, GREYBG = "#4B5563", "#ECEEF2"
+AMBERBG = "#FBEBD3"
 
 # ---------------------------------------------------------------- numbers
+# EXPERIMENTS.md R36i (job 42879). Means over three seeds: training seeds for
+# the model arms, draw seeds for arm C, Markov and i.i.d.
 NULL_Q95 = 0.078                       # split-half real-vs-real, 300 customers
-ENERGY = [                             # (label, value, colour, note)
-    ("arm C: real decisions,\nlottery re-rolled",        -0.010, GREEN, "inside"),
-    ("teacher-forced: decisions\nsampled, streams real",  0.307, GREEN, "inside*"),
-    ("first-order Markov chain",                          0.711, GREY,  "outside"),
-    ("scheduled sampling p = 0.35",                       0.928, AMBER, "outside"),
-    ("scheduled sampling p = 0.15",                       1.390, AMBER, "outside"),
-    ("independent draws",                                 2.190, GREY,  "outside"),
-    ("trained model, free-running",                       2.352, RED,   "outside"),
+ARM_C, TEACHER, FREE = -0.000465, 0.417, 3.169  # the 2x2's three generated cells
+GENERATORS = [                         # (label, mean, seed sd, colour)
+    ("first-order Markov chain",     0.784, 0.006, GREY),
+    ("scheduled sampling p = 0.35",  1.311, 0.299, AMBER),
+    ("scheduled sampling p = 0.15",  1.710, 0.389, AMBER),
+    ("independent draws",            2.468, 0.008, GREY),
+    ("trained model, free-running",  3.169, 0.381, RED),
 ]
 CLASSES = ["Buy1\nReg", "Buy10\nReg", "Buy1\nFigA", "Buy10\nFigA", "Buy1\nFigB",
            "Buy10\nFigB", "Buy1\nWep", "Buy10\nWep", "NotBuy"]
-SHARE_REAL = [0.142, 0.008, 0.176, 0.084, 0.031, 0.021, 0.023, 0.012, 0.503]
-SHARE_TF   = [0.140, 0.031, 0.169, 0.095, 0.051, 0.048, 0.036, 0.020, 0.410]
-SHARE_FREE = [0.089, 0.048, 0.078, 0.087, 0.132, 0.113, 0.134, 0.135, 0.183]
+# pooled over the 300 customers' holdout rows
+SHARE_REAL = [0.158, 0.003, 0.215, 0.074, 0.059, 0.013, 0.044, 0.010, 0.425]
+SHARE_TF   = [0.154, 0.012, 0.206, 0.090, 0.073, 0.032, 0.061, 0.020, 0.352]
+SHARE_FREE = [0.082, 0.033, 0.077, 0.097, 0.102, 0.111, 0.159, 0.183, 0.156]
 DOSE_P  = [0.00, 0.15, 0.35]
-DOSE_E  = [2.352, 1.390, 0.928]
-DOSE_SD = [0.198, 0.358, 0.260]
-MARKOV = 0.711
+DOSE_E  = [3.169, 1.710, 1.311]
+DOSE_SD = [0.381, 0.389, 0.299]
+MARKOV = 0.784
 
 
 def box(ax, xy, w, h, text, fc, ec=INK, fs=9.5, bold=False, tc=INK):
@@ -120,13 +125,16 @@ def main() -> None:
     # ============================================================ panel A
     ax = fig.add_subplot(gs[1, 0])
     ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.axis("off")
-    ax.set_title("A.  Which feedback breaks it?  Feeding the model its own outputs",
+    ax.set_title("A.  Diagnostic controls: which feedback breaks it?",
                  loc="left", fontsize=12, fontweight="bold", color=INK, pad=6)
     cells = [  # (col, row, text, fc, ec, tc)
         (0, 0, "the data itself", GREYBG, GREY, MUTED),
-        (1, 0, "−0.010\nINSIDE the band\n\narm C", GREENBG, GREEN, GREEN),
-        (0, 1, "0.307\nINSIDE the band\n\nteacher-forced", GREENBG, GREEN, GREEN),
-        (1, 1, "2.352\nOUTSIDE (30× band)\n\nfree-running", REDBG, RED, RED),
+        (1, 0, f"{ARM_C:.3f}".replace("-", "−") + "\nINSIDE the band\n\narm C",
+         GREENBG, GREEN, GREEN),
+        (0, 1, f"{TEACHER:.3f}\nOUTSIDE ({TEACHER / NULL_Q95:.0f}× band)\n\nteacher-forced",
+         AMBERBG, AMBER, AMBER),
+        (1, 1, f"{FREE:.3f}\nOUTSIDE ({FREE / NULL_Q95:.0f}× band)\n\nfree-running",
+         REDBG, RED, RED),
     ]
     x0, y0, cw, ch = 0.30, 0.10, 0.33, 0.33
     for c, r, text, fc, ec, tc in cells:
@@ -141,37 +149,39 @@ def main() -> None:
     ax.text(0.27, y0 + 0.5 * ch, "decisions\nSAMPLED\nby the model", ha="right", va="center",
             fontsize=10, color=INK)
     ax.text(0.5, -0.04,
-            "Re-rolling the lottery alone is fine. Sampling decisions without feeding them back is fine.\n"
-            "Feeding the model its own decisions breaks it — the duplet, which never sees acquisitions,\n"
-            "already fails at 1.5 — and feeding back its own acquisitions too takes it to 2.35.",
+            "Re-rolling the lottery alone is harmless. Sampling decisions against the real streams is close\n"
+            "but detectable. Feeding the model its own decisions and acquisitions takes it 7.6 times further:\n"
+            "the loop makes 85–88% of the distance. Both controls use the realised holdout, so neither is a\n"
+            "generator a manager could run; panel B ranks only those.",
             ha="center", va="top", fontsize=8.6, color=INK, linespacing=1.35)
 
     # ============================================================ panel B
     ax = fig.add_subplot(gs[1, 1])
-    ax.set_title("B.  The yardstick: how far from real is each generator?",
+    ax.set_title("B.  The generators a manager could run: how far from real?",
                  loc="left", fontsize=12, fontweight="bold", color=INK, pad=6)
-    labels = [e[0] for e in ENERGY]; vals = [e[1] for e in ENERGY]
-    cols = [e[2] for e in ENERGY]
-    ypos = list(range(len(ENERGY)))[::-1]
+    labels = [e[0] for e in GENERATORS]; vals = [e[1] for e in GENERATORS]
+    sds = [e[2] for e in GENERATORS]; cols = [e[3] for e in GENERATORS]
+    ypos = list(range(len(GENERATORS)))[::-1]
     ax.axvspan(-0.05, NULL_Q95, color=GREENBG, zorder=0)
     ax.axvline(NULL_Q95, color=GREEN, lw=1.2, ls="--")
-    ax.barh(ypos, vals, color=cols, height=0.62, zorder=2)
-    for y, v, e in zip(ypos, vals, ENERGY):
-        ax.text(max(v, 0) + 0.04, y, f"{v:+.3f}" if v < 0 else f"{v:.3f}",
-                va="center", fontsize=9.5, color=e[2], fontweight="bold")
+    ax.barh(ypos, vals, xerr=sds, color=cols, height=0.62, zorder=2,
+            error_kw=dict(ecolor=INK, lw=1.0, capsize=3))
+    for y, v, s, e in zip(ypos, vals, sds, GENERATORS):
+        ax.text(v + s + 0.06, y, f"{v:.3f}  ({v / NULL_Q95:.0f}× band)",
+                va="center", fontsize=9.5, color=e[3], fontweight="bold")
     ax.set_yticks(ypos); ax.set_yticklabels(labels, fontsize=9)
-    ax.set_xlim(-0.15, 2.75)
+    ax.set_xlim(-0.15, 4.6)
     ax.set_xlabel("energy distance between generated and real sequences  (0 = identical distributions)",
                   fontsize=9.5)
     ax.annotate("two halves of REAL data land\ninside the green band (q95 = 0.078)",
-                xy=(NULL_Q95, len(ENERGY) - 1.45), xytext=(0.75, len(ENERGY) - 1.45),
+                xy=(NULL_Q95, len(GENERATORS) - 1.5), xytext=(2.25, len(GENERATORS) - 1.5),
                 fontsize=8.5, color=GREEN, va="center",
                 arrowprops=dict(arrowstyle="-|>", color=GREEN, lw=1.0))
     ax.spines[["top", "right"]].set_visible(False)
     ax.text(0.0, -0.19,
-            "* teacher-forced was measured on 60 customers, where the band is 0.373; inside its own band.\n"
-            "Energy distance compares the set of generated histories to the real ones on 27 statistics the\n"
-            "model was never fitted to (spend, incidence, run lengths, switching, satiation).",
+            "Means over three training seeds (draw seeds for Markov and i.i.d.), bars ± 1 sd. Energy distance\n"
+            "compares generated and real histories on 27 statistics the model was never fitted to (spend,\n"
+            "incidence, run lengths, switching, satiation). The panel-A controls are not ranked here.",
             transform=ax.transAxes, fontsize=7.8, color=MUTED, va="top", linespacing=1.3)
 
     # ============================================================ panel C
@@ -189,16 +199,18 @@ def main() -> None:
     ax.legend(frameon=False, fontsize=8.5, loc="upper left")
     ax.spines[["top", "right"]].set_visible(False)
     # callouts
-    ax.annotate("NotBuy collapses\n0.503 → 0.183", xy=(8 + w, 0.183), xytext=(4.3, 0.52),
+    ax.annotate(f"NotBuy collapses\n{SHARE_REAL[8]:.3f} → {SHARE_FREE[8]:.3f}",
+                xy=(8 + w, SHARE_FREE[8]), xytext=(4.3, 0.50),
                 fontsize=9, color=RED, fontweight="bold",
                 arrowprops=dict(arrowstyle="-|>", color=RED, lw=1.3))
-    ax.annotate("Buy10 on the weapon banner\n0.012 → 0.135  (11×)", xy=(7 + w, 0.135),
+    ax.annotate(f"Buy10 on the weapon banner\n{SHARE_REAL[7]:.3f} → {SHARE_FREE[7]:.3f}  "
+                f"({SHARE_FREE[7] / SHARE_REAL[7]:.0f}×)", xy=(7 + w, SHARE_FREE[7]),
                 xytext=(2.6, 0.33), fontsize=9, color=RED, fontweight="bold",
                 arrowprops=dict(arrowstyle="-|>", color=RED, lw=1.3))
 
     # ============================================================ panel D
     ax = fig.add_subplot(gs[2, 1])
-    ax.set_title("D.  The remedy: scheduled sampling closes 61% of the gap",
+    ax.set_title(f"D.  The remedy: scheduled sampling closes {1 - DOSE_E[2] / DOSE_E[0]:.0%} of the gap",
                  loc="left", fontsize=12, fontweight="bold", color=INK, pad=6)
     ax.axhspan(-0.05, NULL_Q95, color=GREENBG, zorder=0)
     ax.axhline(NULL_Q95, color=GREEN, lw=1.2, ls="--")
@@ -207,27 +219,27 @@ def main() -> None:
                 lw=2, ms=8, capsize=4, zorder=3)
     for p, e in zip(DOSE_P, DOSE_E):
         ax.text(p + 0.012, e + 0.1, f"{e:.3f}", fontsize=9.5, color=AMBER, fontweight="bold")
-    ax.text(0.0, MARKOV + 0.06, "first-order Markov chain, 0.711", fontsize=8.5,
+    ax.text(0.0, MARKOV + 0.06, f"first-order Markov chain, {MARKOV:.3f}", fontsize=8.5,
             color=GREY, ha="left")
     ax.text(0.355, NULL_Q95 + 0.05, "real-vs-real band, 0.078", fontsize=8.5,
             color=GREEN, ha="right")
     ax.set_xlabel("p = probability the model is fed its OWN previous decision during training",
                   fontsize=9.5)
     ax.set_ylabel("energy distance (lower is better)", fontsize=9.5)
-    ax.set_xlim(-0.03, 0.40); ax.set_ylim(-0.05, 2.9)
+    ax.set_xlim(-0.03, 0.40); ax.set_ylim(-0.05, 3.9)
     ax.set_xticks(DOSE_P)
     ax.spines[["top", "right"]].set_visible(False)
     ax.text(0.0, -0.2,
-            "Monotone in p, with the classifier AUC falling in step: a mechanism, not a lucky seed.\n"
-            "Costs nothing on one-step accuracy (0.8801 vs 0.8810). Still 12× the band, "
-            "still behind a 9×9 transition matrix.",
+            "Monotone in p, and both doses sit below the control on every seed: a mechanism, not a lucky\n"
+            "seed. Costs nothing on one-step accuracy (0.8801 vs 0.8810 validation). Still "
+            f"{DOSE_E[2] / NULL_Q95:.0f}× the band,\nstill behind a 9×9 transition matrix on every seed.",
             transform=ax.transAxes, fontsize=8, color=MUTED, va="top", linespacing=1.3)
 
     fig.suptitle("Prediction is fine one step at a time; generation fails when the model runs on its own",
                  fontsize=15, fontweight="bold", color=INK, x=0.06, ha="left", y=0.975)
     fig.text(0.06, 0.953,
-             "ProductGPT, out-of-sample customers, holdout campaigns 28–30.  "
-             "One-step holdout NLL of the same model: 0.8846, calibration error 0.010–0.019.",
+             "ProductGPT (b33, campaign effects), 300 out-of-sample customers × 8 replicates, holdout "
+             "campaigns 28–30, fixed rollout engine.  One-step holdout NLL of the same model: 0.8837.",
              fontsize=10, color=MUTED)
 
     for ext in ("png", "pdf"):

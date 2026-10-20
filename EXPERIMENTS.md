@@ -4264,3 +4264,117 @@ set and the band do not depend on it.
 
 **Lesson.** A script's default is not the setting a job ran. Read the job
 script before copying a setting into a plan.
+
+### R36i — RESULT: the diagnosis survives in weak form; teacher forcing is close, not inside, and free running got worse
+
+Job 42879 (commit `93dcfbf`, chunk 6), 20 Oct 2026.
+- Every stage exited 0, and the full log was read.
+- Gates: 11 of 11 and 35 of 35 checks, plus the smoke.
+- The band reproduced the pre-fix q95 exactly (0.0781258), on 22,490 holdout
+  rows, so these are R36c/e's 300 customers.
+- Every arm run decided on exactly the 179,920 live rows (8 × 22,490), with 0
+  mismatched rows and 0 altered real acquisitions. The problems list is empty.
+- The arms without a model agree with the chunk-32 run of job 42868 within
+  draw noise (i.i.d. 2.46–2.48, Markov 0.78–0.82, arm C −0.003 to +0.001).
+  Chunking did not move them.
+
+Energy is the mean over three seeds (training seeds for model arms, draw
+seeds otherwise); the band is q95 = 0.078. AUC is the mean C2ST AUC, with the
+range of the three fold CIs.
+
+| arm | pre-fix energy (AUC) | R36i energy ± sd [range] | × band | z | AUC (CI range) | top functionals |
+|---|---|---|---|---|---|---|
+| arm C (control) | −0.010 (0.543), local run | −0.000 ± 0.002 [−0.002, +0.001] | 0.0 | 0.0 | 0.552 (0.518–0.607) | sat_k1, sat_k2, share_d1 |
+| teacher-forced b33 (control) | 0.307, b29_hl2 on 60 customers, band 0.373 | 0.417 ± 0.080 [0.349, 0.505] | 5.3 | 11.6 | 0.851 (0.816–0.894) | longest NotBuy run, switch rate, share Buy1-Reg |
+| free-running b33 | 2.352 ± 0.198 (0.859) | 3.169 ± 0.381 [2.741, 3.472] | 40.6 | 88.1 | 0.869 (0.839–0.898) | longest NotBuy run, sat_k1, incidence |
+| scheduled sampling p = 0.35 | 0.928 ± 0.260 (0.827) | 1.311 ± 0.299 [1.129, 1.656] | 16.8 | 36.5 | 0.841 (0.818–0.876) | longest NotBuy run, sat_k1, share Buy1-Reg |
+| scheduled sampling p = 0.15 | 1.390 ± 0.358 (0.847) | 1.710 ± 0.389 [1.387, 2.141] | 21.9 | 47.5 | 0.851 (0.816–0.876) | longest NotBuy run, sat_k1, share Buy10-Reg |
+| first-order Markov | 0.711 (0.879) | 0.784 ± 0.006 [0.781, 0.791] | 10.0 | 21.8 | 0.885 (0.865–0.907) | longest NotBuy run, sat_k1, acf lag 3 |
+| independent draws | 2.190 (0.903) | 2.468 ± 0.008 [2.461, 2.476] | 31.6 | 68.6 | 0.913 (0.902–0.925) | switch rate, longest NotBuy run, acf lag 1 |
+
+The real-vs-real band: mean −0.002, sd 0.036, q95 0.078.
+
+**Verdicts, computed by the script.**
+
+| verdict | result |
+|---|---|
+| V1 lottery harmless | holds: arm C inside on 3 of 3 draws |
+| V2 closed loop fails | holds: free running outside on 3 of 3 seeds |
+| V3 per-step law indistinguishable | **fails**: teacher forcing outside on 3 of 3 seeds |
+| V4 the loop makes most of the gap | holds: free − teacher-forced is +2.90, +2.97, +2.39; teacher forcing removes 88%, 85% and 87% of the free-running distance |
+| V5 the ordering | holds: arm C −0.000 < teacher-forced 0.417 < Markov 0.784 < free-running 3.169 |
+
+**Diagnosis: survives in weak form**, as predicted. Every prediction held: V1,
+V2 (with sat_k1 among the top functionals), V3 failing, V4, V5, and a
+monotone dose response.
+
+**What this licenses.** Re-drawing the lottery eight times per customer leaves
+the sequences where the real ones are. Sampling decisions against the real
+streams lands close, at about one eighth of the free-running distance. Closing
+the loop through both streams takes the model to 41 times the band. The paper
+can say "most of the distance is created by feeding the model its own
+output". It can no longer say "teacher-forced sequences are indistinguishable
+from real ones".
+
+**Three things the pre-fix figure hid.**
+1. **Teacher forcing is detectable, not just outside.** On energy it is 5.3×
+   the band, at z 11.6 on every seed. A classifier also separates it from real
+   almost as well as it separates free running: AUC 0.851 against 0.869. It
+   leans on run length and switching: the longest NotBuy run, the switch rate,
+   and the Buy1-Reg share. Teacher forcing generates NotBuy on 35.2% of
+   occasions against 42.5% observed. So the per-step law is measurably off on a
+   few run-length statistics. The closed loop adds magnitude (energy × 7.6),
+   not detectability. The old "INSIDE" was the 60-customer band (0.373).
+2. **The fix made free running worse.** It went from 2.352 to 3.169 (+0.62 to
+   +1.00 by seed). It now loses to independent draws on every seed (lowest seed
+   2.741, against i.i.d.'s highest draw at 2.476). The arms without a model moved
+   too: i.i.d. by +0.28 and Markov by +0.07. They have no model, so only defects
+   3 and 4 can reach them. Part of every pre-fix number's error was therefore
+   the engine's, shared by all arms. Free running rose about three times as
+   much as i.i.d., which is consistent with defects 1 and 2 (what the model
+   feeds itself) adding to it. This run cannot separate the four defects.
+3. **Defect 3 did reach R36c/e.** At their chunk of 6, the pre-fix loop never
+   generated 939 of the 22,490 holdout rows (4.2%), belonging to 10 of the 300
+   customers.
+
+**The remedy.** Energy falls monotonically in p: 3.169 → 1.710 → 1.311. Both
+b35 arms differ from b33 under the rule: lower on every seed, by 1.46 and 1.86
+on average. Scheduled sampling at p = 0.35 closes 59% of the gap (pre-fix 61%),
+and p = 0.15 closes 46% (pre-fix 41%). But p = 0.35 is still 17× the band and
+behind the Markov chain on every seed (1.129 against 0.791).
+
+**Arm C's residual is still there.** No draw's AUC CI contains 0.5
+(0.518–0.607), and the satiation buckets k = 1, 2 lead, as before the fix. The
+environment's duplicate structure is slightly off. Under R36's T2 rule (the AUC
+CI must contain 0.5), not even arm C passes. The energy band is the tolerance
+criterion the figure uses.
+
+**Decision shares (panel C)**, pooled over the 300 customers' holdout rows.
+
+| | NotBuy | Buy10 Reg | Buy10 FigB | Buy1 Wep | Buy10 Wep |
+|---|---|---|---|---|---|
+| observed | 0.425 | 0.003 | 0.013 | 0.044 | 0.010 |
+| teacher-forced | 0.352 | 0.012 | 0.032 | 0.061 | 0.020 |
+| free-running | 0.156 | 0.033 | 0.111 | 0.159 | 0.183 |
+
+These replace the pre-fix panel C, which was 60 customers averaged by chunk
+(observed NotBuy 0.503).
+
+**The window (stage 2).** b33 s1, teacher-forced NLL on the same 300
+customers: 0.8615 at context 384 and 0.8608 at 1024, both on 22,490 events.
+The 384 window costs +0.0007 nats.
+
+**Now quotable without the pre-fix qualifier.** Every number in this entry,
+for gen-5 b33/b35 at context 384. Still pre-fix: the R36c H1 table (b18 cells,
+b29_hl2), R37 (the duplet's 1.5 in the old panel A caption), R38 and R42.
+
+**For R43.** Step 2 predicted "teacher-forced C sits inside the band, as A's
+counterpart did in R36c". A's counterpart is now outside (0.417, 5× the band),
+so that prediction rests on a premise that no longer holds.
+
+**Artifacts** (HPCC, `~/ProductGPT/work_r36i`, gitignored):
+- `results/r36i/r36i.json`;
+- `results/r36i/r36i_functionals.npz`: the raw per-sequence functionals of all
+  21 arm runs and the real set, for the 27 per-statistic tables;
+- `results/r36i/r36i_42868_chunk32.*`;
+- log `~/ProductGPT/logs/r36i_42879.log`.
