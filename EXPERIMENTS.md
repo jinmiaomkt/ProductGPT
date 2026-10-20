@@ -29,7 +29,7 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 41557–41581 | `b20_*` (25 runs) | 2026-09-26 | R33: the identified stock ladder (decay, duplicates, attribute kernel, free kernel as a bound) | 2 running, rest queued (qstat 2026-09-26) |
 | 41582–41617 | `b19_*` (36 runs) | 2026-09-26 | R32: hybrid designs seq_ra / seq_ar / block | queued (qstat 2026-09-26) |
 | 41643–41692 | `b22_*`, `b23_*` (50 runs) | 2026-09-27 | R33 ladder re-run after the parameterisation and weight-decay fixes | queued (qstat 2026-09-27) |
-| 42880–42897 | `b39_*` (18 runs, from `~/ProductGPT/work_gen6` at `93dcfbf`) | 2026-10-20 | R43 step 1: gen 6 against the rev-2 incumbent | 42880 running, rest queued (qstat 2026-10-20) |
+| 42880–42897 | `b39_*` (18 runs, from `~/ProductGPT/work_gen6` at `93dcfbf`) | 2026-10-20 | R43 step 1: gen 6 against the rev-2 incumbent | complete, all 18 exit 0; result in R43 |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -3986,6 +3986,67 @@ smoke run, and 0.8782 against 0.8784 for the rev-1 b36 triplet seed 1. The
 residual is bf16 noise, inside the 0.003 tolerance. On that old triplet the
 209 customers with more than 1,024 occasions (33,467 events) score 0.8839,
 against 0.8772 for the rest.
+
+**Step 1 — RESULT (20 Oct 2026): gen 6 is non-inferior, a tie as
+predicted.** All 18 runs exited 0 and none stopped on the time budget; every
+cfg reads model_rev 2. The holdout was read once, after all 18 finished.
+Both holdout cells scored identical events in every arm (217,303 and
+222,889).
+
+Headline cell, `outsample_users_holdout_period`:
+
+| arm | s1 | s2 | s3 | s4 | s5 | mean | sd |
+|---|---|---|---|---|---|---|---|
+| A rev-2 incumbent | 0.8806 | 0.8854 | 0.8671 | 0.8730 | 0.8820 | **0.8776** | 0.0074 |
+| B full histories, no window | 0.8790 | 0.8994 | 0.8790 | 0.8711 | 0.8839 | 0.8825 | 0.0105 |
+| C gen 6 (W 384, C 512) | 0.8808 | 0.8826 | 0.8852 | 0.8713 | 0.8713 | **0.8782** | 0.0065 |
+| D window 128 | 0.8803 | 0.8991 | 0.9053 | — | — | 0.8949 | 0.0130 |
+
+Paired by seed:
+
+| difference | per seed | mean | ≤ +0.02 | < 0 |
+|---|---|---|---|---|
+| C − A | +0.0001, −0.0028, +0.0181, −0.0016, −0.0107 | **+0.0006** | **5/5** | 3/5 |
+| B − A | −0.0016, +0.0140, +0.0120, −0.0019, +0.0019 | +0.0049 | 5/5 | 2/5 |
+| C − B | +0.0018, −0.0168, +0.0062, +0.0002, −0.0126 | −0.0042 | 5/5 | 2/5 |
+| D − C | −0.0004, +0.0165, +0.0200 | +0.0120 | 2/3 | 1/3 |
+
+Read against the pre-registered rules:
+- **C is non-inferior to A.** The mean difference is +0.0006, against a
+  +0.02 margin, and every seed is inside it. C is not "better": the mean is
+  above zero and only 3 of 5 seeds are negative. So the predicted tie holds,
+  at a size an order below the seed sd.
+- **Reading full histories changes nothing (A vs B), and neither does the
+  streaming approximation (B vs C).** Both differences are inside the
+  margin.
+- **D (window 128) is within 0.02 of C on the mean (+0.0120), as
+  predicted.** But it is the noisiest arm and is worse on 2 of 3 seeds. It
+  is descriptive only, with no decision attached.
+
+Secondary, no decision attached:
+- **Length strata** (`scripts/r43_strata.py`, job 42973; self-check passed for
+  every run). The 209 customers with more than 1,024 occasions are harder in
+  every arm: mean 0.8888 (A), 0.8932 (B), 0.8892 (C), 0.9045 (D), against
+  0.8756 (A) and 0.8762 (C) for the rest. On that long stratum, C − A is
+  −0.0035, −0.0025, +0.0193, −0.0034, −0.0081 (mean +0.0004), and B − A is
+  +0.0044. The predicted gain for heavy customers from reading their full
+  history does not appear. Inventory was already carried across gen 5's
+  window, and the dropped early occasions add no one-step information beyond
+  it.
+- **Other cells.** In-sample × holdout: A 0.8709, C 0.8720, B 0.8758, D
+  0.8887. The out-of-sample × calibration cell is not like for like: A scores
+  31,589 fewer events (1,259,900 against 1,291,489), the early occasions
+  outside its 1,024 window. Its means are A 0.9755, C 0.9747, B 0.9824, D
+  0.9868.
+- **Validation** (selection only): A 0.8777, B 0.8856, C 0.8795, D 0.8860.
+- **Cost.** Training took 10–22 minutes per C run and 9–16 per B run, against
+  20–43 for A. Peak GPU memory was 5.5 GB for C and D, and 7.1 GB for B
+  (whole histories in one chunk). A's peak was not recorded.
+
+**Status:** step 1 passes. Adoption needs step 2, generation: gen 6 not
+worse than A as a generator, by the energy rule above. Step 2 has not been
+run; it needs a GPU job wrapper for `r36c_generate.py` and
+`r36c_diagnose.py`.
 
 **Step 1: prediction.** The headline is NLL on
 `outsample_users_holdout_period`, paired by seed. All arms share one customer
