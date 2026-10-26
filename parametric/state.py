@@ -100,7 +100,13 @@ def _onehot(idx: np.ndarray, n: int, drop_first: bool = True) -> np.ndarray:
 
 
 def _fig_offer(ids: np.ndarray, prod, runs: np.ndarray) -> np.ndarray:
-    """(…,13): element dummies (6), weapon-type dummies (4), female, rerun, log prior runs."""
+    """(…,12): element dummies (6), weapon-type dummies (4), female, rerun flag.
+
+    No count of prior runs: on the real calendar a featured figure has almost
+    never run twice before (one training campaign), so log(1 + runs) was
+    collinear with the flag -- the ridge the R46 smoke found -- and a
+    'beyond the first run' term would be a one-campaign fixed effect.
+    """
     have = (ids >= FIRST) & (ids <= LAST)
     safe = np.where(have, ids, 0)
     el = np.where(have, prod["element"][safe], -1)
@@ -108,8 +114,7 @@ def _fig_offer(ids: np.ndarray, prod, runs: np.ndarray) -> np.ndarray:
     fem = np.where(have, prod["female"][safe], 0).astype(np.float32)
     rr = np.where(have, runs, 0).astype(np.float32)
     return np.concatenate([_onehot(el, 7), _onehot(wt, 5), fem[..., None],
-                           (rr > 0).astype(np.float32)[..., None],
-                           np.log1p(rr)[..., None]], axis=-1)
+                           (rr > 0).astype(np.float32)[..., None]], axis=-1)
 
 
 def build(tab: Dict[str, np.ndarray], prod: Dict[str, np.ndarray],
@@ -135,8 +140,8 @@ def build(tab: Dict[str, np.ndarray], prod: Dict[str, np.ndarray],
     wt = 0.5 * (_onehot(np.where(w1 >= FIRST, prod["wtype"][np.clip(w1, 0, 59)], -1), 5)
                 + _onehot(np.where(w2 >= FIRST, prod["wtype"][np.clip(w2, 0, 59)], -1), 5))
     r1, r2 = run_of(w1), run_of(w2)
-    off_w = np.concatenate([wt, (0.5 * ((r1 > 0).astype(np.float32) + (r2 > 0))).astype(np.float32)[..., None],
-                            np.log1p(0.5 * (r1 + r2)).astype(np.float32)[..., None]], axis=-1)
+    off_w = np.concatenate([wt, (0.5 * ((r1 > 0).astype(np.float32) + (r2 > 0))).astype(np.float32)[..., None]],
+                           axis=-1)
 
     # campaign phase, on the buy decision; the clock is lagged one row (R21)
     first = np.zeros((N, S), np.float32)

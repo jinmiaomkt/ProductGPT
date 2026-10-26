@@ -362,8 +362,8 @@ def transformed(spec, theta, V) -> Dict[str, Dict[str, float]]:
 RARE_ROWS, RARE_EVENTS = 1_000, 50
 NEST_STARTS = [(0.9, 0.9), (0.6, 0.6), (0.9, 0.5), (0.5, 0.9)]
 _BLOCKS = {"fig": [("off_a", slice(0, 11), (3, 4)), ("off_b", slice(0, 11), (5, 6))],
-           "rr_a": [("off_a", slice(11, 13), (3, 4))], "rr_b": [("off_b", slice(11, 13), (5, 6))],
-           "unoff_b": [("unoff_b", slice(0, 1), (5, 6))], "wep": [("off_w", slice(0, 6), (7, 8))],
+           "rr_a": [("off_a", slice(11, 12), (3, 4))], "rr_b": [("off_b", slice(11, 12), (5, 6))],
+           "unoff_b": [("unoff_b", slice(0, 1), (5, 6))], "wep": [("off_w", slice(0, 5), (7, 8))],
            "phase": [("phase", slice(0, 3), tuple(range(1, 9)))],
            "cop_f": [("copies_a", slice(0, 3), (3, 4)), ("copies_b", slice(0, 3), (5, 6))],
            "cop_w": [("copies_w", slice(0, 2), (7, 8))], "wloss": [("wloss", slice(0, 2), (7, 8))],

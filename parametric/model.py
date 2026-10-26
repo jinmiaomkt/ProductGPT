@@ -64,8 +64,8 @@ class Spec:
         if f["lag"]:
             add("lag", 10, 8)
         if f["offer"]:
-            add("fig", 11); add("rr_a", 2); add("rr_b", 2); add("unoff_b", 1)
-            add("wep", 6); add("phase", 3)
+            add("fig", 11); add("rr_a", 1); add("rr_b", 1); add("unoff_b", 1)
+            add("wep", 5); add("phase", 3)
         if f["rho"]:
             add("rho", 1)
         if f["runs"]:
