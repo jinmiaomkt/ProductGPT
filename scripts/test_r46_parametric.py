@@ -110,7 +110,7 @@ def _fit_on(tab, cal, prod, spec, theta0, *, se=True):
     users = np.arange(tab["label"].shape[0])
     chunks = FT.make_chunks(tab, F, roles, users, row_budget=40_000)
     n = int(roles["train"].sum())
-    th, _ = FT.fit(spec, theta0, chunks, n, l2=1e-8, max_rounds=60)
+    th, _ = FT.fit(spec, theta0, chunks, n, l2=0.01 / n)
     V = FT.sandwich(spec, th, chunks)[0] if se else None
     return th, V, F, roles, chunks, n
 
@@ -122,7 +122,9 @@ def t5_markov(prod):
     th, _, F, roles, chunks, n = _fit_on(tab, cal, prod, spec, spec.init(), se=False)
     nll = FT.objective(spec, th, chunks, n, 0.0, backward=False)
     cf = FT.markov_closed_form(tab, F, roles)
-    check("T5 G3a lag-only MNL = closed-form Markov-1", abs(nll - cf) < 1e-5,
+    # the N(0, 10^2) stability prior keeps never-seen transitions finite, which
+    # costs the fit a little probability on them: allow 1e-4 nats
+    check("T5 G3a lag-only MNL = closed-form Markov-1", 0 <= nll - cf < 1e-4,
           f"fitted {nll:.8f} closed {cf:.8f}")
 
 

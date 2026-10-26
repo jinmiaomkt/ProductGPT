@@ -109,7 +109,81 @@ def objective(spec, theta, chunks, n_rows, l2, *, backward: bool) -> float:
     return tot + float(reg.detach())
 
 
-def fit(spec, theta0, chunks, n_rows, *, l2=1e-6, max_rounds=40, tol=1e-10):
+def grad_hess(spec, theta, chunks, *, scores: bool = False):
+    """Gradient and exact Hessian of the TOTAL masked log-likelihood (and per-customer scores).
+
+    g = d/dtheta sum_i w_i ll_i ; dg_p/dtheta = Hessian row p ; dg_p/dw_i = s_ip.
+    One double-backward per parameter per chunk.
+    """
+    P = theta.numel()
+    G = torch.zeros(P, dtype=F64)
+    H = torch.zeros(P, P, dtype=F64)
+    out_s = []
+    th = theta.clone().requires_grad_(True)
+    for ch in chunks:
+        w = torch.ones(len(ch.users), dtype=F64, requires_grad=True)
+        ll = M.customer_ll(spec, th, ch.X, ch.y, ch.masks["train"])
+        g, = torch.autograd.grad((w * ll).sum(), th, create_graph=True)
+        G += g.detach()
+        Sc = torch.zeros(len(ch.users), P, dtype=F64) if scores else None
+        for p in range(P):
+            h, s = torch.autograd.grad(g[p], (th, w), retain_graph=True, allow_unused=True)
+            if h is not None:
+                H[p] += h.detach()
+            if scores and s is not None:
+                Sc[:, p] = s.detach()
+        if scores:
+            out_s.append(Sc[ch.masks["train"].any(-1)])
+    return G, 0.5 * (H + H.T), (torch.cat(out_s, 0) if scores else None)
+
+
+def newton(spec, theta, chunks, n_rows, *, lam, iters=8, tol=1e-6):
+    """Damped Newton on -LL + lam/2 |theta|^2 (total scale), with backtracking.
+
+    L-BFGS crawls when a few never-observed transitions push their utilities
+    toward -inf; the exact Hessian finishes the identified directions.
+    """
+    f = lambda t: n_rows * objective(spec, t, chunks, n_rows, lam / n_rows, backward=False)
+    fx = f(theta)
+    hist = []
+    for it in range(iters):
+        g, H, _ = grad_hess(spec, theta, chunks)
+        grad = -g + lam * theta
+        A = -H + lam * torch.eye(theta.numel(), dtype=F64)
+        gmax = float(grad.abs().max())
+        if gmax < tol:
+            hist.append({"newton": it, "f": fx, "grad_max": gmax})
+            break
+        mu = 0.0
+        while True:
+            try:
+                L = torch.linalg.cholesky(A + mu * torch.eye(A.shape[0], dtype=F64))
+                break
+            except RuntimeError:
+                mu = max(1e-8, 10 * mu) if mu else 1e-8 * float(A.diagonal().abs().max())
+        d = -torch.cholesky_solve(grad[:, None], L)[:, 0]
+        step, ok = 1.0, False
+        for _ in range(30):
+            f_new = f(theta + step * d)
+            if f_new <= fx - 1e-4 * step * float(-(grad @ d)):
+                ok = True
+                break
+            step *= 0.5
+        hist.append({"newton": it, "f": fx, "grad_max": gmax, "step": step, "damping": mu})
+        log(f"  newton {it}  total -LL+pen {fx:.6f}  max|grad| {gmax:.2e}  step {step:g}")
+        if not ok:
+            break
+        theta = theta + step * d
+        fx = f_new
+    return theta, hist
+
+
+def fit(spec, theta0, chunks, n_rows, *, l2, max_rounds=15, tol=1e-10, newton_iters=8):
+    """L-BFGS on mean NLL + l2/2 |theta|^2, then damped Newton polish.
+
+    `l2` is per row; callers pass ridge / n_rows so the prior precision on the
+    TOTAL likelihood is `ridge` whatever the sample size.
+    """
     theta = theta0.clone().detach().requires_grad_(True)
     opt = torch.optim.LBFGS([theta], lr=1.0, max_iter=100, history_size=50,
                             line_search_fn="strong_wolfe", tolerance_grad=1e-9,
@@ -129,7 +203,11 @@ def fit(spec, theta0, chunks, n_rows, *, l2=1e-6, max_rounds=40, tol=1e-10):
         if abs(prev - loss) < tol or gnorm < 1e-7:
             break
         prev = loss
-    return theta.detach(), hist
+    th = theta.detach()
+    if newton_iters:
+        th, nh = newton(spec, th, chunks, n_rows, lam=l2 * n_rows, iters=newton_iters)
+        hist += nh
+    return th, hist
 
 
 def sandwich(spec, theta, chunks):
@@ -139,25 +217,8 @@ def sandwich(spec, theta, chunks):
     Cluster-robust covariance V = A^-1 (S'S) A^-1 with A = -H, clustered by customer.
     """
     P = theta.numel()
-    H = torch.zeros(P, P, dtype=F64)
-    scores = []
-    th = theta.clone().requires_grad_(True)
-    for c, ch in enumerate(chunks):
-        w = torch.ones(len(ch.users), dtype=F64, requires_grad=True)
-        ll = M.customer_ll(spec, th, ch.X, ch.y, ch.masks["train"])
-        g, = torch.autograd.grad((w * ll).sum(), th, create_graph=True)
-        Sc = torch.zeros(len(ch.users), P, dtype=F64)
-        for p in range(P):
-            h, s = torch.autograd.grad(g[p], (th, w), retain_graph=True, allow_unused=True)
-            if h is not None:
-                H[p] += h.detach()
-            if s is not None:
-                Sc[:, p] = s.detach()
-        keep = ch.masks["train"].any(-1)
-        scores.append(Sc[keep])
-        log(f"  sandwich chunk {c + 1}/{len(chunks)}")
-    Smat = torch.cat(scores, 0)
-    A = -0.5 * (H + H.T)
+    _, H, Smat = grad_hess(spec, theta, chunks, scores=True)
+    A = -H
     # A parameter whose feature never varies on the fitting rows has a zero row
     # in A: the data say nothing about it. It keeps its (penalised) start value
     # and is reported as not identified (SE = NaN), never as a precise zero.
@@ -306,7 +367,9 @@ def main() -> None:
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--se", action="store_true", help="cluster-robust sandwich SEs")
     ap.add_argument("--threads", type=int, default=int(os.environ.get("NCPUS", "8")))
-    ap.add_argument("--l2", type=float, default=1e-6)
+    ap.add_argument("--ridge", type=float, default=0.01,
+                    help="prior precision on the TOTAL likelihood, N(0, 1/ridge) per coefficient; "
+                         "for numerical stability only (bounds never-observed transitions)")
     ap.add_argument("--build-features", action="store_true")
     ap.add_argument("--max-users", type=int, default=None, help="smoke only")
     a = ap.parse_args()
@@ -353,8 +416,8 @@ def main() -> None:
 
     train_chunks = make_chunks(tab, F, roles, inu)
     log(f"{len(train_chunks)} training chunks")
-    theta, hist = fit(spec, theta0, train_chunks, n_train, l2=a.l2,
-                      max_rounds=3 if a.theta_from else 40)
+    theta, hist = fit(spec, theta0, train_chunks, n_train, l2=a.ridge / n_train,
+                      max_rounds=2 if a.theta_from else 15)
     train_nll = objective(spec, theta, train_chunks, n_train, 0.0, backward=False)
     log(f"fitted: train NLL {train_nll:.6f}  ({time.time() - t0:.0f}s)")
 
@@ -362,7 +425,7 @@ def main() -> None:
            "n_params": spec.size, "names": spec.names, "shapes": spec.shapes,
            "labels": param_labels(spec), "theta": theta.tolist(),
            "train_nll": train_nll, "n_train": n_train, "fit_history": hist,
-           "l2": a.l2, "max_users": a.max_users}
+           "ridge": a.ridge, "max_users": a.max_users}
     if a.rung == "M1":
         m_tr = np.zeros_like(roles["train"])
         m_tr[inu] = roles["train"][inu]
