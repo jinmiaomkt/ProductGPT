@@ -3853,7 +3853,7 @@ are directly comparable.
 - The fixed occasion grid still carries the real activity pattern (row density,
   IPT), so "free running" conditions on when the real customer was active.
 
-### R43 — PLAN, DRAFT FOR JIN'S REVIEW (19 Oct 2026; nothing submitted): the gen-6 streaming hybrid against the rev-2 incumbent
+### R43 — PLAN (approved by Jin 19 Oct 2026; steps 0 and 1 done, step 2 on hold for R44): the gen-6 streaming hybrid against the rev-2 incumbent
 
 **Question.** Gen 6 (`gen6_streaming/`, branch `gen6-streaming`, commit
 `eb70e52`) reads every customer from their first occasion, and it generates at
@@ -4439,3 +4439,93 @@ so that prediction rests on a premise that no longer holds.
   21 arm runs and the real set, for the 27 per-statistic tables;
 - `results/r36i/r36i_42868_chunk32.*`;
 - log `~/ProductGPT/logs/r36i_42879.log`.
+
+### R44 — PLAN, DRAFT FOR JIN'S REVIEW (26 Oct 2026; nothing submitted): tune gen 6 and the rev-2 incumbent on equal terms
+
+**Why.** R43 step 1 compared gen 6 at the incumbent's hyperparameters, which
+R30 tuned for the gen-5 stack, on the pre-fix code. Gen 6 has never been
+tuned, so its tie (+0.0006 nats) says nothing about gen 6 at its own best.
+Jin asked for the tuning before the generation step (R43 step 2, on hold).
+Tuning gen 6 alone would break the symmetric-tuning rule (R30 P2), so both
+families are re-tuned at model_rev 2 with the same budget.
+
+**Protocol.** R30's, unchanged: P1 selection on campaign-27 validation only,
+P2 equal budget, P3 seeds by stage, P5 frozen settings, P6 frontier reporting,
+P7 no single-seed result reported.
+
+**Families.**
+- **G5:** the gen-5 stacked hybrid at rev 2, reading the last 1,024
+  occasions.
+- **G6:** the gen-6 streaming hybrid, reading full histories in chunks of 512.
+
+Both carry the b36 stock frozen: attribute kernel, half-life 2 (frozen),
+duplicate tiers and the campaign control. Both use level 7, ALiBi, 8 heads, 2
+satiation layers, batch 4, 40 epochs with patience 5, and class weights at
+τ = 0.5. The pity counters stay off: switching them on changes the information
+set, so that is a separate ablation for after R44.
+
+**Stage 2 — random search (batch 40, 48 runs, seed 1).**
+- **Capacity cells.** Both families are the stacked hybrid, so they share R30
+  stage 1's capacity frontier for it: d96 N6 (best) and d128 N4 (runner-up),
+  12 configurations each. Stage 1 is not repeated.
+- **Search space.** R30 stage 2's space:
+  - learning rate log-uniform on [1e-4, 1.2e-3];
+  - dropout {0.05, 0.1, 0.2, 0.3};
+  - weight decay {0, 0.01, 0.05, 0.1};
+  - effective batch {8, 16, 32};
+  - d_ff ratio {2, 3, 4};
+  - warmup {0.02, 0.05, 0.1}.
+- **Paired draw.** Configuration k is the same draw for both families
+  (`scripts/r44_sample.py`, RNG 4401), so search noise is not a family
+  difference.
+- **Gen 6's window.** Gen 6 also searches the window over {128, 384, 768,
+  unlimited}, stratified so that each window appears 3 times in each capacity
+  cell (RNG 4402). Gen 5's counterpart, its 1,024-occasion context, stays
+  frozen as in R30 P5. So the budget in runs is equal and gen 6 has one more
+  dimension; that is stated, not hidden.
+- **Tags.** `b40_g5_cNN_s1` and `b40_g6_cNN_s1`, submitted by
+  `scripts/submit_batch40.sh`. Read only with
+  `scripts/summarize_search.py --prefix b40_`, which never opens a test cell.
+
+**Stage 3 — confirmation (18 runs).**
+- **Candidates.** The top 3 configurations per family, by validation NLL,
+  from stage 2 plus the R43 configuration at seed 1 (A s1 and C s1 of batch
+  39). The untuned point stays eligible, as R30's stage-1 points did.
+- **Runs.** Each candidate on 3 fresh seeds (11, 12, 13).
+- **Freezing.** Each family's configuration is frozen by its validation mean
+  over those seeds.
+
+**Stage 4 — final comparison (10 runs).** Each family's frozen configuration
+on seeds 1–5, with the holdout opened once. If a frozen configuration is the
+R43 one, its batch-39 runs are reused rather than re-run.
+
+**Predictions.**
+1. A tie: the frozen configurations land within 0.02 nats of each other on
+   the headline cell. R22 found capacity is not the constraint, R30 found four
+   families within 0.02 at their optima, and R43's arms sit within 0.005.
+2. Tuning moves each family by less than 0.01 from its R43 value. Gen 5 was
+   already tuned in this neighbourhood (R30 `hyb_c18`), so a larger gain for
+   gen 6 than for gen 5 would mean gen 6's optimum lies elsewhere.
+3. Gen 6's best window is 384 or longer; 128 ranks last, as D did in R43.
+
+**Decision rules (stage 4, headline cell, paired by seed).**
+- **Gen 6 better:** G6 − G5 < −0.02 on the five-seed mean and negative on at
+  least 4 of 5 seeds (R30 rule 1). Gen 6 then becomes the predictive model of
+  record as well.
+- **Gen 6 worse:** G6 − G5 > +0.02 on the mean and positive on at least 4 of
+  5 seeds. R43's adoption is then reopened before any generation work.
+- **Otherwise a tie.** It is reported as the ceiling reading with this tuning
+  budget as evidence (R30 rule 4), and R43 step 2 proceeds with the two frozen
+  configurations.
+- **Reported whatever the NLL says:** parameters, minutes per epoch, peak
+  memory, gen 6's selected window, the other cells and the R43 length strata.
+
+**Budget.** About 76 runs: 48 for the search, 18 to confirm, and up to 10 for
+the final comparison, fewer if R43 runs are reused. Batch 39 ran 20–43 minutes
+per gen-5 run and 9–22 per gen-6 run, so about 30 GPU-hours, or about 15 hours
+of wall time if both GPU slots are free. Each stage waits for the previous
+stage to finish.
+
+**Not in scope:** the pity counters, purchase timing (R36e), and the plain-GRU
+and plain-transformer families. Those families tie at their R30 optima on the
+pre-fix code; re-running them at rev 2 is a separate question.
