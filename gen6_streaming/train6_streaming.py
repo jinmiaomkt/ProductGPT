@@ -55,11 +55,31 @@ import dataset_multistream  # noqa: E402
 import model_multistream_state_space as mm  # noqa: E402
 import train5_multistream as t5  # noqa: E402
 from dataset_multistream import collate_multistream  # noqa: E402
+from censor6 import MODES as CHOP_MODES, STATES as CHOP_STATES, ChopView, collate_prefix  # noqa: E402
 from model6_streaming import build_from_cfg  # noqa: E402
 from shared.features import load_feature_tensor  # noqa: E402
 
 PAD_ID = 0
 N_CLASSES = 9
+# R45 batch fields the model consumes (see censor6.collate_prefix)
+CHOP_KEYS = ("prefix_obtained", "prefix_prev", "censored")
+
+# gen 5's evaluate() builds the model's extra kwargs with inventory_kwargs(); wrap
+# it so evaluation passes the R45 fields too. It looks the name up at call time,
+# so this reaches evaluate() unchanged.
+_inventory_kwargs5 = t5.inventory_kwargs
+
+
+def _inventory_kwargs6(model, batch, device):
+    kw = _inventory_kwargs5(model, batch, device)
+    if getattr(model, "gen", 5) == 6:
+        for k in CHOP_KEYS:
+            if k in batch:
+                kw[k] = batch[k].to(device, non_blocking=True)
+    return kw
+
+
+t5.inventory_kwargs = _inventory_kwargs6
 
 # The b36 triplet incumbent (runs/gen5_hpcc_S1024_b4_b36_triplet_s*), read from
 # its final.json on 19 Oct 2026. model_rev is the one deliberate difference.
@@ -137,7 +157,7 @@ def collate_scored(items):
     for k, v in list(b.items()):
         if torch.is_tensor(v) and v.dim() >= 2 and k not in ("inv_init_count", "inv_init_last"):
             b[k] = v[:, :cut]
-    return b
+    return collate_prefix(items, b)          # R45 chop fields, if any (never cut)
 
 
 def make_loader(ds, batch_size: int, shuffle: bool, seed: int, num_workers: int):
@@ -214,6 +234,19 @@ def main() -> None:
                     help="DIAGNOSTIC: score the holdout cells every epoch (never used for selection)")
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--time-budget-min", type=float, default=None)
+    # R45: controlled left-censoring (gen6_streaming/censor6.py)
+    ap.add_argument("--chop", choices=list(CHOP_MODES), default="none",
+                    help="chop the start of each history: calendar = first DEPTH active "
+                         "campaigns, count = first DEPTH occasions")
+    ap.add_argument("--chop-depth", type=int, default=0)
+    ap.add_argument("--chop-state", choices=list(CHOP_STATES), default="zero",
+                    help="zero = rows gone and state restarts; true = rows gone from context "
+                         "but fed to the computed state; labels = only their labels masked")
+    ap.add_argument("--chop-where", choices=["train", "eval", "both"], default="both",
+                    help="train = training customers (training and validation inputs); "
+                         "eval = the test cells only; both = everywhere")
+    ap.add_argument("--censor-flag", type=int, default=0,
+                    help="1 = learned censoring vector and starting GRU state for chopped customers")
     ap.add_argument("--allow-laptop", action="store_true",
                     help="override the guard that refuses to train on Windows (see below)")
     args = ap.parse_args()
@@ -258,7 +291,12 @@ def main() -> None:
                 "eval_chunk": int(args.eval_chunk), "model_rev": mm.MODEL_REV,
                 "encoder": "gru_attn", "fuse": "stack", "inventory": "slots",
                 "use_offer_inventory_attn": True, "use_obtained": True,
-                "track_holdout": bool(args.track_holdout)})
+                "track_holdout": bool(args.track_holdout),
+                "chop": args.chop, "chop_depth": int(args.chop_depth),
+                "chop_state": args.chop_state, "chop_where": args.chop_where,
+                "censor_flag": bool(args.censor_flag)})
+    if cfg["chop"] != "none" and cfg["chop_depth"] <= 0:
+        raise SystemExit("--chop needs --chop-depth > 0")
     if cfg.get("max_users") and cfg.get("split_mode") == "both":
         print("[data] note: max_users subsamples customers BEFORE the split (pilot only)")
 
@@ -278,13 +316,25 @@ def main() -> None:
     cfg["uids_dir"] = str(uids_dir) if uids_dir else None
     tr0, va0, te0, num_users = t5.build_loaders(cfg, uids_dir=uids_dir)
     nw = int(cfg.get("num_workers", 0))
-    train_dl, tr_rows, tr_n = make_loader(tr0.dataset, cfg["batch_size"], True, cfg["seed"], nw)
+
+    def chopped(ds, side: str):
+        """R45: training customers' inputs (training and validation) are side
+        'train'; the test cells are side 'eval'."""
+        if cfg["chop"] == "none" or cfg["chop_where"] not in (side, "both"):
+            return ds
+        return ChopView(ds, cfg["chop"], cfg["chop_depth"], cfg["chop_state"], cfg["val_from"])
+
+    if cfg["chop"] != "none":
+        print(f"[chop] mode={cfg['chop']} depth={cfg['chop_depth']} state={cfg['chop_state']} "
+              f"where={cfg['chop_where']} censor_flag={cfg['censor_flag']}")
+    train_dl, tr_rows, tr_n = make_loader(chopped(tr0.dataset, "train"), cfg["batch_size"], True,
+                                          cfg["seed"], nw)
     ebs = int(args.eval_batch_size)
     cfg["eval_batch_size"] = ebs
-    val_dl, va_rows, va_n = make_loader(va0.dataset, ebs, False, 0, nw)
+    val_dl, va_rows, va_n = make_loader(chopped(va0.dataset, "train"), ebs, False, 0, nw)
     tests = {}
     for name, dl in te0.items():
-        tests[name], rows, n = make_loader(dl.dataset, ebs, False, 0, nw)
+        tests[name], rows, n = make_loader(chopped(dl.dataset, "eval"), ebs, False, 0, nw)
         print(f"[data] test {name:<31} {n:,} customers, {rows:,} rows to process")
     print(f"[data] train {tr_n:,} customers, {tr_rows:,} rows | val {va_n:,} customers, "
           f"{va_rows:,} rows (no truncation; rows after a customer's last scored "
@@ -392,6 +442,7 @@ def main() -> None:
             uid = batch["user_id"].to(device, non_blocking=True)
             tgt = batch["label"].to(device, non_blocking=True)
             camp = batch["campaign"].to(device, non_blocking=True) if "campaign" in batch else None
+            extra = {k: batch[k].to(device, non_blocking=True) for k in CHOP_KEYS if k in batch}
             n_valid = int((tgt != PAD_ID).sum())
             if n_valid == 0:
                 continue
@@ -409,7 +460,7 @@ def main() -> None:
 
             with autocast():
                 model.stream_forward(lto, obt, prev, uid, camp, chunk=cfg["chunk"],
-                                     on_chunk=on_chunk)
+                                     on_chunk=on_chunk, **extra)
             n_chunks += math.ceil(lto.size(1) / cfg["chunk"])
             running += got[0]
             nb += 1

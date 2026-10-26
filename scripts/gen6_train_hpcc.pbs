@@ -58,6 +58,10 @@ D_MODEL="${D_MODEL:-}"; N_LAYERS="${N_LAYERS:-}"; N_HEADS="${N_HEADS:-}"; D_FF="
 SAT_LAYERS="${SAT_LAYERS:-}"; KERNEL="${KERNEL:-}"; DECAY="${DECAY:-}"
 DECAY_INIT="${DECAY_INIT:-}"; DECAY_FREEZE="${DECAY_FREEZE:-}"; TIER="${TIER:-}"
 CAMP_FE="${CAMP_FE:-}"; ALIBI="${ALIBI:-}"; PITY_STREAM="${PITY_STREAM:-}"; VAL_FROM="${VAL_FROM:-}"
+#   R45 left-censoring: CHOP=calendar|count CHOP_DEPTH=k CHOP_STATE=zero|true|labels
+#   CHOP_WHERE=train|eval|both CENSOR_FLAG=1
+CHOP="${CHOP:-}"; CHOP_DEPTH="${CHOP_DEPTH:-}"; CHOP_STATE="${CHOP_STATE:-}"
+CHOP_WHERE="${CHOP_WHERE:-}"; CENSOR_FLAG="${CENSOR_FLAG:-}"
 TIME_BUDGET_MIN="${TIME_BUDGET_MIN:-1410}"
 
 job_tag="${PBS_JOBID%%.*}"
@@ -132,6 +136,11 @@ args=(--profile "$PROFILE" --window "$WINDOW" --chunk "$CHUNK" --batch-size "$BA
 [[ -n "$ALIBI" ]] && args+=(--alibi "$ALIBI")
 [[ -n "$PITY_STREAM" ]] && args+=(--pity-stream "$PITY_STREAM")
 [[ -n "$VAL_FROM" ]] && args+=(--val-from "$VAL_FROM")
+[[ -n "$CHOP" ]] && args+=(--chop "$CHOP")
+[[ -n "$CHOP_DEPTH" ]] && args+=(--chop-depth "$CHOP_DEPTH")
+[[ -n "$CHOP_STATE" ]] && args+=(--chop-state "$CHOP_STATE")
+[[ -n "$CHOP_WHERE" ]] && args+=(--chop-where "$CHOP_WHERE")
+[[ -n "$CENSOR_FLAG" ]] && args+=(--censor-flag "$CENSOR_FLAG")
 
 echo "Command: python gen6_streaming/train6_streaming.py ${args[*]}"
 echo

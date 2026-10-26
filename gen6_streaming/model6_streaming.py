@@ -63,7 +63,7 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
 
     streaming = True
 
-    def __init__(self, *, window: int = 384, chunk: int = 512, **kw):
+    def __init__(self, *, window: int = 384, chunk: int = 512, censor_flag: bool = False, **kw):
         kw = dict(kw)
         for k, want in (("encoder", "gru_attn"), ("fuse", "stack"), ("inventory", "slots")):
             got = str(kw.get(k, want)).lower()
@@ -83,6 +83,16 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
         self.window = int(window or 0)
         self.chunk = max(int(chunk), 1)
         self.gen = 6
+        # R45: tell the model a history is left-censored. A learned vector added
+        # to every occasion of a censored customer, and a learned starting state
+        # for each GRU layer in place of zeros. Both start at zero, so a fresh
+        # model computes the uncensored function, and uncensored customers never
+        # see them. Created after the parent's reset_parameters, so they stay zero.
+        self.censor_flag = bool(censor_flag)
+        if self.censor_flag:
+            d = int(kw["d_model"])
+            self.censor_vec = nn.Parameter(torch.zeros(d))
+            self.censor_h0 = nn.Parameter(torch.zeros(len(self.event_model), d))
 
     # ------------------------------------------------------------ state
     def init_stream(self, batch_size: int, device) -> Dict[str, Any]:
@@ -111,7 +121,7 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
 
     # ------------------------------------------------------- computed state
     def computed_scan(self, obtained_ids: torch.Tensor, prev_dec_ids: torch.Tensor,
-                      st: Dict[str, Any]):
+                      st: Dict[str, Any], detach_carry: bool = True):
         """Computed state for rows st['t'] .. st['t']+L-1, continuing from `st`.
 
         obtained_ids (B,L,10), prev_dec_ids (B,L). Row t carries o_(t-1) (the
@@ -161,8 +171,10 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
             pity, pity_carry = self._pity_scan(obtained_ids, prev_dec_ids, st["pity"])
 
         carry = {"count": count[:, -1].detach(), "last": last[:, -1].detach(),
-                 "stock": (stock_pre[:, -1] if options else count[:, -1]).detach(),
+                 "stock": stock_pre[:, -1] if options else count[:, -1],
                  "pity": pity_carry.detach()}
+        if detach_carry:
+            carry["stock"] = carry["stock"].detach()
         return count, since, stock, pity, carry
 
     def _pity_scan(self, obtained_ids, prev_dec_ids, carry):
@@ -193,7 +205,8 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
         return torch.stack(out, dim=-1), torch.stack(new, dim=-1)
 
     # --------------------------------------------------------- row pipeline
-    def _rows(self, lto_ids, obtained_ids, prev_dec_ids, user_idx, count, since, stock, pity):
+    def _rows(self, lto_ids, obtained_ids, prev_dec_ids, user_idx, count, since, stock, pity,
+              censored=None):
         """Event representations r (B,L,D) from row-local inputs and the
         computed state of those rows. Gen 5's steps 1-5, slots path."""
         lto_ids, obtained_ids, prev_dec_ids = lto_ids.long(), obtained_ids.long(), prev_dec_ids.long()
@@ -211,7 +224,10 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
         if self.use_user_embedding and user_idx is not None:
             z_u = self.user_embed(user_idx.long()).unsqueeze(1).expand(-1, z_x.size(1), -1)
             pieces.append(z_u)
-        return self.event_fusion(torch.cat(pieces, dim=-1))
+        r = self.event_fusion(torch.cat(pieces, dim=-1))
+        if self.censor_flag and censored is not None:
+            r = r + censored.to(r.device).to(r.dtype)[:, None, None] * self.censor_vec.to(r.dtype)
+        return r
 
     def _slots_read(self, offer_tok, offer_mask, count, since, stock_cnt):
         """InventorySlots.forward from its state onward (the READ side)."""
@@ -342,7 +358,8 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
 
     def stream_forward(self, lto_ids, obtained_ids, prev_dec_ids, user_idx=None,
                        campaign=None, chunk: Optional[int] = None,
-                       on_chunk: Optional[Callable[[int, int, torch.Tensor], None]] = None):
+                       on_chunk: Optional[Callable[[int, int, torch.Tensor], None]] = None,
+                       prefix_obtained=None, prefix_prev=None, censored=None):
         """Full-history pass over (B,S) rows, `chunk` occasions at a time.
 
         Without on_chunk, returns the logits (B,S,V). With it, calls
@@ -356,11 +373,26 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
         the chunks as a detached leaf, and after the last chunk its
         accumulated gradient is pushed back through the stock computation, so
         those parameters receive their exact gradient.
+
+        R45 (left-censoring). `prefix_obtained` / `prefix_prev` (B,Lp), LEFT-padded
+        so every prefix ends at row -1, are rows removed from the model's context
+        but handed to the computed state: inventory, stock and pity then enter
+        row 0 exactly as in the full history (gradient kept through the stock).
+        `censored` (B,) feeds the censoring flag when the model has one.
         """
         C = max(int(chunk or self.chunk), 1)
         lto_ids, obtained_ids, prev_dec_ids = lto_ids.long(), obtained_ids.long(), prev_dec_ids.long()
         B, S = prev_dec_ids.shape
         st0 = self.init_stream(B, lto_ids.device)
+        if prefix_obtained is not None and prefix_obtained.size(1) > 0:
+            Lp = int(prefix_obtained.size(1))
+            _, _, _, _, carry = self.computed_scan(prefix_obtained.long(), prefix_prev.long(),
+                                                   {**st0, "t": -Lp}, detach_carry=False)
+            st0 = {**st0, **carry}
+        if self.censor_flag and censored is not None:
+            c = censored.to(lto_ids.device).float()
+            st0["h"] = [(c[:, None] * self.censor_h0[i][None, :])[None].contiguous()
+                        for i in range(len(self.event_model))]
         count, since, stock, pity, _ = self.computed_scan(obtained_ids, prev_dec_ids, st0)
         track = torch.is_grad_enabled() and stock.requires_grad
         stock_leaf = stock.detach().requires_grad_(True) if track else stock
@@ -372,7 +404,7 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
             sl = slice(t0, t1)
             r = self._rows(lto_ids[:, sl], obtained_ids[:, sl], prev_dec_ids[:, sl], user_idx,
                            count[:, sl], since[:, sl], stock_leaf[:, sl],
-                           pity[:, sl] if pity is not None else None)
+                           pity[:, sl] if pity is not None else None, censored)
             s, hs, ks, vs = self._encode(r, st, t0)
             logits = self._head(s, user_idx, campaign[:, sl] if campaign is not None else None)
             st = {"t": t1, "h": hs, "k": ks, "v": vs,
@@ -390,7 +422,8 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
         return torch.cat(outs, dim=1) if on_chunk is None else None
 
     def forward(self, lto_ids, obtained_ids=None, prev_dec_ids=None, user_idx=None,
-                ipt=None, campaign=None, inv_init_count=None, inv_init_last=None, **kw):
+                ipt=None, campaign=None, inv_init_count=None, inv_init_last=None,
+                prefix_obtained=None, prefix_prev=None, censored=None, **kw):
         """Gen-5 call signature, so gen 5's evaluate() and rollout() work.
 
         Gen 6 always sees a customer's whole history, so a non-empty
@@ -401,7 +434,9 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
         if inv_init_count is not None and bool((inv_init_count != 0).any()):
             raise ValueError("gen 6 needs full histories; this batch was truncated "
                              "(non-zero inv_init_count). Build the data with max_events=None.")
-        return self.stream_forward(lto_ids, obtained_ids, prev_dec_ids, user_idx, campaign)
+        return self.stream_forward(lto_ids, obtained_ids, prev_dec_ids, user_idx, campaign,
+                                   prefix_obtained=prefix_obtained, prefix_prev=prefix_prev,
+                                   censored=censored)
 
 
 def build_streaming(*, window: int, chunk: int, vocab_size_src: int, vocab_size_tgt: int,
@@ -410,7 +445,7 @@ def build_streaming(*, window: int, chunk: int, vocab_size_src: int, vocab_size_
                     num_users: Optional[int] = None, **kw) -> StreamingHybrid:
     """Mirror of gen 5's build_transformer for the streaming hybrid."""
     return StreamingHybrid(
-        window=window, chunk=chunk,
+        window=window, chunk=chunk, censor_flag=kw.get("censor_flag", False),
         vocab_size_src=vocab_size_src, vocab_size_tgt=vocab_size_tgt,
         max_seq_len=max_seq_len or 0, ai_rate=ai_rate, d_model=d_model,
         n_layers=n_layers, n_heads=n_heads, d_ff=d_ff, dropout=dropout,
@@ -438,7 +473,7 @@ def build_from_cfg(cfg: Dict[str, Any], feature_tensor: torch.Tensor,
                    num_users: Optional[int]) -> StreamingHybrid:
     """Rebuild from a run's cfg (trainer and rollout share this)."""
     return build_streaming(
-        window=cfg["window"], chunk=cfg["chunk"],
+        window=cfg["window"], chunk=cfg["chunk"], censor_flag=cfg.get("censor_flag", False),
         vocab_size_src=cfg["vocab_size_src"], vocab_size_tgt=cfg["vocab_size_tgt"],
         max_seq_len=0, d_model=cfg["d_model"], n_layers=cfg["N"],
         n_heads=cfg["num_heads"], d_ff=cfg["d_ff"], dropout=cfg["dropout"],
