@@ -158,6 +158,13 @@ def t6_recover(prod, rung, *, N, S, K=1, seed=11, report=False):
           f"P={spec.size} ({int((~ident).sum())} without variation) rows={N * S} mean z^2 {mz2:.2f} "
           f"max|z| {np.abs(z).max():.2f} at {worst}, structural max|z| {zs:.2f} ({time.time() - t0:.0f}s)")
     if report:
+        ll_hat = -FT.objective(spec, th, chunks, 1.0, 0.0, backward=False)
+        ll_true = -FT.objective(spec, th_true, chunks, 1.0, 0.0, backward=False)
+        ll_start = -FT.objective(spec, start, chunks, 1.0, 0.0, backward=False)
+        print(f"      total log-lik: estimate {ll_hat:.2f}, truth {ll_true:.2f}, start {ll_start:.2f}; "
+              f"2(LL_hat - LL_true) = {2 * (ll_hat - ll_true):.1f} against chi2({int(ident.sum())}) "
+              f"mean {int(ident.sum())}, sd {np.sqrt(2 * ident.sum()):.0f}"
+              f"{'  <- OPTIMISER STOPPED SHORT' if ll_hat < ll_true - 1e-6 else ''}")
         zi = z[ident]
         print(f"      median z^2 {np.median(zi ** 2):.3f} (chi2(1): 0.455); share |z|>1.96 "
               f"{np.mean(np.abs(zi) > 1.96):.3f} (0.05); share |z|>2.58 {np.mean(np.abs(zi) > 2.58):.3f} (0.01)")
