@@ -34,10 +34,11 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 44274, 44275[], 44276–44282 | R46 smoke, G3 and diagnostics on the L-BFGS-only optimiser | 2026-10-26 | R46 wiring and G3 | cancelled after the crawl was diagnosed; G3 had failed on R3, R5 and R6 |
 | 44285[]–44307 | R46 G3 recovery runs and smokes (CPU, `work_r46`) | 2026-10-26 | R46 G3 | see the G3 table in R46 |
 | 44303 | `runs/r46` export (CPU, `12fdf05`) | 2026-10-26 | R46 G1, G2 | done: G1 exact, G2 explained |
-| 44308[] (12 elements) | `runs/r46/{M0..R4,R5_s0..s3}` (CPU short, 16 CPUs each, `dba1f7b`) | 2026-10-26 | R46 part A stage 1 | running (qstat 2026-10-26) |
-| 44309[] (20 elements) | `runs/r46/R6_K*_s*` (CPU long, 16 CPUs, 128 GB) | 2026-10-26 | R46 part A stage 2 | held on 44308[] (afterok) |
-| 44310 | `runs/r46/compare_*.json` | 2026-10-26 | R46 read-out | held on 44309[] (afterany) |
-| 44311[] (80 elements) | `runs/r46_mc/{R1b,R3,R5,R6_K2}` (CPU, 4 CPUs each) | 2026-10-26 | R46 SE coverage, 20 panels per rung | running |
+| 44308[] | `runs/r46/{M0,M1,R0,R1,R1b,R2,R3,R4}` (CPU short, 16 CPUs each, `dba1f7b`) | 2026-10-26 | R46 part A stage 1 | M0–R2 done (exit 0); R3, R4 running (qstat 23:20); R5 elements 8–11 cancelled before any result (amendment 7) |
+| 44309[], 44310 | the R5-based stage 2 and read-out | 2026-10-26 | — | cancelled (amendment 7) |
+| 44315[] (20 elements) | `runs/r46/R6_K*_s*`, R6 = R4 + classes (CPU long, 16 CPUs, 128 GB, `70320f9`) | 2026-10-26 | R46 part A stage 2 | held on 44308[] (afterany) |
+| 44316 | `runs/r46/compare_*.json` | 2026-10-26 | R46 read-out | held on 44315[] (afterany) |
+| 44311[], 44314[] | `runs/r46_mc/{R1b,R3,R6_K2}` | 2026-10-26 | R46 SE coverage | done; see the coverage table |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -4989,6 +4990,36 @@ in 0.25–4, max |z| < 5, and structural max |z| < 3.5.
 | R6 K=2 (2-level) | 600 × 120 | **pass**: mean z² 0.37, max \|z\| 1.57 | |
 | R6 K=2 (2-level) | 2,000 × 120 | pass on the criteria (max \|z\| 2.70), marginal z² clustered (median 1.92) | correlated estimates: a mixture weight moves every lag constant together, so marginal z's are not an aggregate test; joint Wald added |
 | R1b | 1,600 × 120 (new draw) | pass on the criteria; joint Wald 141 vs χ²(95), p = 0.001; LR +2.2 sd | SEs possibly ~20% optimistic here; Monte Carlo coverage (20 panels per rung, job 44311[]) decides |
+
+**G3 verdict for the final ladder (M0, M1, R0–R4, R1b, R6 = R4 + classes):
+pass at realistic size, with one caveat on the decays.**
+
+| rung | panel | criteria | joint Wald on non-rare coefficients |
+|---|---|---|---|
+| R3 | 2,000 × 120 | pass: mean z² 0.70, structural max \|z\| 0.65 | 90.0 vs χ²(91), p = 0.51 |
+| R6 flat, K=2 | 600 × 120 | pass: mean z² 0.69, max \|z\| 1.92 | 124.8 vs χ²(136), p = 0.75 |
+| R6 flat, K=2 | 2,000 × 120 | pass: median z² 0.43 without rare states, 3.5% beyond 1.96 | 159.1 vs χ²(141), p = 0.14 |
+| R1b | 1,600 × 120 | pass on the criteria | 141 vs χ²(95), p = 0.001 (see coverage) |
+
+**Monte Carlo coverage.** 20 panels of 800 × 120 per rung, from one fixed θ;
+jobs 44311[] and 44314[].
+
+| rung | 95% CI coverage | empirical sd / sandwich SE (median) | note |
+|---|---|---|---|
+| R1b | 0.952 | 0.96 | calibrated |
+| R3 | 0.945 | 1.05 | the decays are not: `a_dec` coverage 0.55 (sd/SE 2.0, mean estimate biased toward faster decay), `a_out` 0.80 |
+| R6 flat | 0.958 | 0.89 | slightly conservative |
+
+- **Per-coefficient sandwich intervals cover**, so they are reported.
+- **The joint Wald over-rejects** in every rung (high dimension, sparse lag
+  cells). R46 never uses it: rung comparisons use the paired customer
+  bootstrap.
+- **The decays are weakly identified in small panels.** Once the lag matrix
+  absorbs the immediate past, α enters only through β·α.
+  - They were recovered at 2,000 customers (|z| 0.14 and 0.65), and the real
+    fit has 1.06 million training rows and histories of about 550 rows.
+  - Even so, **real-data half-life intervals come from a profile likelihood
+    or part C's bootstrap, not from the sandwich.**
 
 **Gates on the real data (26 Oct).**
 - **G1 passes, exactly.** Export job 44303 reproduced all three cells:
