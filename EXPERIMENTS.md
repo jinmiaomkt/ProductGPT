@@ -4731,6 +4731,11 @@ stock. The count, occasions since and owned flag are replaced by their
 stock-based versions (owned = stock > 10⁻³; total = summed stock). The stock
 is now the only route by which holdings enter, so if players forget, its
 half-life should be identified here. 21 runs.
+*Caveat, added 28 Oct while building it:* the stock is the only computed
+route. The GRU still sees each occasion's acquisitions (the outcome pool) and
+can learn some memory of holdings itself. So B2 removes the exact
+never-decaying channels, not every possible memory. A flat B2 profile would
+mean "not identified even without them", not "no memory anywhere".
 
 **Part B3 — within against across campaigns (after B2).**
 - **Second clock:** a campaign-boundary factor δ, applied on top of the
