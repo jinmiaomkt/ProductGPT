@@ -23,11 +23,17 @@ export PYTHONUNBUFFERED=1 OMP_NUM_THREADS=8
 export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
 source "$PBS_O_WORKDIR/env.sh"
 
+#   Diagnostic single runs: qsub -v ONLY=R5,NN=2500 scripts/r46_tests_cpu.pbs
 RUNGS=(R0 R1b R3 R5 R6)
 IDX="${PBS_ARRAY_INDEX:-0}"
+RUNG="${ONLY:-${RUNGS[$IDX]}}"
+ARGS=(--only "$RUNG" --threads 8)
+[ -n "${NN:-}" ] && ARGS+=(--N "$NN")
+[ -n "${SS:-}" ] && ARGS+=(--S "$SS")
+[ -n "${SEED:-}" ] && ARGS+=(--seed "$SEED")
 JID="${PBS_JOBID%%.*}"
 JID="${JID//[\[\]]/_}"
 LOG=/storage/home/jinmiao/ProductGPT/logs/r46_tests_${JID}_${IDX}.log
 exec > >(tee -a "$LOG") 2>&1
-echo "R46 G3 ${RUNGS[$IDX]} on $(hostname) at $(date), commit $(git rev-parse --short HEAD)"
-python scripts/test_r46_parametric.py --only "${RUNGS[$IDX]}" --threads 8
+echo "R46 G3 $RUNG ${ARGS[*]} on $(hostname) at $(date), commit $(git rev-parse --short HEAD)"
+python scripts/test_r46_parametric.py "${ARGS[@]}"

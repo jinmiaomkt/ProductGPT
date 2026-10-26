@@ -31,6 +31,8 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 41643–41692 | `b22_*`, `b23_*` (50 runs) | 2026-09-27 | R33 ladder re-run after the parameterisation and weight-decay fixes | queued (qstat 2026-09-27) |
 | 42880–42897 | `b39_*` (18 runs, from `~/ProductGPT/work_gen6` at `93dcfbf`) | 2026-10-20 | R43 step 1: gen 6 against the rev-2 incumbent | complete, all 18 exit 0; result in R43 |
 | 44211–44258 | `b40_*` (48 runs, from `~/ProductGPT/work_gen6` at `a8ed3f9`) | 2026-10-26 | R44 stage 2: paired search, gen 5 and gen 6 | 44211–44212 running, rest queued (qstat 2026-10-26) |
+| 44274 | `runs/r46_smoke` (CPU, `~/ProductGPT/work_r46` at `82e6f3a`) | 2026-10-26 | R46 wiring smoke, 300 customers | running (qstat 2026-10-26) |
+| 44275[] | G3 recovery, 5 elements (CPU, same worktree) | 2026-10-26 | R46 G3: each rung recovers itself | running (qstat 2026-10-26) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -4752,7 +4754,7 @@ only the best.
 | R3 | long memory | Guadagni & Little (1983); Keane (1997); Seetharaman (2004) | R2 plus exponentially smoothed stocks. Per-banner, buy and ten-pull loyalty share one decision decay. 5★ wins, featured wins and lost 50/50s share a second, outcome decay. Both decays are estimated and reported as half-lives in occasions |
 | R4 | what the customer holds | McAlister (1982); Lattin & McAlister (1985); the gacha rules | R3 plus copies of the featured product (figure k = 1, 2, 3+; weapon k = 1, 2+); log same-element limited 5★ figures owned; log limited 5★ owned, on the buy decision; the 8 `pity_depth` counters, with a soft-pity hinge on the 5★ ones; the character guarantee flag; weapon losses |
 | R5 | decision structure | Chintagunta (1993); Bucklin & Lattin (1991) | R4's utilities in a three-level nested logit: buy or not → banner → single or ten-pull, with two dissimilarity parameters |
-| R6 | persistent taste | Keane (1997); Roy et al. M5; Dubé, Hitsch & Rossi (2010) | R5 with K latent classes. Class-specific: the constants, buy and banner loyalty, and the NotBuy spell term; the rest is shared. K ∈ {2, 3, 4, 6} picked on campaign 27, with five EM starts each |
+| R6 | persistent taste | Keane (1997); Roy et al. M5; Dubé, Hitsch & Rossi (2010) | R5 with K latent classes. Class-specific: the constants, buy and banner loyalty, and the NotBuy spell term; the rest is shared. K ∈ {2, 3, 4, 6} picked on campaign 27, with five random starts each, warm-started from R5 |
 
 **Scoring a latent-class model on any customer.** The class weights are
 filtered from the customer's own earlier rows:
@@ -4764,7 +4766,10 @@ reported beside it.
 **Estimation.**
 - Maximum likelihood in float64, by L-BFGS with strong-Wolfe line search.
 - An L2 term of 1e-6, for numerical stability only.
-- Latent classes by EM.
+- Latent classes: the mixture likelihood is maximised directly by L-BFGS.
+  This is the same maximum-likelihood estimator that EM targets.
+- A coefficient whose feature never varies on the fitting rows is reported
+  as not identified (SE = NaN), never as a precise zero.
 - Standard errors are cluster-robust sandwich errors, clustered by customer,
   from the exact Hessian.
 - Paired differences between rungs, and between a rung and Markov-1, come

@@ -126,15 +126,24 @@ def t5_markov(prod):
           f"fitted {nll:.8f} closed {cf:.8f}")
 
 
-def t6_recover(prod, rung, *, N, S, K=1, seed=11):
+def t6_recover(prod, rung, *, N, S, K=1, seed=11, report=False):
     t0 = time.time()
     spec = M.Spec(rung, K=K)
     th_true = SIM.true_theta(spec, seed=seed)
-    tab, cal = SIM.simulate_panel(spec, th_true, prod, N=N, S=S, seed=seed)
+    if report:
+        tab, seen, cal = SIM.simulate_panel(spec, th_true, prod, N=N, S=S, seed=seed, record_features=True)
+        Ffull = ST.build(tab, prod, calendar=cal)
+        diffs = {k: max(float(np.abs(np.asarray(Ffull[k][:, t], np.float64) - np.asarray(row[k], np.float64)).max())
+                        for t, row in seen.items()) for k in seen[0] if k != "alive"}
+        bad = {k: v for k, v in diffs.items() if v > 0}
+        print(f"      causality on this panel: {'all features identical' if not bad else bad}")
+        del seen
+    else:
+        tab, cal = SIM.simulate_panel(spec, th_true, prod, N=N, S=S, seed=seed)
     start = th_true + 0.05 * torch.randn(spec.size, dtype=torch.float64,
                                          generator=torch.Generator().manual_seed(seed)) \
         if K > 1 else spec.init(marginal=np.bincount(tab["label"].ravel() - 1, minlength=9) / tab["label"].size)
-    th, V, *_ = _fit_on(tab, cal, prod, spec, start)
+    th, V, F, roles, chunks, n = _fit_on(tab, cal, prod, spec, start)
     se = torch.sqrt(torch.diagonal(V)).numpy()
     ident = np.isfinite(se) & (se > 0)              # a feature with no variation is not identified
     z = np.where(ident, (th - th_true).numpy() / np.where(ident, se, 1.0), 0.0)
@@ -148,6 +157,45 @@ def t6_recover(prod, rung, *, N, S, K=1, seed=11):
     check(f"T6 G3 recovery {rung}{'' if K == 1 else f' K={K}'}", ok,
           f"P={spec.size} ({int((~ident).sum())} without variation) rows={N * S} mean z^2 {mz2:.2f} "
           f"max|z| {np.abs(z).max():.2f} at {worst}, structural max|z| {zs:.2f} ({time.time() - t0:.0f}s)")
+    if report:
+        zi = z[ident]
+        print(f"      median z^2 {np.median(zi ** 2):.3f} (chi2(1): 0.455); share |z|>1.96 "
+              f"{np.mean(np.abs(zi) > 1.96):.3f} (0.05); share |z|>2.58 {np.mean(np.abs(zi) > 2.58):.3f} (0.01)")
+        labs = FT.param_labels(spec)
+        th_n, tt = th.numpy(), th_true.numpy()
+        print(f"      {'parameter':<14}{'true':>8}{'est':>8}{'se':>8}{'z':>7}  rows where its feature is non-zero")
+        nz = feature_support(spec, F, roles["train"])
+        for i in np.argsort(-np.abs(z))[:10]:
+            print(f"      {labs[i]:<14}{tt[i]:>8.3f}{th_n[i]:>8.3f}{se[i]:>8.3f}{z[i]:>7.2f}  {nz.get(labs[i], '-')}")
+
+
+def feature_support(spec, F, mask) -> dict:
+    """How many fitting rows carry a non-zero value of the feature behind each coefficient."""
+    out = {}
+    m = mask.astype(bool)
+    blocks = {"fig": ("off_a", slice(0, 11)), "rr_a": ("off_a", slice(11, 13)),
+              "rr_b": ("off_b", slice(11, 13)), "wep": ("off_w", slice(0, 6)),
+              "phase": ("phase", slice(0, 3)), "bawa": ("bawa", slice(0, 2)),
+              "runs": ("runs", slice(0, 3)), "cop_f": ("copies_a", slice(0, 3)),
+              "cop_w": ("copies_w", slice(0, 2)), "wloss": ("wloss", slice(0, 2)),
+              "guar": ("guar", slice(0, 1)), "elem": ("elem_a", slice(0, 1)),
+              "owned": ("owned", slice(0, 1)), "unoff_b": ("unoff_b", slice(0, 1))}
+    for n, (blk, sl) in blocks.items():
+        if n in spec.names:
+            v = F[blk][m][:, sl]
+            for j in range(v.shape[1]):
+                out[f"{n}[{j}]"] = int((v[:, j] != 0).sum())
+    if "lag" in spec.names:
+        p = F["prev_idx"][m]
+        for a in range(10):
+            for b in range(8):
+                out[f"lag[{a},{b}]"] = int((p == a).sum())
+    for b in range(4):
+        if f"pity{b}" in spec.names:
+            v = F["pity"][m][:, b]
+            for j in range(3):
+                out[f"pity{b}[{j}]"] = int((v[:, j] != 0).sum())
+    return out
 
 
 def spec_label(spec, i: int) -> str:
@@ -159,13 +207,18 @@ def main() -> None:
     ap.add_argument("--quick", action="store_true", help="T1-T5 only")
     ap.add_argument("--only", default=None, help="run just one recovery fit, e.g. R0 or R6")
     ap.add_argument("--threads", type=int, default=4)
+    ap.add_argument("--N", type=int, default=None, help="override the recovery panel's customers")
+    ap.add_argument("--S", type=int, default=None, help="override the recovery panel's rows")
+    ap.add_argument("--seed", type=int, default=11)
     a = ap.parse_args()
     torch.set_num_threads(a.threads)
     prod = ST.product_table()
     recov = {"R0": dict(N=300, S=80), "R1b": dict(N=400, S=100), "R3": dict(N=500, S=120),
              "R5": dict(N=700, S=120), "R6": dict(N=600, S=120, K=2)}
     if a.only:
-        t6_recover(prod, a.only, **recov[a.only])
+        kw = dict(recov[a.only])
+        kw.update({k: v for k, v in (("N", a.N), ("S", a.S)) if v})
+        t6_recover(prod, a.only, seed=a.seed, report=True, **kw)
     else:
         t1_decay()
         t2_nested()
