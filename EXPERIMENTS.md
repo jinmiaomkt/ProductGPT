@@ -4658,3 +4658,18 @@ waits for R44's frozen configuration.
   customers. The stock parameters get gradients through the prefix.
 - **Existing suites:** all of them still pass, so the chop options off leave
   gen 6 unchanged.
+
+**Approved by Jin (27 Oct 2026). Queued behind R44.** Part A is
+`scripts/submit_r45a.sh` (branch `r45-censoring`, run from
+`~/ProductGPT/work_r45`). It reads R44's frozen gen-6 configuration from
+`~/ProductGPT/r44_frozen_g6.env`, written when stage 3 freezes it, and refuses
+to submit without it. Part B is `scripts/r45_eval_chopped.pbs` on R44's
+stage-4 gen-6 runs.
+
+*Part B pipeline tested* (job 44273, CPU, the 2-epoch smoke checkpoint, so
+the NLLs mean nothing):
+- **Self-check:** depth 0 reproduces `final.json` (1.8129 against 1.8130).
+- **Scored events:** every depth and state scores the same 12,292 events.
+- **State error:** the restarted state's error against the truth grows with
+  depth, as it should. The log-inventory error is 0.043 at k = 1 and 0.093 at
+  k = 2; the pity error is 0.006 and 0.017.
