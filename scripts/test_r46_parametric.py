@@ -179,39 +179,16 @@ def t6_recover(prod, rung, *, N, S, K=1, seed=11, report=False):
               f"{np.mean(np.abs(zi) > 1.96):.3f} (0.05); share |z|>2.58 {np.mean(np.abs(zi) > 2.58):.3f} (0.01)")
         labs = FT.param_labels(spec)
         th_n, tt = th.numpy(), th_true.numpy()
-        print(f"      {'parameter':<14}{'true':>8}{'est':>8}{'se':>8}{'z':>7}  rows where its feature is non-zero")
-        nz = feature_support(spec, F, roles["train"])
+        sup = FT.support(spec, F, tab["label"].astype(np.int64), roles["train"])
+        print(f"      {'parameter':<14}{'true':>8}{'est':>8}{'se':>8}{'z':>7}  rows / events  rare?")
         for i in np.argsort(-np.abs(z))[:10]:
-            print(f"      {labs[i]:<14}{tt[i]:>8.3f}{th_n[i]:>8.3f}{se[i]:>8.3f}{z[i]:>7.2f}  {nz.get(labs[i], '-')}")
-
-
-def feature_support(spec, F, mask) -> dict:
-    """How many fitting rows carry a non-zero value of the feature behind each coefficient."""
-    out = {}
-    m = mask.astype(bool)
-    blocks = {"fig": ("off_a", slice(0, 11)), "rr_a": ("off_a", slice(11, 13)),
-              "rr_b": ("off_b", slice(11, 13)), "wep": ("off_w", slice(0, 6)),
-              "phase": ("phase", slice(0, 3)), "bawa": ("bawa", slice(0, 2)),
-              "runs": ("runs", slice(0, 3)), "cop_f": ("copies_a", slice(0, 3)),
-              "cop_w": ("copies_w", slice(0, 2)), "wloss": ("wloss", slice(0, 2)),
-              "guar": ("guar", slice(0, 1)), "elem": ("elem_a", slice(0, 1)),
-              "owned": ("owned", slice(0, 1)), "unoff_b": ("unoff_b", slice(0, 1))}
-    for n, (blk, sl) in blocks.items():
-        if n in spec.names:
-            v = F[blk][m][:, sl]
-            for j in range(v.shape[1]):
-                out[f"{n}[{j}]"] = int((v[:, j] != 0).sum())
-    if "lag" in spec.names:
-        p = F["prev_idx"][m]
-        for a in range(10):
-            for b in range(8):
-                out[f"lag[{a},{b}]"] = int((p == a).sum())
-    for b in range(4):
-        if f"pity{b}" in spec.names:
-            v = F["pity"][m][:, b]
-            for j in range(3):
-                out[f"pity{b}[{j}]"] = int((v[:, j] != 0).sum())
-    return out
+            s = sup.get(labs[i])
+            ss = f"{s['rows']:>7} / {s['events']:<6} {'RARE' if s['rare'] else ''}" if s else "-"
+            print(f"      {labs[i]:<14}{tt[i]:>8.3f}{th_n[i]:>8.3f}{se[i]:>8.3f}{z[i]:>7.2f}  {ss}")
+        common = np.array([not (sup.get(l, {}).get("rare", False)) for l in labs]) & ident
+        zc = z[common]
+        print(f"      excluding rare states ({int((ident & ~common).sum())} coefs): median z^2 "
+              f"{np.median(zc ** 2):.3f}, share |z|>1.96 {np.mean(np.abs(zc) > 1.96):.3f}, max|z| {np.abs(zc).max():.2f}")
 
 
 def spec_label(spec, i: int) -> str:

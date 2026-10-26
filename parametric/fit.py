@@ -345,6 +345,72 @@ def transformed(spec, theta, V) -> Dict[str, Dict[str, float]]:
     return out
 
 
+RARE_ROWS, RARE_EVENTS = 1_000, 50
+_BLOCKS = {"fig": [("off_a", slice(0, 11), (3, 4)), ("off_b", slice(0, 11), (5, 6))],
+           "rr_a": [("off_a", slice(11, 13), (3, 4))], "rr_b": [("off_b", slice(11, 13), (5, 6))],
+           "unoff_b": [("unoff_b", slice(0, 1), (5, 6))], "wep": [("off_w", slice(0, 6), (7, 8))],
+           "phase": [("phase", slice(0, 3), tuple(range(1, 9)))],
+           "cop_f": [("copies_a", slice(0, 3), (3, 4)), ("copies_b", slice(0, 3), (5, 6))],
+           "cop_w": [("copies_w", slice(0, 2), (7, 8))], "wloss": [("wloss", slice(0, 2), (7, 8))],
+           "guar": [("guar", slice(0, 1), (3, 4, 5, 6))],
+           "elem": [("elem_a", slice(0, 1), (3, 4)), ("elem_b", slice(0, 1), (5, 6))],
+           "owned": [("owned", slice(0, 1), tuple(range(1, 9)))]}
+
+
+def support(spec, F, y: np.ndarray, mask: np.ndarray) -> Dict[str, Dict[str, int]]:
+    """Per coefficient: fitting rows where its feature is non-zero, and the
+    EVENTS among them (choices of an alternative the coefficient acts on).
+
+    A coefficient on a rare state (rows < 1,000 or events < 50) has an
+    unreliable sandwich SE -- near-separation makes the score variance tiny --
+    and is flagged; part C's customer bootstrap is the interval to use.
+    """
+    m = mask.astype(bool)
+    yy = y[m]
+    out: Dict[str, Dict[str, int]] = {}
+
+    def put(label, nz, alts):
+        d = out.setdefault(label, {"rows": 0, "events": 0})
+        d["rows"] += int(nz.sum())
+        d["events"] += int((nz & np.isin(yy, alts)).sum())
+
+    blocks = dict(_BLOCKS)
+    if "runs" in spec.names:
+        blocks["runs"] = [("runs", slice(0, 2), tuple(range(1, 9))), ("runs", slice(2, 3), (2, 4, 6, 8))]
+    for n, parts in blocks.items():
+        if n not in spec.names:
+            continue
+        j0 = 0
+        for blk, sl, alts in parts:
+            v = F[blk][m][:, sl]
+            same_coef = n in ("fig", "cop_f", "elem")      # A and B share these coefficients
+            for j in range(v.shape[1]):
+                put(f"{n}[{j if same_coef else j0 + j}]", v[:, j] != 0, alts)
+            if not same_coef:
+                j0 += v.shape[1]
+    if "lag" in spec.names:
+        p = F["prev_idx"][m]
+        for a in range(10):
+            for b in range(8):
+                put(f"lag[{a},{b}]", p == a, (b + 1,))
+    for b in range(4):
+        if f"pity{b}" in spec.names:
+            v = F["pity"][m][:, b]
+            for j in range(3):
+                put(f"pity{b}[{j}]", v[:, j] != 0, (2 * b + 1, 2 * b + 2))
+    if "bawa" in spec.names:
+        lb = F["last_banner"][m]
+        yb = np.array([-1, 0, 0, 1, 1, 2, 2, 3, 3, -1])[yy]
+        for j in range(2):
+            nz = F["bawa"][m][:, j] != 0
+            d = out.setdefault(f"bawa[{j}]", {"rows": 0, "events": 0})
+            d["rows"] += int(nz.sum())
+            d["events"] += int((nz & (yb == lb)).sum())
+    for d in out.values():
+        d["rare"] = d["rows"] < RARE_ROWS or d["events"] < RARE_EVENTS
+    return out
+
+
 def param_labels(spec) -> List[str]:
     labs = []
     for n, s in zip(spec.names, spec.shapes):
@@ -426,9 +492,13 @@ def main() -> None:
            "labels": param_labels(spec), "theta": theta.tolist(),
            "train_nll": train_nll, "n_train": n_train, "fit_history": hist,
            "ridge": a.ridge, "max_users": a.max_users}
+    m_tr = np.zeros_like(roles["train"])
+    m_tr[inu] = roles["train"][inu]
+    sup = support(spec, F, tab["label"].astype(np.int64), m_tr)
+    res["support"] = sup
+    res["rare"] = sorted(k for k, v in sup.items() if v["rare"])
+    log(f"rare-state coefficients (rows < {RARE_ROWS} or events < {RARE_EVENTS}): {len(res['rare'])}")
     if a.rung == "M1":
-        m_tr = np.zeros_like(roles["train"])
-        m_tr[inu] = roles["train"][inu]
         cf = markov_closed_form(tab, F, {"train": m_tr})
         res["G3a_markov_closed_form"] = cf
         res["G3a_gap"] = train_nll - cf
