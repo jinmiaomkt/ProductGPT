@@ -30,6 +30,7 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 41582–41617 | `b19_*` (36 runs) | 2026-09-26 | R32: hybrid designs seq_ra / seq_ar / block | queued (qstat 2026-09-26) |
 | 41643–41692 | `b22_*`, `b23_*` (50 runs) | 2026-09-27 | R33 ladder re-run after the parameterisation and weight-decay fixes | queued (qstat 2026-09-27) |
 | 42880–42897 | `b39_*` (18 runs, from `~/ProductGPT/work_gen6` at `93dcfbf`) | 2026-10-20 | R43 step 1: gen 6 against the rev-2 incumbent | complete, all 18 exit 0; result in R43 |
+| 44211–44258 | `b40_*` (48 runs, from `~/ProductGPT/work_gen6` at `a8ed3f9`) | 2026-10-26 | R44 stage 2: paired search, gen 5 and gen 6 | 44211–44212 running, rest queued (qstat 2026-10-26) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -4529,3 +4530,12 @@ stage to finish.
 **Not in scope:** the pity counters, purchase timing (R36e), and the plain-GRU
 and plain-transformer families. Those families tie at their R30 optima on the
 pre-fix code; re-running them at rev 2 is a separate question.
+
+**Stage 2 — SUBMITTED (26 Oct 2026): batch 40, jobs 44211–44258**, approved
+by Jin. Both families run from `~/ProductGPT/work_gen6` at `a8ed3f9`. The
+training code is unchanged since batch 39; only analysis scripts and R44's own
+files changed. Job k is configuration ⌊(k − 44211)/2⌋, gen 5 then gen 6. The
+logs of jobs 44211 (gen 5) and 44212 (gen 6) confirm that configuration 0 ran
+as drawn: d96, d_ff 288, N6, lr 3.28e-4, dropout 0.1, weight decay 0,
+accumulation 8, warmup 0.1, model_rev 2, and window 384 for gen 6. Both models
+have 1,482,236 parameters.
