@@ -4737,6 +4737,52 @@ can learn some memory of holdings itself. So B2 removes the exact
 never-decaying channels, not every possible memory. A flat B2 profile would
 mean "not identified even without them", not "no memory anywhere".
 
+**Part A — RESULT (job 44284, 28 Oct 2026; calibration campaigns ≤ 27,
+aggregates only): no forgetting. Holdings keep suppressing purchases, within
+and across campaigns.** There were 9,010,841 featured-offer occasions, and
+1,664,821 owned occasions with a usable stratum baseline.
+
+*Within campaign* (1,535,668 occasions, 4,845 customers; mean gap −0.138):
+
+| hours since acquired | <1 | 1–6 | 6–24 | 1–3 d | 3–7 d | 1–3 wk | ≥3 wk |
+|---|---|---|---|---|---|---|---|
+| gap | +0.063 | −0.098 | −0.114 | −0.130 | −0.159 | −0.186 | −0.226 |
+| n | 173,655 | 60,598 | 95,333 | 213,430 | 330,644 | 588,220 | 73,788 |
+
+- **The gap does not shrink; it deepens.** The slope on log(1 + hours) is
+  −0.041, with 95% CI [−0.043, −0.039].
+- **The positive first hour** is the same buying session continuing.
+
+*Across campaigns, on reruns* (129,153 occasions, 1,179 customers; mean gap
+−0.150):
+- **Almost every occasion is at least 3 weeks after the acquisition**
+  (125,006 of them). There the gap is −0.155: owners pull 6.9% of the time,
+  against 22.5% for non-owners.
+- **That is as large as the late within-campaign gap.** A product acquired in
+  an earlier campaign still suppresses pulls when it returns.
+- **The shorter bins are too thin to read** (under 7,000 occasions in total).
+
+*By spend tercile:* the mean gap is −0.15, −0.16 and −0.12 within, and −0.11,
+−0.14 and −0.15 across. The pattern is shared, not driven by one group.
+
+**Against the predictions.**
+- The gap is negative, as predicted.
+- "Shrinks with elapsed hours" fails. The pre-registered rule gives "no
+  detectable shrinkage", and the CI in fact excludes zero in the deepening
+  direction.
+- "The across-campaign gap is smaller (partial forgetting)" fails as well.
+
+**Confound not anticipated in the plan.** Occasions long after an
+acquisition sit late in a campaign, and banner interest fades over a
+campaign's life, but the baseline strata (campaign × slot × spend tercile ×
+pity) do not match on days into the campaign. Part of the within-campaign
+deepening may therefore be campaign timing rather than growing satiation. The
+across-campaign result does not depend on this. A robustness version that
+adds days-into-campaign to the strata is proposed, not run.
+
+Artifacts: `results/r47/partA.json` in `~/ProductGPT/work_r47` (HPCC);
+log `~/ProductGPT/logs/r47_partA_44284.log`.
+
 **Part B3 — within against across campaigns (after B2).**
 - **Second clock:** a campaign-boundary factor δ, applied on top of the
   per-occasion decay: stock_t = ρ·(δ_t·stock_{t−1} + new copies), where
