@@ -4783,6 +4783,42 @@ adds days-into-campaign to the strata is proposed, not run.
 Artifacts: `results/r47/partA.json` in `~/ProductGPT/work_r47` (HPCC);
 log `~/ProductGPT/logs/r47_partA_44284.log`.
 
+**Part A — ROBUSTNESS (added after the pre-registered run at Jin's request;
+job 44290, commit `010fc89`).** The baseline strata also include days into
+the campaign (0–2, 2–5, 5–10, 10–15, 15+), measured from the customer's first
+row of the campaign. The export's interval grid starts at each campaign's
+StartingDate, so that row sits within one no-buy interval of the start. This
+version left 1,662,985 owned occasions with a usable baseline.
+
+*Within campaign* (mean gap −0.117):
+
+| hours since acquired | <1 | 1–6 | 6–24 | 1–3 d | 3–7 d | 1–3 wk | ≥3 wk |
+|---|---|---|---|---|---|---|---|
+| gap, days-matched | −0.004 | −0.160 | −0.150 | −0.133 | −0.123 | −0.128 | −0.146 |
+| gap, pre-registered strata | +0.063 | −0.098 | −0.114 | −0.130 | −0.159 | −0.186 | −0.226 |
+| baseline, days-matched | 0.378 | 0.373 | 0.343 | 0.308 | 0.279 | 0.254 | 0.241 |
+
+- **The confound was real.** Matched on days into the campaign, the
+  non-owner baseline falls from 0.38 to 0.24 over a campaign, and the
+  deepening disappears. Most of it was campaign timing.
+- **Satiation is immediate and persistent.** The gap is about −0.16 within
+  hours (the first-hour bin is now about 0, the same buying session) and stays
+  between −0.12 and −0.15 for weeks. It eases slightly over the first week
+  (−0.160 to −0.123), then holds.
+- **The slope still says no shrinkage, but carries little weight.** On
+  log(1 + hours) it is −0.016, CI [−0.018, −0.014], so the pre-registered rule
+  is still "no detectable shrinkage". That slope mostly reflects the jump out
+  of the first-hour bin, so the table is the better summary.
+
+*Across campaigns* (mean gap −0.141): at least 3 weeks after acquisition the
+gap is −0.146, with owners at 6.95% against 21.5% for non-owners. It is robust
+to the timing control.
+
+**Part A conclusion.** Holdings are not forgotten across campaigns. Within a
+campaign, satiation sets in at once and largely persists, with at most a
+small easing in the first week. This predicts that B2 will favour a long or
+infinite half-life, not a short one. Artifact: `results/r47/partA_robust.json`.
+
 **Part B3 — within against across campaigns (after B2).**
 - **Second clock:** a campaign-boundary factor δ, applied on top of the
   per-occasion decay: stock_t = ρ·(δ_t·stock_{t−1} + new copies), where
