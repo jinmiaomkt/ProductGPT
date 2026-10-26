@@ -81,8 +81,7 @@ def main() -> None:
         for r in sorted(r5, key=lambda r: r["start"]):
             der = r.get("derived", {})
             print(f"  start {r['start']}: train {r['train_nll']:.6f}  lambda_top "
-                  f"{der.get('lambda_top', {}).get('value', float('nan')):.3f}  lambda_banner "
-                  f"{der.get('lambda_banner', {}).get('value', float('nan')):.3f}"
+                  f"{der.get('lambda_top', {}).get('value', float('nan')):.3f}"
                   f"{'  <- kept' if r is r5_best else ''}")
     # R6 selection: start by training likelihood within K, K by campaign-27 NLL
     by_k: Dict[int, Dict] = {}

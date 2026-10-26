@@ -14,7 +14,7 @@ call the same function.
     R2     R1 + run structure (Bawa; Seetharaman-Chintagunta)  bawa, runs
     R3     R2 + decayed stocks (Guadagni-Little; Seetharaman)  a_dec, a_out, loy, inc, tenl, out
     R4     R3 + holdings, pity, guarantee                  cop_f, cop_w, elem, owned, pity0-3, guar, wloss
-    R5     R4 in a buy -> banner -> pack nested logit      nest
+    R5     R4 in a buy-or-not nested logit (one lambda)    nest
     R6     R5 with K latent classes                        d_asc, d_inc, d_loy, d_nb, cls
 
 The lag matrix makes constants redundant (every row has exactly one previous
@@ -79,7 +79,11 @@ class Spec:
                 add(f"pity{b}", 3)
             add("guar", 1); add("wloss", 2)
         if f["nest"]:
-            add("nest", 2)
+            # one dissimilarity: buy or not -> the eight alternatives. The
+            # pre-registered second level (banner -> single or ten-pull) was
+            # dropped before any real fit: G3 showed lambda_banner on a ridge
+            # with the free ten-pull constants at 700 and 2,000 customers.
+            add("nest", 1)
         if f["classes"]:
             K1 = self.K - 1
             add("d_asc", K1, 8); add("d_inc", K1); add("d_loy", K1); add("d_nb", K1)
@@ -121,7 +125,6 @@ class Spec:
                 th[off[n][0]] = v
         if "nest" in off:
             th[off["nest"][0]] = logit(0.9)
-            th[off["nest"][0] + 1] = logit(0.9)
         return th
 
 
@@ -219,8 +222,7 @@ def log_probs(spec: Spec, theta: torch.Tensor, X: Dict[str, torch.Tensor]
     U = utilities(spec, P, X)
     if spec.flags["nest"]:
         lt = torch.sigmoid(P["nest"][0])
-        lb = lt * torch.sigmoid(P["nest"][1])
-        lp = nested_logp(U, lt, lb)
+        lp = nested_logp(U, lt, lt)          # banner level collapsed: a two-level nest
     else:
         lp = torch.log_softmax(U, -1)
     if spec.flags["rho"]:

@@ -151,7 +151,6 @@ def true_theta(spec: M.Spec, seed: int = 0, scale: float = 0.3) -> torch.Tensor:
             th[off[n][0]] = v
     if "nest" in off:
         th[off["nest"][0]] = logit(0.7)
-        th[off["nest"][0] + 1] = logit(0.8)
     if "cls" in off:
         a, b = off["cls"]
         th[a:b] = 0.0

@@ -116,9 +116,9 @@ def _fit_on(tab, cal, prod, spec, theta0, *, se=True):
     if spec.rung == "R5":
         lo = spec.offsets()["nest"][0]
         starts = []
-        for lt, ratio in FT.NEST_STARTS:
+        for lt in FT.NEST_STARTS:
             t = theta0.clone()
-            t[lo], t[lo + 1] = np.log(lt / (1 - lt)), np.log(ratio / (1 - ratio))
+            t[lo] = np.log(lt / (1 - lt))
             starts.append(t)
     best = None
     for k, t0 in enumerate(starts):

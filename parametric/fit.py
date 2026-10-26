@@ -348,7 +348,6 @@ def transformed(spec, theta, V) -> Dict[str, Dict[str, float]]:
     if "nest" in off:
         i = off["nest"][0]
         add("lambda_top", lambda t: sig(t[i]))
-        add("lambda_banner", lambda t: sig(t[i]) * sig(t[i + 1]))
     if "rho" in off:
         i = off["rho"][0]
         add("rho", lambda t: sig(t[i]))
@@ -360,7 +359,7 @@ def transformed(spec, theta, V) -> Dict[str, Dict[str, float]]:
 
 
 RARE_ROWS, RARE_EVENTS = 1_000, 50
-NEST_STARTS = [(0.9, 0.9), (0.6, 0.6), (0.9, 0.5), (0.5, 0.9)]
+NEST_STARTS = [0.9, 0.7, 0.5, 0.3]
 _BLOCKS = {"fig": [("off_a", slice(0, 11), (3, 4)), ("off_b", slice(0, 11), (5, 6))],
            "rr_a": [("off_a", slice(11, 12), (3, 4))], "rr_b": [("off_b", slice(11, 12), (5, 6))],
            "unoff_b": [("unoff_b", slice(0, 1), (5, 6))], "wep": [("off_w", slice(0, 5), (7, 8))],
@@ -474,14 +473,12 @@ def main() -> None:
     marg = np.bincount(tab["label"][roles["train"]].astype(np.int64) - 1, minlength=9) / n_train
     theta0 = spec.init(marginal=marg)
     if a.rung == "R5":
-        # The nest dissimilarities sit on a ridge with the free pack constants
-        # (G3), so R5 is fitted from four starting pairs (lambda_top, ratio)
-        # and the best TRAINING likelihood is kept (compare.py / R6 warm start).
-        lt, ratio = NEST_STARTS[a.start % len(NEST_STARTS)]
-        lo = spec.offsets()["nest"][0]
-        theta0[lo] = math.log(lt / (1 - lt))
-        theta0[lo + 1] = math.log(ratio / (1 - ratio))
-        log(f"nest start {a.start}: lambda_top {lt}, lambda_banner/lambda_top {ratio}")
+        # The nest likelihood is not globally concave, so R5 is fitted from
+        # four starting dissimilarities and the best TRAINING likelihood is
+        # kept (compare.py and the R6 warm start apply the same rule).
+        lt = NEST_STARTS[a.start % len(NEST_STARTS)]
+        theta0[spec.offsets()["nest"][0]] = math.log(lt / (1 - lt))
+        log(f"nest start {a.start}: lambda_top {lt}")
     if a.init_from:
         if "*" in a.init_from:
             import glob
