@@ -22,7 +22,12 @@ mkdir -p "$(dirname "$log")"
 exec >"$log" 2>&1
 echo "PBS job: $PBS_JOBID on $(hostname)"
 echo "Git:     $(git log --oneline -1)"
-python scripts/r47_partA_model_free.py --out results/r47/partA.json
+#   ROBUST=1: the days-into-campaign robustness version (results/r47/partA_robust.json)
+if [[ "${ROBUST:-0}" == "1" ]]; then
+  python scripts/r47_partA_model_free.py --strata-days 1 --out results/r47/partA_robust.json
+else
+  python scripts/r47_partA_model_free.py --out results/r47/partA.json
+fi
 rc=$?
 echo "exit=$rc"
 exit $rc

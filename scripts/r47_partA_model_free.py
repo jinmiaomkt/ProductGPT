@@ -44,6 +44,13 @@ SLOT_BANNER = {0: 1, 1: 2, 2: 3, 3: 3}                     # pity_depth banner i
 HOUR_BINS = [0, 1, 6, 24, 72, 168, 504, np.inf]
 OCC_BINS = [1, 2, 4, 8, 16, 32, 64, 128, np.inf]
 PITY_BINS = [0, 20, 50, 75, np.inf]
+# Days into the campaign, measured from the customer's first row of that
+# campaign. InsertNotBuy_GenerateJSON_IPT.R lays a fixed interval grid from each
+# campaign's StartingDate over the player's active campaigns and inserts a
+# no-buy row at the end of each empty interval. So a customer's first row of a
+# campaign lies within one interval of the campaign's start: a proxy for
+# calendar days into the campaign, accurate to one interval.
+DAY_BINS = [0, 2, 5, 10, 15, np.inf]
 
 
 def binlab(edges, i):
@@ -56,6 +63,10 @@ def main() -> None:
     ap.add_argument("--max-campaign", type=int, default=27)
     ap.add_argument("--boot", type=int, default=1000)
     ap.add_argument("--min-stratum", type=int, default=20)
+    ap.add_argument("--strata-days", type=int, default=0,
+                    help="ROBUSTNESS (added 28 Oct 2026, after the pre-registered run): 1 = also "
+                         "stratify the baseline by days into the campaign, so late-campaign "
+                         "owned occasions are compared with late-campaign non-owners")
     ap.add_argument("--out", default="results/r47/partA.json")
     a = ap.parse_args()
 
@@ -95,6 +106,10 @@ def main() -> None:
                 if lo <= p <= hi:
                     rows_of[p].append(r)
         rows_of = {p: np.asarray(v) for p, v in rows_of.items()}
+        t_start = {}
+        for r in range(len(camp)):
+            if camp[r] > 0 and camp[r] not in t_start:
+                t_start[int(camp[r])] = T[r]
         ok = (lab >= 1) & (lab <= 9) & (camp >= 1) & (camp <= a.max_campaign)
         for t in np.flatnonzero(ok):
             for j in range(4):
@@ -120,6 +135,8 @@ def main() -> None:
                 recs["camp"].append(int(camp[t]))
                 recs["terc"].append(int(terc[i]))
                 recs["pbin"].append(int(np.digitize(pr, PITY_BINS[1:-1])))
+                recs["dbin"].append(int(np.digitize((T[t] - t_start[int(camp[t])]) / 24.0,
+                                                    DAY_BINS[1:-1])))
                 recs["y"].append(y)
                 recs["owned"].append(owned)
                 recs["occ"].append(occ)
@@ -131,6 +148,13 @@ def main() -> None:
 
     # baseline per stratum from not-owned occasions
     key = (R["camp"] * 1000 + R["slot"] * 100 + R["terc"] * 10 + R["pbin"])
+    if a.strata_days:
+        key = key * 10 + R["dbin"]
+        print("[robustness] baseline strata also include days into the campaign "
+              f"(bins {DAY_BINS[:-1]} days)")
+        print("[robustness] occasions per day bin: " +
+              ", ".join(f"{binlab(DAY_BINS, k_)}: {int((R['dbin'] == k_).sum()):,}"
+                        for k_ in range(len(DAY_BINS) - 1)))
     base_sum, base_n = defaultdict(float), defaultdict(int)
     for k_, y_, o_ in zip(key, R["y"], R["owned"]):
         if not o_:
@@ -142,7 +166,8 @@ def main() -> None:
     usable = (R["owned"] == 1) & np.isfinite(base) & np.isfinite(R["hrs"])
     print(f"[gap] {int(usable.sum()):,} owned occasions with a usable baseline")
 
-    out = {"n_offer_occasions": int(n), "n_owned": int(R["owned"].sum()),
+    out = {"strata_days": bool(a.strata_days),
+           "n_offer_occasions": int(n), "n_owned": int(R["owned"].sum()),
            "n_owned_usable": int(usable.sum()), "max_campaign": a.max_campaign, "curves": {}}
     rng = np.random.default_rng(0)
     for name, wflag in (("within", 1), ("across", 0)):
