@@ -207,6 +207,17 @@ def t6_recover(prod, rung, *, N, S, K=1, seed=11, report=False):
         zc = z[common]
         print(f"      excluding rare states ({int((ident & ~common).sum())} coefs): median z^2 "
               f"{np.median(zc ** 2):.3f}, share |z|>1.96 {np.mean(np.abs(zc) > 1.96):.3f}, max|z| {np.abs(zc).max():.2f}")
+        # Within ONE replication, correlated estimates (a mixture weight moves
+        # every lag constant together) make marginal z's cluster, so their
+        # count is not an aggregate test. The joint Wald statistic is.
+        from scipy.stats import chi2
+        cc = np.nonzero(common)[0]
+        d = (th - th_true).numpy()[cc]
+        Vc = V.numpy()[np.ix_(cc, cc)]
+        W = float(d @ np.linalg.pinv(Vc) @ d)
+        k = len(cc)
+        print(f"      joint Wald on {k} non-rare coefficients: W = {W:.1f} against chi2({k}) "
+              f"(mean {k}, sd {np.sqrt(2 * k):.0f}), p = {chi2.sf(W, k):.3f}")
 
 
 def spec_label(spec, i: int) -> str:
