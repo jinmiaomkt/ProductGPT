@@ -167,6 +167,13 @@ def t6_recover(prod, rung, *, N, S, K=1, seed=11, report=False):
               f"2(LL_hat - LL_true) = {2 * (ll_hat - ll_true):.1f} against chi2({int(ident.sum())}) "
               f"mean {int(ident.sum())}, sd {np.sqrt(2 * ident.sum()):.0f}"
               f"{'  <- OPTIMISER STOPPED SHORT' if ll_hat < ll_true - 1e-6 else ''}")
+        g, H, _ = FT.grad_hess(spec, th, chunks)
+        ii = np.nonzero(ident)[0]
+        Vm = np.linalg.pinv(-H.numpy()[np.ix_(ii, ii)])
+        ratio = np.sqrt(np.clip(np.diag(Vm), 1e-300, None)) / se[ii]
+        zm = (th - th_true).numpy()[ii] / np.sqrt(np.clip(np.diag(Vm), 1e-300, None))
+        print(f"      model-based SE / sandwich SE: median {np.median(ratio):.2f}, "
+              f"range {ratio.min():.2f}-{ratio.max():.2f}; median z^2 with model-based SE {np.median(zm ** 2):.3f}")
         zi = z[ident]
         print(f"      median z^2 {np.median(zi ** 2):.3f} (chi2(1): 0.455); share |z|>1.96 "
               f"{np.mean(np.abs(zi) > 1.96):.3f} (0.05); share |z|>2.58 {np.mean(np.abs(zi) > 2.58):.3f} (0.01)")
@@ -222,7 +229,8 @@ def main() -> None:
     a = ap.parse_args()
     torch.set_num_threads(a.threads)
     prod = ST.product_table()
-    recov = {"R0": dict(N=300, S=80), "R1b": dict(N=400, S=100), "R3": dict(N=500, S=120),
+    recov = {"R0": dict(N=300, S=80), "M1": dict(N=400, S=100), "R1": dict(N=400, S=100),
+             "R1b": dict(N=400, S=100), "R3": dict(N=500, S=120),
              "R5": dict(N=700, S=120), "R6": dict(N=600, S=120, K=2)}
     if a.only:
         kw = dict(recov[a.only])

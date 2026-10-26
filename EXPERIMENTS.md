@@ -31,8 +31,9 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 41643–41692 | `b22_*`, `b23_*` (50 runs) | 2026-09-27 | R33 ladder re-run after the parameterisation and weight-decay fixes | queued (qstat 2026-09-27) |
 | 42880–42897 | `b39_*` (18 runs, from `~/ProductGPT/work_gen6` at `93dcfbf`) | 2026-10-20 | R43 step 1: gen 6 against the rev-2 incumbent | complete, all 18 exit 0; result in R43 |
 | 44211–44258 | `b40_*` (48 runs, from `~/ProductGPT/work_gen6` at `a8ed3f9`) | 2026-10-26 | R44 stage 2: paired search, gen 5 and gen 6 | 44211–44212 running, rest queued (qstat 2026-10-26) |
-| 44274 | `runs/r46_smoke` (CPU, `~/ProductGPT/work_r46` at `82e6f3a`) | 2026-10-26 | R46 wiring smoke, 300 customers | running (qstat 2026-10-26) |
-| 44275[] | G3 recovery, 5 elements (CPU, same worktree) | 2026-10-26 | R46 G3: each rung recovers itself | running (qstat 2026-10-26) |
+| 44274, 44275[], 44276–44282 | R46 smoke, G3 and diagnostics on the L-BFGS-only optimiser | 2026-10-26 | R46 wiring and G3 | cancelled after the crawl was diagnosed; G3 had failed on R3, R5 and R6 |
+| 44289 | `runs/r46_smoke` (CPU, `~/ProductGPT/work_r46` at `1c99911`) | 2026-10-26 | R46 wiring smoke, 300 customers | running (qstat 2026-10-26) |
+| 44285[], 44286–44288 | G3 recovery, 5 rungs, plus R3/R5/R6 at 2,000–2,500 customers (CPU, `1c99911`) | 2026-10-26 | R46 G3: each rung recovers itself | running (qstat 2026-10-26) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -4764,8 +4765,10 @@ trained on out-of-sample customers. The version with prior weights is
 reported beside it.
 
 **Estimation.**
-- Maximum likelihood in float64, by L-BFGS with strong-Wolfe line search.
-- An L2 term of 1e-6, for numerical stability only.
+- Maximum likelihood in float64, by L-BFGS with strong-Wolfe line search,
+  then a damped Newton polish with the exact Hessian.
+- A stability prior of N(0, 10²) per coefficient on the total likelihood
+  (ridge precision 0.01, whatever the sample size).
 - Latent classes: the mixture likelihood is maximised directly by L-BFGS.
   This is the same maximum-likelihood estimator that EM targets.
 - A coefficient whose feature never varies on the fitting rows is reported
@@ -4880,3 +4883,22 @@ before any rollout).**
 - Branch `r46-parametric`, package `parametric/`.
 - HPCC worktree `~/ProductGPT/work_r46`, delivered as a git bundle. Nothing
   is pushed to GitHub.
+
+**Pre-fit amendments (26 Oct, before any real-data fit was run).** Both came
+from the wiring smoke and the G3 recovery runs, which use synthetic data or
+300 customers only.
+1. **Optimiser.**
+   - L-BFGS alone crawled in the smoke: R1b spent 30 rounds with the loss flat
+     to 8 decimals while the gradient shrank slowly.
+   - That is the signature of transitions never observed, whose
+     maximum-likelihood utility is −∞.
+   - G3 failed on R3, R5 and R6, with the worst parameters on rare states:
+     `a_dec`, `wloss[1]`, `cop_w[1]`.
+   - The fix is a damped Newton polish with the exact Hessian after L-BFGS.
+2. **Ridge.**
+   - The draft's "L2 1e-6" was per row, which is a prior precision of 1.4 on
+     the full data. That is not "stability only".
+   - It is now a fixed precision of 0.01 on the total likelihood.
+   - The G3 report adds the likelihood at the estimate against the truth. An
+     estimate that fits worse than the truth means the optimiser stopped
+     short.
