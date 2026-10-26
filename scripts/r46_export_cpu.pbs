@@ -1,0 +1,45 @@
+#!/bin/bash
+# ============================================================================
+# R46 step 0, CPU: export the occasion table (gate G1), build the state
+# features, run the leak check (gate G2). Pre-registered in EXPERIMENTS.md R46.
+#
+# Submit from the R46 worktree (scripts/submit_r46a.sh does this):
+#     cd ~/ProductGPT/work_r46 && qsub scripts/r46_export_cpu.pbs
+#
+# Writes to $R46 (default ~/ProductGPT/runs/r46):
+#     occasions_v6_S1024.npz / .json   the rows, window and partition of gen 5
+#     features_v6_S1024.npz            the pre-decision state (state.py)
+#     g2_leakcheck.json                every feature against the label
+# The job FAILS (non-zero exit) if G1 does not reproduce b17_gru_v6_s1's cell
+# counts, so the fit arrays that depend on it never start.
+# ============================================================================
+#PBS -N r46_export
+#PBS -l select=1:ncpus=8:mem=96GB
+#PBS -q short
+#PBS -l walltime=06:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+
+set -eo pipefail
+module purge
+module load python/3.11.4
+cd "$PBS_O_WORKDIR"
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
+export PYTHONUNBUFFERED=1
+export OMP_NUM_THREADS=8 NCPUS=8
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+R46="${R46:-/storage/home/jinmiao/ProductGPT/runs/r46}"
+mkdir -p "$R46"
+LOG=/storage/home/jinmiao/ProductGPT/logs/r46_export_${PBS_JOBID%%.*}.log
+exec > >(tee -a "$LOG") 2>&1
+echo "R46 export on $(hostname) at $(date), commit $(git rev-parse --short HEAD)"
+
+python scripts/r46_inspect_tokens.py
+python -m parametric.data --out "$R46/occasions_v6_S1024.npz"
+python -m parametric.state --table "$R46/occasions_v6_S1024.npz" --out "$R46/features_v6_S1024.npz"
+python -m parametric.leakcheck --table "$R46/occasions_v6_S1024.npz" \
+    --feats "$R46/features_v6_S1024.npz" --out "$R46/g2_leakcheck.json"
+echo "R46 export done at $(date)"

@@ -1,0 +1,63 @@
+#!/bin/bash
+# ============================================================================
+# R46 part A, CPU array: one rung per array element, all in parallel.
+# Pre-registered in EXPERIMENTS.md R46. No GPU, no laptop (Jin, 26 Oct 2026).
+#
+#   STAGE=1  -J 0-8   M0 M1 R0 R1 R1b R2 R3 R4 R5, each with sandwich SEs
+#   STAGE=2  -J 0-19  R6: K in {2,3,4,6} x five starts, warm-started from R5
+#   STAGE=3           sandwich SEs for the R6 run compare.py selects (TAG=...)
+#
+# scripts/submit_r46a.sh submits the stages as a dependency chain.
+# Log per element: ~/ProductGPT/logs/r46_fit_<array id>_<index>.log
+# Results: $R46/<tag>/result.json, occ_<cell>.npz, cov.pt
+# ============================================================================
+#PBS -N r46_fit
+#PBS -l select=1:ncpus=16:mem=96GB
+#PBS -q short
+#PBS -l walltime=12:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+
+set -eo pipefail
+module purge
+module load python/3.11.4
+cd "$PBS_O_WORKDIR"
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
+export PYTHONUNBUFFERED=1
+export OMP_NUM_THREADS=16 NCPUS=16 MKL_NUM_THREADS=16
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+R46="${R46:-/storage/home/jinmiao/ProductGPT/runs/r46}"
+STAGE="${STAGE:-1}"
+IDX="${PBS_ARRAY_INDEX:-0}"
+JID="${PBS_JOBID%%.*}"
+JID="${JID//[\[\]]/_}"
+LOG=/storage/home/jinmiao/ProductGPT/logs/r46_fit_s${STAGE}_${JID}_${IDX}.log
+exec > >(tee -a "$LOG") 2>&1
+echo "R46 stage $STAGE element $IDX on $(hostname) at $(date), commit $(git rev-parse --short HEAD)"
+
+COMMON=(--table "$R46/occasions_v6_S1024.npz" --feats "$R46/features_v6_S1024.npz"
+        --out-dir "$R46" --threads 16)
+case "$STAGE" in
+  1)
+    RUNGS=(M0 M1 R0 R1 R1b R2 R3 R4 R5)
+    python -m parametric.fit "${COMMON[@]}" --rung "${RUNGS[$IDX]}" --se
+    ;;
+  2)
+    KS=(2 3 4 6)
+    K=${KS[$((IDX / 5))]}
+    START=$((IDX % 5))
+    python -m parametric.fit "${COMMON[@]}" --rung R6 --K "$K" --start "$START" \
+        --init-from "$R46/R5/result.json"
+    ;;
+  3)
+    : "${TAG:?STAGE=3 needs TAG=R6_K<k>_s<start>}"
+    K=$(echo "$TAG" | sed -E 's/R6_K([0-9]+)_s([0-9]+)/\1/')
+    START=$(echo "$TAG" | sed -E 's/R6_K([0-9]+)_s([0-9]+)/\2/')
+    python -m parametric.fit "${COMMON[@]}" --rung R6 --K "$K" --start "$START" \
+        --theta-from "$R46/$TAG/result.json" --se
+    ;;
+esac
+echo "R46 stage $STAGE element $IDX done at $(date)"

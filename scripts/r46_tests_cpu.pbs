@@ -1,0 +1,33 @@
+#!/bin/bash
+# ============================================================================
+# R46 gate G3, CPU array: each rung recovers its own parameters on a panel
+# simulated from itself (scripts/test_r46_parametric.py), one rung per element,
+# in parallel.  qsub -J 0-4 scripts/r46_tests_cpu.pbs
+#   0 R0   1 R1b   2 R3   3 R5   4 R6 (K=2)
+# Log: ~/ProductGPT/logs/r46_tests_<array id>_<index>.log
+# ============================================================================
+#PBS -N r46_tests
+#PBS -l select=1:ncpus=8:mem=32GB
+#PBS -q short
+#PBS -l walltime=06:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+
+set -eo pipefail
+module purge
+module load python/3.11.4
+cd "$PBS_O_WORKDIR"
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
+export PYTHONUNBUFFERED=1 OMP_NUM_THREADS=8
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+RUNGS=(R0 R1b R3 R5 R6)
+IDX="${PBS_ARRAY_INDEX:-0}"
+JID="${PBS_JOBID%%.*}"
+JID="${JID//[\[\]]/_}"
+LOG=/storage/home/jinmiao/ProductGPT/logs/r46_tests_${JID}_${IDX}.log
+exec > >(tee -a "$LOG") 2>&1
+echo "R46 G3 ${RUNGS[$IDX]} on $(hostname) at $(date), commit $(git rev-parse --short HEAD)"
+python scripts/test_r46_parametric.py --only "${RUNGS[$IDX]}" --threads 8

@@ -1,0 +1,34 @@
+#!/bin/bash
+# ============================================================================
+# R46 part A read-out, CPU: the ladder table, R6 selection (start by training
+# likelihood, K by campaign-27 NLL), and paired customer-bootstrap differences,
+# for every cell. Runs after the stage-2 array (scripts/submit_r46a.sh).
+# Log: ~/ProductGPT/logs/r46_compare_<jobid>.log
+# ============================================================================
+#PBS -N r46_compare
+#PBS -l select=1:ncpus=4:mem=32GB
+#PBS -q short
+#PBS -l walltime=02:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+
+set -eo pipefail
+module purge
+module load python/3.11.4
+cd "$PBS_O_WORKDIR"
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
+export PYTHONUNBUFFERED=1 OMP_NUM_THREADS=4
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+R46="${R46:-/storage/home/jinmiao/ProductGPT/runs/r46}"
+LOG=/storage/home/jinmiao/ProductGPT/logs/r46_compare_${PBS_JOBID%%.*}.log
+exec > >(tee -a "$LOG") 2>&1
+echo "R46 compare on $(hostname) at $(date), commit $(git rev-parse --short HEAD)"
+ls -d "$R46"/*/ | wc -l
+for CELL in outsample_users_holdout_period insample_users_holdout_period \
+            outsample_users_calib_period val; do
+    echo "=================== $CELL"
+    python -m parametric.compare --runs-dir "$R46" --cell "$CELL"
+done

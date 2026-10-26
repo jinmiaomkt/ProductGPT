@@ -4673,3 +4673,205 @@ the NLLs mean nothing):
 - **State error:** the restarted state's error against the truth grows with
   depth, as it should. The log-inventory error is 0.043 at k = 1 and 0.093 at
   k = 2; the pity error is 0.006 and 0.017.
+
+### R46 — PLAN (started at Jin's request, 26 Oct 2026; part A only; nothing fitted yet): parametric market-response benchmarks on ProductGPT's rows
+
+**Question.** Does a classical choice model with an explicit, observed state
+(parametric, identified, not forward-looking) do three things on
+ProductGPT's own rows?
+1. Match the neural tie on one-step prediction.
+2. Generate better closed-loop sequences.
+3. Deliver identified marketing quantities.
+
+The predictions and thresholds below were drafted by Claude. Jin can amend
+them before any real-data fit is read.
+
+**Why it matters.** The paper's spine is "predictive accuracy does not
+license simulation".
+- Four neural families tie within 0.02 nats (R30 stage 4).
+- A first-order Markov chain out-generates free-running ProductGPT (R36i:
+  0.784 against 3.169).
+- The decay and duplicate weights are identified, and the free product
+  kernel never is (R34).
+
+A parametric ladder speaks to all three at once:
+- If a model with a few hundred parameters reaches the neural band, the
+  ceiling belongs to the data.
+- If it generates better while predicting no better, that is the spine in
+  its cleanest form.
+- Its coefficients are readable marketing quantities with standard errors.
+
+The lineage is the six-week reading programme and seven synthetic-data
+replications: Bawa 1990; Roy, Chintagunta & Haldar 1996; Keane 1997;
+McAlister 1982; Papatla & Krishnamurthi 1992; Seetharaman & Chintagunta 1998;
+Seetharaman 2004. They live in Jin's Dropbox and OneDrive folders, and none
+has touched Genshin data.
+
+**Rows, split and information: identical to the neural families.**
+- **Data.** `clean_list_int_wide4_simple6_IPT.json` (level 6), `max_events`
+  = 1024, tail truncation, the shifted obtained stream.
+- **Partition.** `split_seed` = 33 over JSON record order. Half the customers
+  are out of sample, `val_mode` = late with `val_from` = 27, and the holdout
+  starts at campaign 28 (feature flag). This is `build_loaders` exactly. The
+  uid files are not used, because `split_mode=both` never reads them.
+- **Fitting and selection.**
+  - Fit on in-sample customers × campaigns < 27, the neural train role.
+  - Select within a rung on in-sample × campaign 27 only.
+  - The final model is the one fitted on campaigns < 27, with no refit that
+    adds campaign 27.
+  - The holdout is opened once.
+- **Information set.**
+  - The state is built from the same 1,024-row window the neural models
+    read, plus the pre-window inventory counts they also receive.
+  - The previous-decision token is the `AggregateInput` one. It is the start
+    token (10) at a history's first event, and it differs from the previous
+    label in 96 rows.
+  - Never used: `IsInserted` (it is the label); the row's own gap `IPT_t`
+    (R20); campaign fixed effects as a predictive input; product fixed
+    effects, which cannot forecast a new offer.
+- **Estimator difference.** The neural families train with tau = 0.5
+  inverse-frequency class weights. The parametric models use plain,
+  unweighted maximum likelihood, the estimator whose target is the reported
+  NLL. The difference is reported, not corrected.
+- **Alternatives.** The nine decisions. Figure-B is unoffered on 46.6% of
+  rows, but 42 of 270,181 Figure-B purchases happen with slot 1 empty
+  (`scripts/r46_inspect_tokens.py`). So unavailability enters as a learned
+  indicator on the Figure-B utilities. A hard mask would make those 42 rows
+  impossible.
+
+**The ladder.** Each rung adds one named piece of information and nests the
+one below it. NotBuy is the base alternative. Every rung is reported, not
+only the best.
+
+| rung | information added | source | specification (all pre-decision) |
+|---|---|---|---|
+| R0 | the offer | static MNL | 8 constants; Figure-B unoffered; per banner, the featured product's element (7), weapon type (5), gender, rerun flag and log prior runs; campaign phase on the buy decision (first row of a campaign, log rows since entering it, log lagged hours since entering it) |
+| R1 | last decision | Markov-1 with covariates; Guadagni & Little's last-purchase terms | full lag matrix, previous decision (10 values incl. none) × alternative (8) |
+| R1b | habit persistence | Roy, Chintagunta & Haldar (1996) | R1 plus rho: P = (1 − rho) P_MNL + rho 1[j = y_(t−1)] |
+| R2 | run structure | Bawa (1990); Seetharaman & Chintagunta (1998) | R1 plus Bawa's quadratic in run length on repeating the last banner; log NotBuy spell, log buy run and log ten-pull run on their alternatives |
+| R3 | long memory | Guadagni & Little (1983); Keane (1997); Seetharaman (2004) | R2 plus exponentially smoothed stocks. Per-banner, buy and ten-pull loyalty share one decision decay. 5★ wins, featured wins and lost 50/50s share a second, outcome decay. Both decays are estimated and reported as half-lives in occasions |
+| R4 | what the customer holds | McAlister (1982); Lattin & McAlister (1985); the gacha rules | R3 plus copies of the featured product (figure k = 1, 2, 3+; weapon k = 1, 2+); log same-element limited 5★ figures owned; log limited 5★ owned, on the buy decision; the 8 `pity_depth` counters, with a soft-pity hinge on the 5★ ones; the character guarantee flag; weapon losses |
+| R5 | decision structure | Chintagunta (1993); Bucklin & Lattin (1991) | R4's utilities in a three-level nested logit: buy or not → banner → single or ten-pull, with two dissimilarity parameters |
+| R6 | persistent taste | Keane (1997); Roy et al. M5; Dubé, Hitsch & Rossi (2010) | R5 with K latent classes. Class-specific: the constants, buy and banner loyalty, and the NotBuy spell term; the rest is shared. K ∈ {2, 3, 4, 6} picked on campaign 27, with five EM starts each |
+
+**Scoring a latent-class model on any customer.** The class weights are
+filtered from the customer's own earlier rows:
+pi_k(t) ∝ pi_k Π_(s<t) P_k(y_s). This is the model's predictive density given
+history, which is what a sequence model conditions on. No parameter is
+trained on out-of-sample customers. The version with prior weights is
+reported beside it.
+
+**Estimation.**
+- Maximum likelihood in float64, by L-BFGS with strong-Wolfe line search.
+- An L2 term of 1e-6, for numerical stability only.
+- Latent classes by EM.
+- Standard errors are cluster-robust sandwich errors, clustered by customer,
+  from the exact Hessian.
+- Paired differences between rungs, and between a rung and Markov-1, come
+  from a customer-cluster bootstrap over per-occasion NLLs: 1,000 replicates,
+  no refits.
+
+**Compute (Jin, 26 Oct): HPCC CPU only, in parallel.**
+- One PBS array over the rung × start grid, on the `short`/`long` queues,
+  with 16 CPUs per element.
+- Nothing runs on the GPU queue or on the laptop.
+- The laptop runs only the unit tests and tiny synthetic smoke runs.
+- Part A is the export job plus about 28 array elements: 8 single-start
+  rungs and 20 latent-class cells (K, start).
+
+**Gates, before any real-data fit is read.**
+- **G1, same rows.** The exported table reproduces `b17_gru_v6_s1`'s cell
+  counts exactly:
+  - in-sample × holdout: 222,889
+  - out-of-sample × calibration: 1,259,900
+  - out-of-sample × holdout: 217,303
+- **G2, leakage.**
+  - Every state variable is binned and tested against the label on
+    calibration rows.
+  - A variable is flagged if a bin of 1,000 or more rows has P(y = k) > 0.99,
+    or if MI(feature; y) > 0.30 nats. R20's leaky clock carried 0.40.
+  - A flagged variable is explained or dropped before any fit is read.
+- **G3, estimator.**
+  - A lag-only MNL reproduces the closed-form Markov-1 maximum-likelihood
+    estimate.
+  - Each rung recovers its own parameters on a panel simulated from itself,
+    within 10% or 2 SE.
+  - Both are laptop unit tests.
+
+**Part A — T1, prediction (this entry).**
+- **Metrics.** Reported for all four cells, with out-of-sample × holdout as
+  the headline:
+  - NLL, split into purchase classes and NotBuy, and per class;
+  - hit rate, macro F1 and macro AUPRC;
+  - revenue MAE;
+  - ECE (15 bins) and Brier.
+- **Per-occasion files**, so any two models can be paired by customer.
+- **Comparators.**
+  - The R30 stage-4 table, 5 seeds per cell; the best is plain GRU level 6,
+    at 0.8856 ± 0.0067.
+  - The marginal and Markov-1 one-step NLLs, computed by the same script on
+    the same rows.
+
+**Predictions.**
+1. **The tie extends, narrowly.** The best rung lands in 0.89–0.905, within
+   0.02 of 0.8856. R21–R25 found an information ceiling that capacity,
+   recency and memory design could not lift.
+2. **The timing state carries the gain.**
+   - The largest steps are R1 and R2–R3: the last decision, the NotBuy spell
+     and the decay.
+   - R4 adds at most 0.015 in aggregate (the obtained stream is worth about
+     0.014, R37).
+   - R4's gain is concentrated on the Figure-B classes (R30 stage 5).
+3. **R5 improves NotBuy NLL over R4.**
+4. **Heterogeneity buys nothing out of sample.** R6 gains at most 0.005 on
+   out-of-sample × holdout, and more in sample. That would replicate R7/R15 in
+   an identified model.
+5. **State dependence survives the classes.**
+   - The decision-decay half-life is a few occasions. Gen 6 learns about 2.
+   - From R5 to R6, the loyalty and lag coefficients shrink by less than
+     half: the Keane and Dubé–Hitsch–Rossi test.
+
+**Decision rules.**
+- **Ladder steps.** An information step "matters" if the paired
+  customer-bootstrap 95% CI of the rung-over-rung NLL difference, on
+  out-of-sample × holdout, excludes 0. It "matters materially" if the point
+  gain is at least 0.02, the adoption margin.
+- **Against the neural families.**
+  - "Tie": the best rung is within 0.02 of 0.8856.
+  - "Loses": above 0.9056.
+  - "Wins": below 0.8789, one seed sd under the GRU mean.
+  - The full R30 table is reported beside it.
+- **R6.** The start is chosen by training likelihood and K by campaign-27 NLL,
+  never by the holdout.
+
+**Part B — T2, generation (outlined now; the wrapper will be specified
+before any rollout).**
+- **Policies.** Each rung becomes a policy beside `iid` and `markov1` in
+  `simulation/baselines.py`. Its state updates from simulated decisions and
+  `AcquisitionEnv` acquisitions.
+- **R36i's design:**
+  - 300 customers and 22,490 holdout rows, 8 draws, three draw seeds;
+  - energy against the 0.078 band, C2ST AUC and the 27 per-statistic tables.
+- **Teacher-forced runs** are reported separately, as diagnostics.
+- **Prediction.** At least one rung beats Markov-1 (0.784) on every draw
+  seed.
+- **Compute.** CPU arrays.
+
+**Part C — T3, identification (outline).**
+- **Parametric bootstrap.** Simulate from the R4 and R5 estimates on the real
+  campaign calendar, using the in-sample customers' real offers, then refit.
+  This is 20 replicates per rung, as a CPU array, and it closes R34's open
+  item.
+- **Keane stress test.** Re-run it on the Genshin structure.
+
+**Set aside.**
+- **Probit dynamics** (Papatla & Krishnamurthi; Paap & Franses). Their
+  content is price dynamics, and prices never vary here.
+- **Timing models** (Jain & Vilcassim; Seetharaman's additive risk;
+  Chintagunta 1998; Kuo 2004; Bijwaard). These wait for the continuous-time
+  decision.
+
+**Code.**
+- Branch `r46-parametric`, package `parametric/`.
+- HPCC worktree `~/ProductGPT/work_r46`, delivered as a git bundle. Nothing
+  is pushed to GitHub.
