@@ -32,8 +32,12 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 42880–42897 | `b39_*` (18 runs, from `~/ProductGPT/work_gen6` at `93dcfbf`) | 2026-10-20 | R43 step 1: gen 6 against the rev-2 incumbent | complete, all 18 exit 0; result in R43 |
 | 44211–44258 | `b40_*` (48 runs, from `~/ProductGPT/work_gen6` at `a8ed3f9`) | 2026-10-26 | R44 stage 2: paired search, gen 5 and gen 6 | 44211–44212 running, rest queued (qstat 2026-10-26) |
 | 44274, 44275[], 44276–44282 | R46 smoke, G3 and diagnostics on the L-BFGS-only optimiser | 2026-10-26 | R46 wiring and G3 | cancelled after the crawl was diagnosed; G3 had failed on R3, R5 and R6 |
-| 44289 | `runs/r46_smoke` (CPU, `~/ProductGPT/work_r46` at `1c99911`) | 2026-10-26 | R46 wiring smoke, 300 customers | running (qstat 2026-10-26) |
-| 44285[], 44286–44288 | G3 recovery, 5 rungs, plus R3/R5/R6 at 2,000–2,500 customers (CPU, `1c99911`) | 2026-10-26 | R46 G3: each rung recovers itself | running (qstat 2026-10-26) |
+| 44285[]–44307 | R46 G3 recovery runs and smokes (CPU, `work_r46`) | 2026-10-26 | R46 G3 | see the G3 table in R46 |
+| 44303 | `runs/r46` export (CPU, `12fdf05`) | 2026-10-26 | R46 G1, G2 | done: G1 exact, G2 explained |
+| 44308[] (12 elements) | `runs/r46/{M0..R4,R5_s0..s3}` (CPU short, 16 CPUs each, `dba1f7b`) | 2026-10-26 | R46 part A stage 1 | running (qstat 2026-10-26) |
+| 44309[] (20 elements) | `runs/r46/R6_K*_s*` (CPU long, 16 CPUs, 128 GB) | 2026-10-26 | R46 part A stage 2 | held on 44308[] (afterok) |
+| 44310 | `runs/r46/compare_*.json` | 2026-10-26 | R46 read-out | held on 44309[] (afterany) |
+| 44311[] (80 elements) | `runs/r46_mc/{R1b,R3,R5,R6_K2}` (CPU, 4 CPUs each) | 2026-10-26 | R46 SE coverage, 20 panels per rung | running |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -4754,8 +4758,8 @@ only the best.
 | R2 | run structure | Bawa (1990); Seetharaman & Chintagunta (1998) | R1 plus Bawa's quadratic in run length on repeating the last banner; log NotBuy spell, log buy run and log ten-pull run on their alternatives |
 | R3 | long memory | Guadagni & Little (1983); Keane (1997); Seetharaman (2004) | R2 plus exponentially smoothed stocks. Per-banner, buy and ten-pull loyalty share one decision decay. 5★ wins, featured wins and lost 50/50s share a second, outcome decay. Both decays are estimated and reported as half-lives in occasions |
 | R4 | what the customer holds | McAlister (1982); Lattin & McAlister (1985); the gacha rules | R3 plus copies of the featured product (figure k = 1, 2, 3+; weapon k = 1, 2+); log same-element limited 5★ figures owned; log limited 5★ owned, on the buy decision; the 8 `pity_depth` counters, with a soft-pity hinge on the 5★ ones; the character guarantee flag; weapon losses |
-| R5 | decision structure | Chintagunta (1993); Bucklin & Lattin (1991) | R4's utilities in a three-level nested logit: buy or not → banner → single or ten-pull, with two dissimilarity parameters |
-| R6 | persistent taste | Keane (1997); Roy et al. M5; Dubé, Hitsch & Rossi (2010) | R5 with K latent classes. Class-specific: the constants, buy and banner loyalty, and the NotBuy spell term; the rest is shared. K ∈ {2, 3, 4, 6} picked on campaign 27, with five random starts each, warm-started from R5 |
+| ~~R5~~ | ~~decision structure~~ | ~~Chintagunta (1993); Bucklin & Lattin (1991)~~ | **Removed by amendment 7.** Was: R4's utilities in a three-level nested logit, buy or not → banner → single or ten-pull, with two dissimilarity parameters (cut to one dissimilarity by amendment 6) |
+| R6 | persistent taste | Keane (1997); Roy et al. M5; Dubé, Hitsch & Rossi (2010) | **R4** with K latent classes (amendment 7; was R5). Class-specific: the constants, buy and banner loyalty, and the NotBuy spell term; the rest is shared. K ∈ {2, 3, 4, 6} picked on campaign 27, with five random starts each, warm-started from R4 |
 
 **Scoring a latent-class model on any customer.** The class weights are
 filtered from the customer's own earlier rows:
@@ -4830,13 +4834,14 @@ reported beside it.
    - R4 adds at most 0.015 in aggregate (the obtained stream is worth about
      0.014, R37).
    - R4's gain is concentrated on the Figure-B classes (R30 stage 5).
-3. **R5 improves NotBuy NLL over R4.**
-4. **Heterogeneity buys nothing out of sample.** R6 gains at most 0.005 on
+3. ~~R5 improves NotBuy NLL over R4.~~ Withdrawn with R5 (amendment 7).
+4. **Heterogeneity buys nothing out of sample.** R6 gains at most 0.005 over
+   R4 (amendment 7; was R5) on
    out-of-sample × holdout, and more in sample. That would replicate R7/R15 in
    an identified model.
 5. **State dependence survives the classes.**
    - The decision-decay half-life is a few occasions. Gen 6 learns about 2.
-   - From R5 to R6, the loyalty and lag coefficients shrink by less than
+   - From R4 to R6 (amendment 7; was R5), the loyalty and lag coefficients shrink by less than
      half: the Keane and Dubé–Hitsch–Rossi test.
 
 **Decision rules.**
@@ -4902,3 +4907,108 @@ from the wiring smoke and the G3 recovery runs, which use synthetic data or
    - The G3 report adds the likelihood at the estimate against the truth. An
      estimate that fits worse than the truth means the optimiser stopped
      short.
+3. **Rare states.**
+   - Every coefficient records its support: the fitting rows where its
+     feature is non-zero, and the events among them.
+   - Under near-separation, sandwich SEs understate uncertainty. In G3, every
+     large |z| outside the weakly identified products sat on fewer than 50
+     events, e.g. `cop_w[1]`, 86 rows: estimate −3.26 against a true −0.06.
+   - Real-data results flag any coefficient with rows < 1,000 or events < 50
+     as a rare state. Part C's customer bootstrap gives its interval.
+4. **The nest ridge.**
+   - At 700 customers a damped Newton step walked along the ridge between
+     λ_banner and the free ten-pull constants: λ_banner 0.06 against a true
+     0.56, every ten-pull lag constant up by about 2.5, and a likelihood no
+     worse than the truth's.
+   - Newton now runs only on a negative-definite Hessian.
+   - R5 is fitted from four nest starts, and the best training likelihood is
+     kept. R6 warm-starts from that fit.
+   - Coefficients that load on near-flat Hessian directions are reported as
+     ridge (weakly identified).
+5. **R0's rerun terms: the flag only.**
+   - The smoke (300 real customers) flagged a ridge on exactly the rerun
+     terms of banners A and B. Its Hessian was not negative definite.
+   - The real offer calendar (product metadata only) explains it. A featured
+     figure has run twice before in just one training campaign (campaign 23).
+     So log(1 + prior runs) is collinear with the rerun flag, and a "runs
+     beyond the first" term would be a campaign-23 fixed effect.
+   - The weapon slots carry pooled ids whose run counts reach 17.
+   - The offer now carries the rerun flag only: for figures, whether the
+     featured product ran before; for weapons, the share of the two featured
+     weapons that did. R0 has 30 parameters, not 33.
+6. **R5 and R6: a two-level nest, buy or not → the eight alternatives, with
+   one dissimilarity λ_top.**
+   - The pre-registered second level (within a banner, single or ten-pull,
+     with λ_banner) is not identified alongside a saturated lag matrix.
+   - In the G3 recovery runs, the guarded optimiser and four starts agreed,
+     yet λ_banner stayed on a ridge with the free ten-pull constants:
+     - at 700 customers, z = 67 at a likelihood no worse than the truth's;
+     - at 2,000 customers (R6), every badly recovered coefficient acted on a
+       ten-pull alternative, with `tenl` at |z| 9.1.
+   - The smoke flagged the same ridge on real data (300 customers).
+   - Ten-pulls are rare in the real data too: outside banner A their holdout
+     shares are 0.3–1.3%.
+   - The level that is dropped scales single against ten-pull within a
+     banner. The incidence–choice link (Chintagunta 1993), in which the
+     offer's inclusive value drives whether to buy today, is what R5 keeps.
+7. **R5 removed from the ladder (Jin, relaying a coauthor, 26 Oct 2026).**
+   - The coauthor's view: the decision-structure model (buy or not → figure
+     or weapon → one or ten) is not needed. Every other proposed model
+     stands.
+   - The four stage-1 R5 fits (44308[8–11]) were cancelled while still
+     running. None produced a result, and their run directories were empty
+     and removed. The R5 synthetic checks (G3, coverage) were cancelled too.
+   - **R6 now builds on R4.** It is R4's flat MNL with K latent classes. The
+     class-specific terms (constants, buy and banner loyalty, the NotBuy
+     spell) are unchanged. It is warm-started from the R4 estimate. K and
+     the starts are as pre-registered: K ∈ {2, 3, 4, 6} from campaign 27, and
+     five starts each, kept by training likelihood.
+   - **Withdrawn:** prediction 3 (R5 improves NotBuy NLL) and the R5 step of
+     the ladder.
+   - **Changed:** the "persistent taste" step is now R6 − R4 (prediction 4).
+     The flat R6 gets its own G3 recovery and coverage runs before its
+     real-data fits are read.
+   - The R5 code stays in `parametric/` and can be run later. Amendments 4
+     and 6 record what G3 found about it.
+
+**G3 so far (26 Oct; synthetic panels, HPCC CPU).** The criteria are mean z²
+in 0.25–4, max |z| < 5, and structural max |z| < 3.5.
+
+| rung | customers × rows | verdict | reading |
+|---|---|---|---|
+| R0 | 300 × 80 | pass | median z² 0.40 (χ²(1): 0.455) |
+| M1, R1 | 400 × 100 | pass | median z² 0.35 and 0.43; model-based SE = sandwich SE |
+| R1b | 400 × 100 | pass, but z² inflated (median 1.52) | ρ is identified only through the offer variation; weak at this size |
+| R1b | 1,600 × 100 | **pass**, median z² 0.47, structural max \|z\| 0.94 | the habit term is recovered at realistic size |
+| R3 | 500 × 120 | fail: a_dec \|z\| 5.1 | the decay enters as β·α once the lag matrix absorbs the immediate past; weak when β is small |
+| R3 | 2,000 × 120 | **pass**, median z² 0.52, structural max \|z\| 0.14 | consistent; the failure was finite-sample |
+| R5 (3-level) | 700 × 120 | fail: the λ_banner ridge, z = 67, even with the guard and four starts | led to amendment 6 |
+| R6 K=2 (3-level) | 600 × 120 | fail on `cop_w[1]` only (86 rows, 0 events) | without rare states: median z² 0.64, 6.5% beyond 1.96 |
+| R6 K=2 (3-level) | 2,000 × 120 | fail: `tenl` \|z\| 9.1, ten-pull lags | the λ_banner ridge again; led to amendment 6 |
+| R5 (2-level) | 700 × 120 | **pass**: mean z² 0.38, max \|z\| 1.92, structural 0.69 | all four nest starts reach the identical optimum |
+| R6 K=2 (2-level) | 600 × 120 | **pass**: mean z² 0.37, max \|z\| 1.57 | |
+| R6 K=2 (2-level) | 2,000 × 120 | pass on the criteria (max \|z\| 2.70), marginal z² clustered (median 1.92) | correlated estimates: a mixture weight moves every lag constant together, so marginal z's are not an aggregate test; joint Wald added |
+| R1b | 1,600 × 120 (new draw) | pass on the criteria; joint Wald 141 vs χ²(95), p = 0.001; LR +2.2 sd | SEs possibly ~20% optimistic here; Monte Carlo coverage (20 panels per rung, job 44311[]) decides |
+
+**Gates on the real data (26 Oct).**
+- **G1 passes, exactly.** Export job 44303 reproduced all three cells:
+  222,889 / 1,259,900 / 217,303. The parametric rungs score precisely the
+  neural models' rows.
+- **G2 passes, with two flags explained.** It ran on 1,064,818 train rows,
+  where the label entropy is 1.738 nats. Two variables exceed MI 0.30, and
+  both are history:
+  - the previous decision (MI 0.507, purest bin 0.945, i.e. NotBuy after
+    NotBuy);
+  - the last purchased banner (MI 0.389, purest bin 0.904).
+
+  No bin of any variable reaches 0.99 purity. The offer, phase-clock and
+  holdings variables carry little information.
+- **A data fact found by R0's ridge flag.** Every Figure-B banner in the
+  training campaigns (20, 22, 23, 25, 26) featured a rerun. So the B rerun
+  flag equals "B is offered" and is not identified. It is reported as such.
+  The holdout's B banners (28, 30) are reruns too, so predictions do not
+  extrapolate.
+
+At every size, the estimate's likelihood is at least the truth's, so the
+optimiser reaches the maximum. The real fitting sample is about 1.4 million
+rows: 6 times the largest panel above.
