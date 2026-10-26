@@ -4539,3 +4539,122 @@ logs of jobs 44211 (gen 5) and 44212 (gen 6) confirm that configuration 0 ran
 as drawn: d96, d_ff 288, N6, lr 3.28e-4, dropout 0.1, weight decay 0,
 accumulation 8, warmup 0.1, model_rev 2, and window 384 for gen 6. Both models
 have 1,482,236 parameters.
+
+### R45 — PLAN, DRAFT FOR JIN'S REVIEW (27 Oct 2026; nothing trained): controlled left-censoring on complete histories
+
+**Question (Jin's).** What does it cost to learn from histories whose start is
+missing, and how does that cost grow with the depth of the missing start, for
+prediction and for generation?
+
+**Why it matters.** The sample keeps only customers observed from the
+account's start (`newbee_pull > 0`). That filter removes 10,212 of 16,225
+players, who hold 64% of all purchases (memory note `data-funnel`). Chopping
+the start of the 5,004 complete histories reproduces what a censored customer
+looks like, with the truth known. That prices the censoring, and it tests a
+fix before the fix is applied to real censored players.
+
+**What a chop removes, and the arms that separate it.** A chop removes
+context (the early occasions the encoder would read) and state (the inventory
+and pity counts built up during them). The code is on branch
+`r45-censoring`, commits `293076a` and `e1954d4`, in `gen6_streaming/censor6.py`.
+
+| arm | `--chop-state` | context | computed state | what it mimics |
+|---|---|---|---|---|
+| F | (no chop) | full | exact | the current sample |
+| L | `labels` | full | exact | the volume control: the same lost training labels, nothing else lost |
+| T | `true` | chopped | exact, from the chopped rows | missing context only |
+| Z | `zero` | chopped | restarts at zero | a real left-censored customer |
+| Z+flag | `zero`, `--censor-flag 1` | chopped | zero, plus a learned censoring vector and starting GRU state | the candidate fix |
+
+The differences read as:
+- Z − L is the cost of a missing start, net of lost training volume.
+- Z − T is the part of that cost that comes from the state.
+- T − L is the part that comes from the context.
+- Z − (Z+flag) is how much of the cost the fix recovers.
+
+**Chop rule.**
+- **Primary: calendar.** Each customer loses their first k active campaigns,
+  the mechanism of real censoring: accounts that began before the data
+  window.
+- **Never into validation or holdout.** The cut never enters campaign 27 or
+  later, so every arm is scored on the same 217,303 holdout events.
+- **Cross-check: count.** Count chops of 64/128/256/512 occasions match
+  calendar depths 1/2/4/8 almost exactly (data preparation, job 44272), so
+  one count arm suffices: Z at 128 occasions, against calendar 2.
+- **Volume per depth.** From job 44272:
+
+| depth k | training labels removed | training customers left with none |
+|---|---|---|
+| 1 | 12.4% | 68 of 2,416 |
+| 2 | 27.6% | 200 |
+| 4 | 53.2% | 632 |
+| 8 | 83.8% | 1,563 |
+
+  k = 8 removes most of the training data, so it is used only where no
+  training happens (part B).
+
+**Part A — censored training and testing (`--chop-where both`).**
+- **Grid:** arms L, T, Z, Z+flag at k ∈ {1, 2, 4}, plus the count
+  cross-check. That is 13 configurations × 3 seeds (1–3) = 39 runs.
+- **Configuration:** R44's frozen gen-6 configuration, so part A waits for
+  R44 stage 3.
+- **Reference:** F is R44's stage-4 runs on the same seeds, so it costs no
+  runs.
+
+**Part B — a full-history model scoring censored histories (`--chop-where
+eval`).** The frozen R44 gen-6 checkpoints (seeds 1–5) score the test cells
+chopped at k ∈ {1, 2, 4, 8}, states Z and T. This needs evaluation only, no
+training. It answers the question for the 10,212: what a model trained on
+complete histories loses when the history it is given is censored.
+
+**Selection and reading.** Epochs are selected on campaign-27 validation, as
+always. The holdout is read once, after part A's runs finish. The headline is
+NLL on `outsample_users_holdout_period`, paired by seed. Every table also
+reports the computed-state error against the truth: mean absolute error of
+the log inventory counts, and of the pity depth.
+
+**Predictions.**
+1. **Small one-step costs.** The whole obtained stream is worth about 0.014
+   nats (R37), so Z − L stays under 0.02 at every depth.
+2. **Monotone in depth, flattening by k = 4.** Ownership and duplicate counts
+   never decay, while the stock's half-life is 2 occasions.
+3. **Mostly state, not context.** Z − T ≥ T − L. R43 found that context
+   beyond 1,024 occasions adds nothing once inventory is carried.
+4. **Part B costs more than part A at equal depth.** A model trained on
+   complete histories has never seen an empty inventory late in a history.
+5. **Generation: no damage and possibly improvement** (step 2 below). R37
+   found that the free-running spiral runs through the inventory channel.
+
+**Decision rules (3 seeds).**
+- **A cost "exists" at depth k** if it has the same sign on all 3 paired seeds
+  and |mean| > 0.02. Otherwise "not detectable". The full curve is reported
+  either way.
+- **The fix "recovers" at depth k** if Z − (Z+flag) > ½ (Z − L) on the mean
+  and is positive on all 3 seeds.
+- **Including the 10,212.** If no cost exists at any depth, or the fix
+  recovers it, the next step is a pre-registered run that adds the
+  left-censored players with the flag on. If a cost exists that the fix does
+  not recover, they stay out and the censoring cost is reported as the
+  reason.
+
+**Step 2 — generation, after part A.** The R36c protocol on the fixed engine:
+energy, C2ST AUC and the satiation functionals. It runs for F, Z and Z+flag
+at k ∈ {1, 2, 4}, 3 seeds each, and reports the depth curve of the energy.
+This step needs the rollout to accept chopped histories (the state-supplied
+prefix as the real past). That is not built yet, and it is planned with R43
+step 2's GPU wrapper.
+
+**Budget.** Part A is 39 GPU runs at about 15 minutes each, so about 10
+GPU-hours. Part B is 40 evaluations, under 2 GPU-hours. Step 2 is 27
+rollouts. Nothing is submitted while batch 40 holds the GPUs, and part A
+waits for R44's frozen configuration.
+
+**Verified so far.**
+- **Tests:** `scripts/test_r45_censor.py` (13 checks) passed on HPCC, job
+  44271. The chop points are exact. With the state supplied, inventory,
+  stock and pity after a chop equal the full history to within 7.5e-08, in a
+  batch with different chop points. The label mask touches labels only. The
+  flag is exactly inert at initialisation and never touches uncensored
+  customers. The stock parameters get gradients through the prefix.
+- **Existing suites:** all of them still pass, so the chop options off leave
+  gen 6 unchanged.
