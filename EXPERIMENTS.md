@@ -4673,3 +4673,115 @@ the NLLs mean nothing):
 - **State error:** the restarted state's error against the truth grows with
   depth, as it should. The log-inventory error is 0.043 at k = 1 and 0.093 at
   k = 2; the pity error is 0.006 and 0.017.
+
+### R47 — PLAN, DRAFT FOR JIN'S REVIEW (28 Oct 2026; nothing run): do players forget their holdings, within and across campaigns?
+
+**Why.** Batches 33–34 withdrew the half-life claim: half-lives of 1, 2 and 5
+occasions tie on holdout (0.8805, 0.8837, 0.8809; seed sd about 0.01). That
+says the decay is not identified. It does not say players do not forget.
+1. The grid stopped at 5 occasions, and "no forgetting" is an infinite
+   half-life.
+2. The model has two memory channels that never decay, the count and the
+   occasions since the last acquisition, plus the GRU. A decayed stock is
+   then close to redundant, and its rate can move without changing the fit.
+3. The whole obtained stream is worth about 0.014 nats (R37), so one-step
+   likelihood is a weak detector.
+
+R47 tests forgetting directly: model-free first, then with the model forced to
+rely on the decaying channel, then within against across campaigns.
+
+**Model.** All model runs use gen 6, on R44's frozen configuration. Gen 6 is
+required, not just convenient: it carries the computed state over the whole
+history. Gen 5 truncates at 1,024 occasions and drops the pre-window decayed
+stock (`stock_counts` ignores `init_count` under `decay=exp`), so long
+half-lives cannot be tested there. Each run picks its epoch on campaign-27
+validation, and the holdout is read once, after each part finishes.
+
+**Part A — model-free forgetting curves (CPU, real data, aggregates only).**
+- **Unit:** an occasion at which a featured product is on offer (offer slots
+  0–1 are figures, 2–3 weapons).
+- **Outcome:** a pull on that product's banner.
+- **Satiation gap:** P(pull | the player already owns the product) − P(pull |
+  not owned).
+- **Elapsed time:** the gap is traced against the time since the player last
+  acquired the product, in occasions and in hours (IPT).
+- **Two curves:**
+  - *Within campaign:* the product was acquired earlier in the same
+    campaign, mostly featured wins.
+  - *Across campaigns:* the product is offered again in a later campaign (a
+    rerun), and the player acquired it in an earlier one.
+- **Strata:** total spend tercile and pity depth, so that "owners are
+  different players" and "owners are at a different pity" are not read as
+  memory.
+- **Reading:** forgetting shows as a gap that shrinks towards 0 as elapsed
+  time grows. No forgetting shows as a flat gap.
+- **Caveat, stated in advance:** duplicates have value in this game
+  (constellations), so a positive gap can mean a player is collecting
+  copies, not that they have forgotten.
+- **Builds on:** R41's post-win tables (within campaign) and the existing
+  returning-product indices (`GenerateReturningFigWeapon5.R`) for reruns.
+
+**Part B1 — the half-life profile extended (gen 6, current state).** The
+half-life is frozen at each of 1, 2, 5, 10, 30, 100 occasions and ∞ (no decay,
+`DECAY=none`), with 3 seeds each: 21 runs.
+
+**Part B2 — the same profile with the never-decaying channels removed.**
+Under a new `--slot-state stock_only`, each slot carries only the decayed
+stock. The count, occasions since and owned flag are replaced by their
+stock-based versions (owned = stock > 10⁻³; total = summed stock). The stock
+is now the only route by which holdings enter, so if players forget, its
+half-life should be identified here. 21 runs.
+
+**Part B3 — within against across campaigns (after B2).**
+- **Second clock:** a campaign-boundary factor δ, applied on top of the
+  per-occasion decay: stock_t = ρ·(δ_t·stock_{t−1} + new copies), where
+  δ_t = δ when the campaign changes at row t and 1 otherwise.
+- **Grid:** δ ∈ {1, 0.5, 0.1, 0}, in the stock-only model, at B2's best
+  half-life, with 3 seeds: 12 runs.
+- **Reading:** δ = 1 means forgetting runs only on the occasion clock.
+  δ = 0 means holdings are forgotten at every campaign boundary.
+
+**Predictions.**
+1. **Part A:** the within-campaign gap is negative (satiation) and shrinks
+   with elapsed hours. The across-campaign gap on reruns is smaller in size:
+   partial forgetting between campaigns.
+2. **B1:** flat across the whole grid, ∞ included (the never-decaying
+   channels make the decay redundant).
+3. **B2:** no longer flat. The best finite half-life beats ∞, and the best
+   is longer than 5 occasions.
+4. **B3:** the best δ is below 1, so campaigns act as a forgetting boundary
+   beyond elapsed occasions.
+
+**Decision rules.** The parameter is profiled, not adopted, so the rules are
+about identification:
+- **Forgetting is detected in a part** when NLL(∞) − NLL(best finite
+  half-life) exceeds twice the seed sd of the paired difference, on
+  validation and on holdout, with the same sign on all 3 paired seeds.
+  Otherwise "not identified from purchase likelihood", reported with the full
+  profile curve.
+- **A campaign boundary effect is detected** by the same rule for δ = 1
+  against the best δ < 1.
+- **Part A** is descriptive. It has a bootstrap CI over customers (1,000
+  resamples) for each curve's slope on log elapsed time, and the gap counts
+  as shrinking when that CI excludes 0.
+- **Paper claim:** "players forget" is claimed only if part A and B2 agree.
+  "Campaigns reset memory" is claimed only if part A's across-campaign gap
+  and B3 agree.
+
+**Generation (after B, with R43 step 2's wrapper).** The satiation functionals
+(`sat_k1`–`sat_k3`) are compared in rollouts at the best finite half-life
+against ∞. Rollouts are more sensitive to memory than one-step NLL.
+
+**Budget.** Part A is one CPU job. B1 and B2 are 42 GPU runs and B3 is 12,
+about 15 minutes each, so about 14 GPU-hours. They queue behind R44 and R45
+part A.
+
+**Code to build after approval:** `--slot-state stock_only` and the
+campaign-boundary factor in gen 6's computed state, on a new branch
+`r47-forgetting`, with tests:
+- `stock_only` changes only the slot features;
+- δ = 1 reproduces the current stock exactly;
+- δ = 0 zeroes the stock at each boundary;
+- generation stays equal to the full pass;
+
+and a part-A script reading the HPCC data, aggregates only.
