@@ -72,6 +72,18 @@ def main() -> None:
     root = Path(a.runs_dir)
     res = {p.parent.name: json.loads(p.read_text()) for p in root.glob("*/result.json")}
 
+    # R5: four nest starts, keep the best TRAINING likelihood (the same rule
+    # the R6 warm start uses)
+    r5 = [r for r in res.values() if r["rung"] == "R5"]
+    r5_best = min(r5, key=lambda r: r["train_nll"]) if r5 else None
+    if r5:
+        print("R5 nest starts (kept: best training NLL):")
+        for r in sorted(r5, key=lambda r: r["start"]):
+            der = r.get("derived", {})
+            print(f"  start {r['start']}: train {r['train_nll']:.6f}  lambda_top "
+                  f"{der.get('lambda_top', {}).get('value', float('nan')):.3f}  lambda_banner "
+                  f"{der.get('lambda_banner', {}).get('value', float('nan')):.3f}"
+                  f"{'  <- kept' if r is r5_best else ''}")
     # R6 selection: start by training likelihood within K, K by campaign-27 NLL
     by_k: Dict[int, Dict] = {}
     for tag, r in res.items():
@@ -88,6 +100,8 @@ def main() -> None:
             print(f"  K={k}: start {r['start']}  train {r['train_nll']:.5f}  val {r['cells']['val']['nll']:.5f}"
                   f"{'  <- selected' if r is sel else ''}")
     tags = {rung: rung for rung in LADDER if rung in res}
+    if r5_best is not None:
+        tags["R5"] = r5_best["tag"]
     if sel is not None:
         tags["R6"] = sel["tag"]
 
@@ -99,7 +113,9 @@ def main() -> None:
         r = res[tag]
         c = r["cells"][a.cell]
         der = {k: round(v["value"], 3) for k, v in r.get("derived", {}).items() if isinstance(v, dict)}
-        table[rung] = {"tag": tag, "n_params": r["n_params"], "train_nll": r["train_nll"],
+        table[rung] = {"tag": tag, "rare": r.get("rare", []), "ridge": r.get("ridge", []),
+                       "negative_definite": r.get("se_diag", {}).get("negative_definite"),
+                       "n_params": r["n_params"], "train_nll": r["train_nll"],
                        "val_nll": r["cells"]["val"]["nll"], "cell": c, "derived": r.get("derived", {}),
                        "all_cells": {k: r["cells"][k]["nll"] for k in CELLS if k in r["cells"]}}
         print(f"{rung:<6}{r['n_params']:>5}{r['train_nll']:>9.4f}{r['cells']['val']['nll']:>9.4f}{c['nll']:>9.4f}"

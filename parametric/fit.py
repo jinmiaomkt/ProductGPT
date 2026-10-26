@@ -154,13 +154,17 @@ def newton(spec, theta, chunks, n_rows, *, lam, iters=8, tol=1e-6):
         if gmax < tol:
             hist.append({"newton": it, "f": fx, "grad_max": gmax})
             break
+        # Newton only where the surface is locally concave. On an indefinite
+        # Hessian (a ridge, e.g. a nest dissimilarity traded against free
+        # pack constants) a damped step walks along the ridge -- G3's R5 did
+        # exactly that -- so stop and keep the L-BFGS point instead.
+        try:
+            L = torch.linalg.cholesky(A)
+        except RuntimeError:
+            hist.append({"newton": it, "f": fx, "grad_max": gmax, "stopped": "hessian not negative definite"})
+            log(f"  newton {it}: Hessian not negative definite -- keeping the L-BFGS point")
+            break
         mu = 0.0
-        while True:
-            try:
-                L = torch.linalg.cholesky(A + mu * torch.eye(A.shape[0], dtype=F64))
-                break
-            except RuntimeError:
-                mu = max(1e-8, 10 * mu) if mu else 1e-8 * float(A.diagonal().abs().max())
         d = -torch.cholesky_solve(grad[:, None], L)[:, 0]
         step, ok = 1.0, False
         for _ in range(30):
@@ -169,9 +173,12 @@ def newton(spec, theta, chunks, n_rows, *, lam, iters=8, tol=1e-6):
                 ok = True
                 break
             step *= 0.5
-        hist.append({"newton": it, "f": fx, "grad_max": gmax, "step": step, "damping": mu})
+        hist.append({"newton": it, "f": fx, "grad_max": gmax, "step": step})
         log(f"  newton {it}  total -LL+pen {fx:.6f}  max|grad| {gmax:.2e}  step {step:g}")
-        if not ok:
+        if not ok or step < 0.25:
+            # a short step on a concave patch means the quadratic model is poor here
+            if ok:
+                theta, fx = theta + step * d, f_new
             break
         theta = theta + step * d
         fx = f_new
@@ -226,14 +233,21 @@ def sandwich(spec, theta, chunks):
     ident = d > 1e-10 * float(d.abs().max())
     ii = torch.nonzero(ident).flatten()
     Ai = A[ii][:, ii]
-    evals = torch.linalg.eigvalsh(Ai)
+    evals, evecs = torch.linalg.eigh(Ai)
+    # Near-flat directions: a coefficient that loads on them sits on a ridge
+    # (traded against others at almost no cost in likelihood), and its Wald SE
+    # is not to be trusted -- report it as weakly identified.
+    flat = evals < 1e-4 * float(evals.abs().median())
+    load = (evecs[:, flat] ** 2).sum(1) if bool(flat.any()) else torch.zeros(len(ii), dtype=F64)
+    ridge = [int(ii[k]) for k in torch.nonzero(load > 0.1).flatten()]
     Ainv = torch.linalg.pinv(Ai, hermitian=True)
     Si = Smat[:, ii]
     V = torch.full((P, P), float("nan"), dtype=F64)
     V[ii[:, None], ii[None, :]] = Ainv @ (Si.T @ Si) @ Ainv
     return V, {"min_eig": float(evals.min()), "max_eig": float(evals.max()),
-               "n_clusters": int(Smat.shape[0]),
-               "not_identified": [int(i) for i in torch.nonzero(~ident).flatten()]}
+               "n_clusters": int(Smat.shape[0]), "negative_definite": bool(evals.min() > 0),
+               "not_identified": [int(i) for i in torch.nonzero(~ident).flatten()],
+               "ridge": ridge}
 
 
 # ───────────────────────────── evaluation ─────────────────────────────
@@ -346,6 +360,7 @@ def transformed(spec, theta, V) -> Dict[str, Dict[str, float]]:
 
 
 RARE_ROWS, RARE_EVENTS = 1_000, 50
+NEST_STARTS = [(0.9, 0.9), (0.6, 0.6), (0.9, 0.5), (0.5, 0.9)]
 _BLOCKS = {"fig": [("off_a", slice(0, 11), (3, 4)), ("off_b", slice(0, 11), (5, 6))],
            "rr_a": [("off_a", slice(11, 13), (3, 4))], "rr_b": [("off_b", slice(11, 13), (5, 6))],
            "unoff_b": [("unoff_b", slice(0, 1), (5, 6))], "wep": [("off_w", slice(0, 6), (7, 8))],
@@ -442,7 +457,7 @@ def main() -> None:
     torch.set_num_threads(a.threads)
     t0 = time.time()
 
-    tag = a.rung if a.rung != "R6" else f"R6_K{a.K}_s{a.start}"
+    tag = {"R5": f"R5_s{a.start}", "R6": f"R6_K{a.K}_s{a.start}"}.get(a.rung, a.rung)
     out = Path(a.out_dir) / tag
     out.mkdir(parents=True, exist_ok=True)
     log(f"R46 fit {tag}  threads={a.threads}  torch {torch.__version__}")
@@ -458,8 +473,25 @@ def main() -> None:
     spec = M.Spec(a.rung, K=a.K)
     marg = np.bincount(tab["label"][roles["train"]].astype(np.int64) - 1, minlength=9) / n_train
     theta0 = spec.init(marginal=marg)
+    if a.rung == "R5":
+        # The nest dissimilarities sit on a ridge with the free pack constants
+        # (G3), so R5 is fitted from four starting pairs (lambda_top, ratio)
+        # and the best TRAINING likelihood is kept (compare.py / R6 warm start).
+        lt, ratio = NEST_STARTS[a.start % len(NEST_STARTS)]
+        lo = spec.offsets()["nest"][0]
+        theta0[lo] = math.log(lt / (1 - lt))
+        theta0[lo + 1] = math.log(ratio / (1 - ratio))
+        log(f"nest start {a.start}: lambda_top {lt}, lambda_banner/lambda_top {ratio}")
     if a.init_from:
-        src = json.loads(Path(a.init_from).read_text())
+        if "*" in a.init_from:
+            import glob
+            cands = [json.loads(Path(p).read_text()) for p in sorted(glob.glob(a.init_from))]
+            if not cands:
+                raise SystemExit(f"--init-from {a.init_from}: no result.json matched")
+            src = min(cands, key=lambda r: r["train_nll"])
+            log(f"warm start: best of {len(cands)} by training NLL is {src['tag']} ({src['train_nll']:.6f})")
+        else:
+            src = json.loads(Path(a.init_from).read_text())
         src_spec = M.Spec(src["rung"], K=src.get("K", 1))
         src_p = src_spec.unpack(torch.tensor(src["theta"], dtype=F64))
         off = spec.offsets()
@@ -510,6 +542,8 @@ def main() -> None:
         V, diag = sandwich(spec, theta, train_chunks)
         res["se"] = torch.sqrt(torch.clamp(torch.diagonal(V), min=0)).tolist()
         res["se_diag"] = diag
+        res["ridge"] = [res["labels"][i] for i in diag["ridge"]]
+        log(f"Hessian negative definite: {diag['negative_definite']}; ridge coefficients: {res['ridge']}")
         torch.save(V, out / "cov.pt")
     res["derived"] = transformed(spec, theta, V)
 

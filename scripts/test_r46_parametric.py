@@ -105,12 +105,30 @@ def t4_causal(prod):
 
 
 def _fit_on(tab, cal, prod, spec, theta0, *, se=True):
+    """Fit from theta0 -- or, for R5, from every nest start in fit.NEST_STARTS
+    on top of theta0, keeping the best training likelihood, as the real fit does."""
     F = ST.build(tab, prod, calendar=cal)
     roles = D.roles(tab, val_from=10_000)          # synthetic: every row is a fitting row
     users = np.arange(tab["label"].shape[0])
     chunks = FT.make_chunks(tab, F, roles, users, row_budget=40_000)
     n = int(roles["train"].sum())
-    th, _ = FT.fit(spec, theta0, chunks, n, l2=0.01 / n)
+    starts = [theta0]
+    if spec.rung == "R5":
+        lo = spec.offsets()["nest"][0]
+        starts = []
+        for lt, ratio in FT.NEST_STARTS:
+            t = theta0.clone()
+            t[lo], t[lo + 1] = np.log(lt / (1 - lt)), np.log(ratio / (1 - ratio))
+            starts.append(t)
+    best = None
+    for k, t0 in enumerate(starts):
+        th, _ = FT.fit(spec, t0, chunks, n, l2=0.01 / n)
+        f = FT.objective(spec, th, chunks, n, 0.0, backward=False)
+        if len(starts) > 1:
+            print(f"      start {k}: train NLL {f:.8f}", flush=True)
+        if best is None or f < best[1]:
+            best = (th, f)
+    th = best[0]
     V = FT.sandwich(spec, th, chunks)[0] if se else None
     return th, V, F, roles, chunks, n
 
