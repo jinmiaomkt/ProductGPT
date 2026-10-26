@@ -23,7 +23,7 @@ source "$PBS_O_WORKDIR/env.sh"
 
 MC="${MC:-/storage/home/jinmiao/ProductGPT/runs/r46_mc}"
 IDX="${PBS_ARRAY_INDEX:-0}"
-RUNGS=(R1b R3 R5 R6)
+RUNGS=(R1b R3 R5 R6)   # R6 = R4 + classes since amendment 7; R5 off the ladder
 RUNG=${RUNGS[$((IDX / 20))]}
 REP=$((IDX % 20))
 K=1

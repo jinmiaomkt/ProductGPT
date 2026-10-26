@@ -29,8 +29,8 @@ NEURAL = [("plain GRU, level 6", 0.8856, 0.0067), ("GRU encoder, level 6", 0.890
 LADDER = ("M0", "M1", "R0", "R1", "R1b", "R2", "R3", "R4", "R5", "R6")
 STEPS = [("R1", "R0", "last decision"), ("R1b", "R1", "habit persistence"),
          ("R2", "R1", "run structure"), ("R3", "R2", "long memory"),
-         ("R4", "R3", "holdings, pity, guarantee"), ("R5", "R4", "nested structure"),
-         ("R6", "R5", "persistent taste")]
+         ("R4", "R3", "holdings, pity, guarantee"),
+         ("R6", "R4", "persistent taste")]           # amendment 7: R5 removed, R6 = R4 + classes
 
 
 def occ(run: Path, cell: str):

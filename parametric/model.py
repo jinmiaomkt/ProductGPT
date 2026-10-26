@@ -14,8 +14,8 @@ call the same function.
     R2     R1 + run structure (Bawa; Seetharaman-Chintagunta)  bawa, runs
     R3     R2 + decayed stocks (Guadagni-Little; Seetharaman)  a_dec, a_out, loy, inc, tenl, out
     R4     R3 + holdings, pity, guarantee                  cop_f, cop_w, elem, owned, pity0-3, guar, wloss
-    R5     R4 in a buy-or-not nested logit (one lambda)    nest
-    R6     R5 with K latent classes                        d_asc, d_inc, d_loy, d_nb, cls
+    R5     R4 in a buy-or-not nested logit (one lambda)    nest   -- off the ladder (amendment 7)
+    R6     R4 with K latent classes                        d_asc, d_inc, d_loy, d_nb, cls
 
 The lag matrix makes constants redundant (every row has exactly one previous
 decision), so rungs with `lag` carry no `asc`; in R6 the class deviations of
@@ -39,10 +39,12 @@ BAN = torch.stack([(ALT_BANNER == b).to(torch.float64) for b in range(4)])   # (
 
 def flags(rung: str) -> Dict[str, bool]:
     i = RUNGS.index(rung)
+    # Amendment 7 (26 Oct): R5 is off the ladder and R6 is R4 + latent
+    # classes, so the nest belongs to R5 alone.
     f = dict(asc=rung in ("M0", "R0"), lag=rung == "M1" or i >= RUNGS.index("R1"),
              offer=i >= RUNGS.index("R0"), rho=rung == "R1b",
              runs=i >= RUNGS.index("R2"), stocks=i >= RUNGS.index("R3"),
-             hold=i >= RUNGS.index("R4"), nest=i >= RUNGS.index("R5"),
+             hold=i >= RUNGS.index("R4"), nest=rung == "R5",
              classes=rung == "R6")
     return f
 

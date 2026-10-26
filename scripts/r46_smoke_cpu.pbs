@@ -37,9 +37,8 @@ python -m parametric.leakcheck --table "$T" --feats "$F" --out "$R46/g2_leakchec
 C=(--table "$T" --feats "$F" --out-dir "$R46" --threads 8)
 python -m parametric.fit "${C[@]}" --rung M1 --se
 python -m parametric.fit "${C[@]}" --rung R1b --se
-python -m parametric.fit "${C[@]}" --rung R5 --start 0 --se
-python -m parametric.fit "${C[@]}" --rung R5 --start 1 --se
-python -m parametric.fit "${C[@]}" --rung R6 --K 2 --start 0 --init-from "$R46/R5_s*/result.json"
+python -m parametric.fit "${C[@]}" --rung R4 --se
+python -m parametric.fit "${C[@]}" --rung R6 --K 2 --start 0 --init-from "$R46/R4/result.json"
 python -m parametric.fit "${C[@]}" --rung R6 --K 2 --start 0 --theta-from "$R46/R6_K2_s0/result.json" --se
 python -m parametric.compare --runs-dir "$R46" --cell outsample_users_holdout_period
 echo "R46 smoke done at $(date)"

@@ -3,7 +3,7 @@
 # R46 part A on HPCC CPUs, as one dependency chain (EXPERIMENTS.md R46):
 #
 #   export (G1, features, G2)          short, 8 CPUs
-#     -> stage 1 array, 12 fits        short, 16 CPUs each, in parallel
+#     -> stage 1 array, 8 rungs        short, 16 CPUs each, in parallel
 #        -> stage 2 array, 20 R6 fits  long,  16 CPUs each, in parallel
 #           -> compare                 short, 4 CPUs
 #
@@ -24,7 +24,7 @@ if [ "${SMOKE:-0}" = "1" ]; then
 fi
 R46=/storage/home/jinmiao/ProductGPT/runs/r46
 E=$($PBSBIN/qsub -v R46=$R46 scripts/r46_export_cpu.pbs)
-S1=$($PBSBIN/qsub -J 0-11 -v STAGE=1,R46=$R46 -W depend=afterok:$E scripts/r46_fit_cpu.pbs)
+S1=$($PBSBIN/qsub -J 0-7 -v STAGE=1,R46=$R46 -W depend=afterok:$E scripts/r46_fit_cpu.pbs)
 S2=$($PBSBIN/qsub -J 0-19 -v STAGE=2,R46=$R46 -q long -l select=1:ncpus=16:mem=128GB \
      -l walltime=48:00:00 -W depend=afterok:$S1 scripts/r46_fit_cpu.pbs)
 C=$($PBSBIN/qsub -v R46=$R46 -W depend=afterany:$S2 scripts/r46_compare_cpu.pbs)
