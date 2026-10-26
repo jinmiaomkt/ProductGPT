@@ -247,6 +247,11 @@ def main() -> None:
                          "eval = the test cells only; both = everywhere")
     ap.add_argument("--censor-flag", type=int, default=0,
                     help="1 = learned censoring vector and starting GRU state for chopped customers")
+    # R47: forgetting
+    ap.add_argument("--slot-state", choices=["full", "stock_only"], default="full",
+                    help="stock_only = holdings reach the slots only through the decayed stock")
+    ap.add_argument("--camp-decay", type=float, default=1.0,
+                    help="delta: stock multiplier at the first row of each new campaign (1 = off)")
     ap.add_argument("--allow-laptop", action="store_true",
                     help="override the guard that refuses to train on Windows (see below)")
     args = ap.parse_args()
@@ -294,7 +299,8 @@ def main() -> None:
                 "track_holdout": bool(args.track_holdout),
                 "chop": args.chop, "chop_depth": int(args.chop_depth),
                 "chop_state": args.chop_state, "chop_where": args.chop_where,
-                "censor_flag": bool(args.censor_flag)})
+                "censor_flag": bool(args.censor_flag),
+                "slot_state": args.slot_state, "camp_decay": float(args.camp_decay)})
     if cfg["chop"] != "none" and cfg["chop_depth"] <= 0:
         raise SystemExit("--chop needs --chop-depth > 0")
     if cfg.get("max_users") and cfg.get("split_mode") == "both":

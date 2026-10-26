@@ -281,7 +281,9 @@ def _rollout_streaming(model, batch, env, vocab, *, start: int, n_rep: int, seed
         _warm_pity(states, buf, vocab, env, start)
 
     uid = buf.get("user_idx")
-    camp = buf.get("campaign") if getattr(model, "camp_bias", None) is not None else None
+    # Always pass campaigns: the head uses them only when the model has campaign
+    # effects, and R47's campaign-boundary decay needs them in the state.
+    camp = buf.get("campaign")
 
     def advance(a: int, b: int, st):
         return model.advance(buf["lto"][:, a:b], buf["obtained"][:, a:b],

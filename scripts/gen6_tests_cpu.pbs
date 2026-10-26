@@ -39,7 +39,8 @@ echo "Git:     $(git log --oneline -1)"
 python -c "import torch, numpy; print('torch', torch.__version__, 'numpy', numpy.__version__, 'cuda visible:', torch.cuda.is_available())"
 
 rc=0
-for t in scripts/test_gen6_streaming.py scripts/test_r45_censor.py scripts/test_rollout_fixes.py \
+for t in scripts/test_gen6_streaming.py scripts/test_r45_censor.py scripts/test_r47_forgetting.py \
+         scripts/test_rollout_fixes.py \
          scripts/test_rollout.py scripts/test_hybrid_encoder.py; do
   echo
   echo "===== $t"

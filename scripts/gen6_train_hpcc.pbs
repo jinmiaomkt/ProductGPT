@@ -62,6 +62,8 @@ CAMP_FE="${CAMP_FE:-}"; ALIBI="${ALIBI:-}"; PITY_STREAM="${PITY_STREAM:-}"; VAL_
 #   CHOP_WHERE=train|eval|both CENSOR_FLAG=1
 CHOP="${CHOP:-}"; CHOP_DEPTH="${CHOP_DEPTH:-}"; CHOP_STATE="${CHOP_STATE:-}"
 CHOP_WHERE="${CHOP_WHERE:-}"; CENSOR_FLAG="${CENSOR_FLAG:-}"
+#   R47 forgetting: SLOT_STATE=full|stock_only  CAMP_DECAY=delta (1 = off)
+SLOT_STATE="${SLOT_STATE:-}"; CAMP_DECAY="${CAMP_DECAY:-}"
 TIME_BUDGET_MIN="${TIME_BUDGET_MIN:-1410}"
 
 job_tag="${PBS_JOBID%%.*}"
@@ -141,6 +143,8 @@ args=(--profile "$PROFILE" --window "$WINDOW" --chunk "$CHUNK" --batch-size "$BA
 [[ -n "$CHOP_STATE" ]] && args+=(--chop-state "$CHOP_STATE")
 [[ -n "$CHOP_WHERE" ]] && args+=(--chop-where "$CHOP_WHERE")
 [[ -n "$CENSOR_FLAG" ]] && args+=(--censor-flag "$CENSOR_FLAG")
+[[ -n "$SLOT_STATE" ]] && args+=(--slot-state "$SLOT_STATE")
+[[ -n "$CAMP_DECAY" ]] && args+=(--camp-decay "$CAMP_DECAY")
 
 echo "Command: python gen6_streaming/train6_streaming.py ${args[*]}"
 echo

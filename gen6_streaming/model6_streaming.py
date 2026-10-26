@@ -55,6 +55,28 @@ import torch.nn.functional as F
 import model_multistream_state_space as mm
 
 NEVER = -1.0e6
+STOCK_FLOOR = 1e-3      # R47 stock_only: holdings below this count as not owned
+
+
+def _mult_scan(w: torch.Tensor, a: torch.Tensor, d0: torch.Tensor, chunk: int = 32) -> torch.Tensor:
+    """D_t = a_t * (D_(t-1) + w_t), exactly, for a per-row factor a_t (B,L).
+
+    Closed form inside chunks of `chunk` rows, in float64 so the cumulative
+    log-factors cannot overflow; only the carry between chunks is looped.
+    w (B,L,P), d0 (B,P). Returns (B,L,P) in w's dtype."""
+    B, L, P = w.shape
+    w64 = w.double()
+    la = torch.log(a.clamp_min(1e-300))
+    out, d = [], d0.double()
+    for c0 in range(0, L, chunk):
+        c1 = min(L, c0 + chunk)
+        lc = la[:, c0:c1].cumsum(dim=1)                                 # l_t, inclusive
+        lprev = torch.cat([torch.zeros_like(lc[:, :1]), lc[:, :-1]], dim=1)
+        inner = torch.cumsum(w64[:, c0:c1] * torch.exp(-lprev)[..., None], dim=1)
+        dc = torch.exp(lc)[..., None] * (d[:, None, :] + inner)
+        out.append(dc)
+        d = dc[:, -1]
+    return torch.cat(out, dim=1).to(w.dtype)
 
 
 class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
@@ -63,7 +85,8 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
 
     streaming = True
 
-    def __init__(self, *, window: int = 384, chunk: int = 512, censor_flag: bool = False, **kw):
+    def __init__(self, *, window: int = 384, chunk: int = 512, censor_flag: bool = False,
+                 slot_state: str = "full", camp_decay: float = 1.0, **kw):
         kw = dict(kw)
         for k, want in (("encoder", "gru_attn"), ("fuse", "stack"), ("inventory", "slots")):
             got = str(kw.get(k, want)).lower()
@@ -88,6 +111,22 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
         # for each GRU layer in place of zeros. Both start at zero, so a fresh
         # model computes the uncensored function, and uncensored customers never
         # see them. Created after the parent's reset_parameters, so they stay zero.
+        # R47: forgetting. slot_state="stock_only" removes the never-decaying
+        # channels -- the count (hence the owned flag and total holdings) becomes
+        # the decayed stock, thresholded at STOCK_FLOOR, and "occasions since last
+        # acquired" is zeroed -- so holdings enter the slots only through the
+        # decayed stock. camp_decay = delta multiplies the stock at the first row
+        # of every new campaign: stock_t = rho * delta_t * (stock_(t-1) + copies_t).
+        # delta = 1 is the existing stock exactly.
+        self.slot_state = str(slot_state).lower()
+        if self.slot_state not in ("full", "stock_only"):
+            raise ValueError(f"slot_state must be full|stock_only, got {slot_state!r}")
+        self.camp_decay = float(camp_decay)
+        if not 0.0 <= self.camp_decay <= 1.0:
+            raise ValueError(f"camp_decay must be in [0, 1], got {camp_decay}")
+        if self.camp_decay < 1.0 and self.inventory_slots.decay != "exp" and not (
+                self.inventory_slots.use_tier or self.inventory_slots.kernel != "none"):
+            raise ValueError("camp_decay < 1 needs a stock (decay, tier or kernel on)")
         self.censor_flag = bool(censor_flag)
         if self.censor_flag:
             d = int(kw["d_model"])
@@ -105,6 +144,7 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
             "last": torch.full((batch_size, P), NEVER, device=device, dtype=torch.float32),
             "stock": z(batch_size, P),          # pre-kernel stock D_t
             "pity": z(batch_size, 8),           # raw pulls since last hit, per banner x tier
+            "camp": torch.zeros(batch_size, device=device, dtype=torch.long),  # last campaign seen
             "h": [None] * len(self.event_model),
             "k": [None] * len(self.event_model),
             "v": [None] * len(self.event_model),
@@ -115,13 +155,14 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
         out = dict(st)
         for key in ("h", "k", "v"):
             out[key] = [x.detach() if x is not None else None for x in st[key]]
-        for key in ("count", "last", "stock", "pity"):
-            out[key] = st[key].detach()
+        for key in ("count", "last", "stock", "pity", "camp"):
+            if key in st:
+                out[key] = st[key].detach()
         return out
 
     # ------------------------------------------------------- computed state
     def computed_scan(self, obtained_ids: torch.Tensor, prev_dec_ids: torch.Tensor,
-                      st: Dict[str, Any], detach_carry: bool = True):
+                      st: Dict[str, Any], detach_carry: bool = True, campaign=None):
         """Computed state for rows st['t'] .. st['t']+L-1, continuing from `st`.
 
         obtained_ids (B,L,10), prev_dec_ids (B,L). Row t carries o_(t-1) (the
@@ -154,9 +195,25 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
                 w = mm.copy_weights(obtained_ids, before.long(), g)
             else:
                 w = plain
+            rho = None
             if slots.decay == "exp":
                 hl = F.softplus(slots.half_life_raw).clamp_min(1e-2)
                 rho = torch.exp(-math.log(2.0) / hl)
+            if self.camp_decay < 1.0:
+                # R47: per-row factor a_t = rho * delta_t, with delta_t = camp_decay
+                # at the first row of a new campaign (padding rows, campaign 0,
+                # never count as a boundary).
+                if campaign is None:
+                    raise ValueError("camp_decay < 1 needs the campaign of every row")
+                cam = campaign.long()
+                prev_c = torch.cat([st["camp"][:, None], cam[:, :-1]], dim=1)
+                boundary = (cam != prev_c) & (cam > 0) & (prev_c > 0)
+                a = torch.where(boundary, torch.full_like(cam, 1, dtype=torch.float64)
+                                * max(self.camp_decay, 1e-12), torch.ones_like(cam, dtype=torch.float64))
+                if rho is not None:
+                    a = a * rho.double()
+                stock_pre = _mult_scan(w, a, st["stock"])
+            elif rho is not None:
                 within = mm.decayed_counts(w, rho)               # sum_{tau<t in chunk} w rho^(t-tau)
                 k = torch.arange(1, L + 1, device=dev, dtype=torch.float32)
                 lead = (rho.float() ** k).to(w.dtype)[None, :, None]
@@ -170,11 +227,20 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
         if self.pity_stream:
             pity, pity_carry = self._pity_scan(obtained_ids, prev_dec_ids, st["pity"])
 
+        camp_carry = st["camp"]
+        if campaign is not None:
+            camp_carry = torch.maximum(st["camp"], campaign.long().max(dim=1).values)
         carry = {"count": count[:, -1].detach(), "last": last[:, -1].detach(),
                  "stock": stock_pre[:, -1] if options else count[:, -1],
-                 "pity": pity_carry.detach()}
+                 "pity": pity_carry.detach(), "camp": camp_carry.detach()}
         if detach_carry:
             carry["stock"] = carry["stock"].detach()
+        if self.slot_state == "stock_only":
+            # The slots see holdings only through the decayed (pre-kernel) stock:
+            # it replaces the count, so "owned" and total holdings decay too.
+            # The true count stays in `carry` for the duplicate ranks.
+            count = torch.where(stock_pre > STOCK_FLOOR, stock_pre, torch.zeros_like(stock_pre))
+            since = torch.zeros_like(since)
         return count, since, stock, pity, carry
 
     def _pity_scan(self, obtained_ids, prev_dec_ids, carry):
@@ -349,7 +415,8 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
         L = lto_ids.size(1)
         t0 = int(st["t"])
         count, since, stock, pity, carry = self.computed_scan(obtained_ids.long(),
-                                                              prev_dec_ids.long(), st)
+                                                              prev_dec_ids.long(), st,
+                                                              campaign=campaign)
         r = self._rows(lto_ids, obtained_ids, prev_dec_ids, user_idx, count, since, stock, pity)
         s, hs, ks, vs = self._encode(r, st, t0)
         logits = self._head(s, user_idx, campaign)
@@ -385,6 +452,8 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
         B, S = prev_dec_ids.shape
         st0 = self.init_stream(B, lto_ids.device)
         if prefix_obtained is not None and prefix_obtained.size(1) > 0:
+            if self.camp_decay < 1.0:
+                raise ValueError("R45 prefixes carry no campaigns; camp_decay < 1 cannot use them")
             Lp = int(prefix_obtained.size(1))
             _, _, _, _, carry = self.computed_scan(prefix_obtained.long(), prefix_prev.long(),
                                                    {**st0, "t": -Lp}, detach_carry=False)
@@ -393,7 +462,8 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
             c = censored.to(lto_ids.device).float()
             st0["h"] = [(c[:, None] * self.censor_h0[i][None, :])[None].contiguous()
                         for i in range(len(self.event_model))]
-        count, since, stock, pity, _ = self.computed_scan(obtained_ids, prev_dec_ids, st0)
+        count, since, stock, pity, _ = self.computed_scan(obtained_ids, prev_dec_ids, st0,
+                                                          campaign=campaign)
         track = torch.is_grad_enabled() and stock.requires_grad
         stock_leaf = stock.detach().requires_grad_(True) if track else stock
 
@@ -446,6 +516,7 @@ def build_streaming(*, window: int, chunk: int, vocab_size_src: int, vocab_size_
     """Mirror of gen 5's build_transformer for the streaming hybrid."""
     return StreamingHybrid(
         window=window, chunk=chunk, censor_flag=kw.get("censor_flag", False),
+        slot_state=kw.get("slot_state", "full"), camp_decay=kw.get("camp_decay", 1.0),
         vocab_size_src=vocab_size_src, vocab_size_tgt=vocab_size_tgt,
         max_seq_len=max_seq_len or 0, ai_rate=ai_rate, d_model=d_model,
         n_layers=n_layers, n_heads=n_heads, d_ff=d_ff, dropout=dropout,
@@ -474,6 +545,7 @@ def build_from_cfg(cfg: Dict[str, Any], feature_tensor: torch.Tensor,
     """Rebuild from a run's cfg (trainer and rollout share this)."""
     return build_streaming(
         window=cfg["window"], chunk=cfg["chunk"], censor_flag=cfg.get("censor_flag", False),
+        slot_state=cfg.get("slot_state", "full"), camp_decay=cfg.get("camp_decay", 1.0),
         vocab_size_src=cfg["vocab_size_src"], vocab_size_tgt=cfg["vocab_size_tgt"],
         max_seq_len=0, d_model=cfg["d_model"], n_layers=cfg["N"],
         n_heads=cfg["num_heads"], d_ff=cfg["d_ff"], dropout=cfg["dropout"],
