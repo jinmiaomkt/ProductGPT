@@ -32,7 +32,7 @@ case "$part" in
       done
     done ;;
   b3)
-    hl="${2:?b3 needs B2's best half-life}"
+    hl="${2:?b3 needs the best half-life from B2}"
     for seed in 1 2 3; do
       for d in 1 0.5 0.1 0; do
         go "SEED=${seed},${COMMON},$(hl_vars "$hl"),SLOT_STATE=stock_only,CAMP_DECAY=${d},TAG=r47b3_hl${hl}_d${d}"
