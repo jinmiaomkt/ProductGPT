@@ -122,7 +122,7 @@ def main() -> None:
         e = json.loads(f.read_text())
         with np.load(f.with_name(f.stem + "_functionals.npz")) as z:
             E = {k: z[k] for k in z.files}
-        if not np.array_equal(E["real"], real):
+        if not np.array_equal(E["real"], real, equal_nan=True):
             problems.append(f"{f.stem}: real functionals differ from R36i's")
         if e["problems"]:
             problems += [f"{f.stem}: {p}" for p in e["problems"]]

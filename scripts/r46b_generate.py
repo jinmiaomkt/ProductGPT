@@ -284,7 +284,8 @@ def main() -> None:
     gates["B3_band"] = {"q95": S["q95"], "prefix_q95": PREFIX_Q95, "reproduced": q_ok}
     if not a.smoke:
         with np.load(r36i / "r36i_functionals.npz") as z:
-            same_real = bool(np.array_equal(z["real"], S["F_real"]))
+            # NaN marks a functional undefined for a customer (1,725 of 8,100 cells)
+            same_real = bool(np.array_equal(z["real"], S["F_real"], equal_nan=True))
         gates["B3_real_functionals_equal_r36i"] = same_real
         log(f"[B3] band q95 {S['q95']:.7f} vs R36i {PREFIX_Q95:.7f}: "
             f"{'REPRODUCED' if q_ok else 'NOT REPRODUCED'}; real functionals "
