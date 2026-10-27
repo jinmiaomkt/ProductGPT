@@ -5419,3 +5419,32 @@ on the laptop.
 - Gen-6 rollouts: R43 step 2, on hold behind R44.
 - Timing: the grid is fixed, as in R36.
 - Part C.
+
+**Amendment B-1 (27 Oct, before any real rollout): B1 on the obtained stream
+skips row 0 of a truncated window.**
+- **What the smoke found.** Smoke job 44354 (12 customers) failed B1 on the
+  obtained stream alone. Diagnostic job 44355 then checked all 300 customers:
+  - 335 of 159,253 non-empty entries mismatch, in 146 rows of 146 customers;
+  - none is on a holdout row;
+  - in every case the level-7 block is empty and the level-6 block holds a
+    product.
+
+  Decisions, previous decisions, campaigns, offers, labels and holdout rows
+  matched on every row. B2 passed exactly: zero block error, probabilities
+  within 3e-8 of T1's float32 values, and the first-holdout-row check exact.
+- **The cause.** `TransformerDataset` applies the R1 shift after truncation
+  (`gen5_multistream/dataset_multistream.py`, lines 306–329). So row 0 of any
+  truncated window is padding, where a longer window holds the real outcome
+  of the previous event.
+  - R36i's 384-row window is truncated for every customer with more than 384
+    events.
+  - At that row, the 1,024-row window has the outcome.
+- **Why it changes nothing.** This is a property of R36i's window, not a
+  misalignment.
+  - The policies read the level-6 stream, which is T1's information set.
+  - Every arm's functionals read the same level-7 stream.
+  - `_warm_pity` starts at row 1.
+- **The amended rule.** For a truncated window, grid row 0's level-7 obtained
+  block must be empty, and it is not compared. Every other row must still
+  match exactly. The job logs how many windows are truncated and at how many
+  of them level 6 holds an outcome.

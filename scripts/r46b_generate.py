@@ -116,7 +116,13 @@ def b1_alignment(S: dict, tab: dict, map76: np.ndarray) -> tuple:
     pos = {int(h): i for i, h in enumerate(tab["uid_hash"])}
     rows_by_chunk, off_by_chunk = [], []
     bad = {"missing": 0, "in_sample": 0, "negative_offset": 0, "prev": 0, "campaign": 0,
-           "lto": 0, "obtained": 0, "label": 0, "holdout_rows": 0}
+           "lto": 0, "obtained": 0, "label": 0, "holdout_rows": 0, "row0_not_empty": 0}
+    # Amendment B-1: TransformerDataset applies the R1 shift AFTER truncation, so
+    # row 0 of a truncated window carries padding where a longer window holds
+    # the real o_(start-1). For a customer whose 384-row window is truncated
+    # (offset > 0), grid row 0's obtained block must be empty at level 7 and is
+    # not compared; every other row must match exactly.
+    info = {"truncated_windows": 0, "row0_level6_nonempty": 0}
     for ch, b in zip(S["chunks"], S["batches"]):
         rows, offs = [], []
         for j, i in enumerate(ch):
@@ -139,13 +145,20 @@ def b1_alignment(S: dict, tab: dict, map76: np.ndarray) -> tuple:
             bad["prev"] += int((b["prev_decision"][j, :L7].numpy() != tab["prev"][r, w]).sum())
             bad["campaign"] += int((b["campaign"][j, :L7].numpy() != tab["campaign"][r, w]).sum())
             bad["lto"] += int((map76[b["lto"][j, :L7].numpy()] != tab["lto"][r, w]).sum())
-            bad["obtained"] += int((map76[b["obtained"][j, :L7].numpy()] != tab["obtained"][r, w]).sum())
+            o7 = map76[b["obtained"][j, :L7].numpy()]
+            o6 = tab["obtained"][r, w]
+            if off > 0:
+                info["truncated_windows"] += 1
+                bad["row0_not_empty"] += int((o7[0] != 0).any())
+                info["row0_level6_nonempty"] += int((o6[0] != 0).any())
+                o7, o6 = o7[1:], o6[1:]
+            bad["obtained"] += int((o7 != o6).sum())
             live = lab7 != 0
             bad["label"] += int((lab7[live] != tab["label"][r, w][live]).sum())
             bad["holdout_rows"] += int((live != (tab["holdout"][r, w] == 1)).sum())
         rows_by_chunk.append(np.array(rows))
         off_by_chunk.append(np.array(offs))
-    return rows_by_chunk, off_by_chunk, bad
+    return rows_by_chunk, off_by_chunk, bad, info
 
 
 def b2_replay(spec, theta, ctx, tab, rows, feats: Path, occ: Path) -> dict:
@@ -323,10 +336,12 @@ def main() -> None:
         ctx = PL.Context(tab, prod)
         map76 = PL.level7_to_6(config5.feature_file_path(S["cfg"]))
 
-        rows_by_chunk, off_by_chunk, bad = b1_alignment(S, tab, map76)
-        gates["B1_alignment"] = bad
+        rows_by_chunk, off_by_chunk, bad, info = b1_alignment(S, tab, map76)
+        gates["B1_alignment"] = dict(bad, **info)
         ok1 = not any(bad.values())
-        log(f"[B1] {sum(len(c) for c in S['chunks'])} customers; mismatches {bad}: "
+        log(f"[B1] {sum(len(c) for c in S['chunks'])} customers; mismatches {bad}; "
+            f"{info['truncated_windows']} truncated 384-row windows, whose row 0 is empty at "
+            f"level 7 (level 6 holds an outcome there for {info['row0_level6_nonempty']}): "
             f"{'PASS' if ok1 else 'FAIL'}")
         if not ok1:
             problems.append(f"B1: {bad}")
