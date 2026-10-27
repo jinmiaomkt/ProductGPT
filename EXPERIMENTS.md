@@ -5164,3 +5164,52 @@ dry-run token counts alone; no model had been run on real data.
   are left unchanged.
 - Step 3 runs as `qsub -v SHARD=k,NSHARDS=2,WHO=out,YARN=2
   scripts/r48_score_gpu.pbs` for k = 0, 1.
+
+**Step 3 — RESULT (27 Oct 2026): zero-shot loses to the GRU by 0.39 nats, and
+beats the constant by the same 0.39.** Jobs 44352 and 44353 (GPU, commit
+7751bc1, YaRN factor 2, exit 0). Each shard took about 1.6 h on one L40S, at
+about 3,100 tokens/s. `scripts/r48_summarise.py` (commit 1429775) pools the
+shards; its gate and metrics are smoke-tested on synthetic shards.
+- *Gate passes.* The rows are exactly the 2,502 out-of-sample customers' cells,
+  checked row for row (label and cell at each customer and position, with no
+  duplicates). The counts equal G1's: 1,259,900 + 217,303.
+- *Format:* the mean letter mass is 0.99999, so the model almost always answers
+  with one of the nine letters.
+
+| Out-of-sample customers | rows | zero-shot NLL | hit rate | constant (train shares) |
+|---|---|---|---|---|
+| **holdout period (headline)** | 217,303 | **1.2750** [1.2552, 1.2944] | 0.668 | 1.6638 |
+| calibration period | 1,259,900 | 1.7740 | 0.605 | 1.7122 |
+
+The interval is a 2,000-draw customer bootstrap over the 1,611 customers with
+headline rows. On the same rows, uniform is 2.197 and NotBuy's share (the
+majority class) is 0.407.
+
+- **H1 holds (off-the-shelf loses).** 1.2750 > 0.9856. The plain GRU is
+  0.8856 ± 0.0067 over seeds, so the gap is 0.39 nats, many times both
+  uncertainties. The pre-registered pairing with the GRU per occasion is still
+  to do: no per-occasion file exists for the b17 GRU (R30 kept summaries only).
+  It cannot change H1, but it is needed to compare where in the window each
+  model gains.
+- **H2 holds (not useless).** It beats the train-share constant on the same rows
+  by 0.389 [0.365, 0.415] (paired customer bootstrap). Zero-shot closes almost
+  exactly half the gap from the constant (1.664) to the GRU (0.886).
+- *Per decision, headline cell:* NotBuy 0.70, 1 draw on banner A 1.04,
+  1 draw on the Regular banner 1.95. The 10-draw decisions are the worst: Regular
+  7.70 (645 rows), banner B 3.45, Weapon 2.68.
+- *Exploratory, not pre-registered: zero-shot learns in context.* NLL falls
+  steadily with the occasion's position in the 1,024-occasion window. The
+  calibration period loses to the constant only because it sits early in the
+  window. At the same position the two periods are close.
+
+| position in window | calibration NLL | holdout NLL | constant |
+|---|---|---|---|
+| 0–63 | 2.81 | 3.29 (841 rows) | 1.72–1.83 |
+| 64–255 | 1.94 | 1.85 | 1.70–1.72 |
+| 256–511 | 1.49 | 1.32 | 1.65–1.72 |
+| 512–767 | 1.28 | 1.16 | 1.67–1.73 |
+| 768–1023 | 1.15 | 1.13 | 1.66–1.68 |
+
+  With fewer than 64 earlier occasions it is worse than uniform (2.197). Even
+  after 768 it stays about 0.25 nats above the GRU's cell average. Whether the
+  GRU also gains with position needs the paired per-occasion file.
