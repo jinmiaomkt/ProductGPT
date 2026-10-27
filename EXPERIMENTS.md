@@ -4606,6 +4606,68 @@ at R43's configuration.** All 18 runs exited 0. The ranking is from
   can be reused as gen 6's stage-4 runs. Gen-5 c06 needs seeds 2–5 (seed 1 is
   `b40_g5_c06_s1`). This is not submitted yet.
 
+**Stage 4 — APPROVED by Jin as drafted (27 Oct 2026).** Each family's frozen configuration on seeds 1–5, paired by seed,
+holdout opened once. There are 10 runs, of which 6 already exist:
+
+| family | configuration | seed 1 | seeds 2–5 |
+|---|---|---|---|
+| G5 | c06 | reused: `b40_g5_c06_s1` (stage 2) | **new: batch 42, `b42_g5_c06_s2`–`s5`** |
+| G6 | R43's (window 384, chunk 512) | reused: `b39_g6w384_s1` | reused: `b39_g6w384_s2`–`s5` |
+
+- **The reuse is like for like** (checked 27 Oct):
+  - *Code:* `git diff 93dcfbf..gen6-streaming` touches only analysis and submit
+    scripts, no training or model code.
+  - *Configurations:* each reused run's `final.json` reads model_rev 2 and
+    matches its frozen configuration. `b40_g5_c06_s1` is d96 N6, d_ff 288,
+    lr 3.24e-4, dropout 0.05, wd 0.01, accum 4, warmup 0.1, 1,024 occasions.
+    `b39_g6w384_s1`–`s5` are exactly `r44_frozen_g6.env`.
+  - *Batch 42* re-draws c06's stage-2 qsub string from `r44_sample.py` and
+    changes only SEED and TAG. A dry run with a stand-in `qsub` produced the
+    four strings.
+- **Disclosure 1: half of stage 4 is already open.** R43 step 1 read
+  `b39_g6w384`'s holdout (headline mean 0.8782). The freeze was mechanical,
+  by validation mean only, but stage 4 is not blind for gen 6. Gen-5 c06's
+  test cells have not been read.
+- **Disclosure 2: seed 1 was in both families' selection pool,** and was a
+  favourable validation draw for both:
+  - c06 s1 scored 0.8601 against a fresh-seed mean of 0.8777, a gap of
+    −0.018;
+  - R43 s1 scored 0.8741 against 0.8820, a gap of −0.008.
+
+  If that validation luck carries into the holdout, seed 1 tilts toward gen 5
+  by roughly 0.01. The decision stays on seeds 1–5 as pre-registered. Stated
+  now as a sensitivity reading, reported alongside: the same paired difference
+  on seeds 2–5, which never entered selection. Not proposed: moving gen 5 to
+  seeds 2–6, which would break pairing by seed with gen 6.
+- **Decision rule:** unchanged from the plan above. It uses G6 − G5 on
+  `outsample_users_holdout_period`, paired by seed:
+  - *better* if the mean is below −0.02 and at least 4 of 5 seeds are
+    negative;
+  - *worse* if the mean is above +0.02 and at least 4 of 5 are positive;
+  - *otherwise a tie.*
+
+  Also reported: the other two cells, parameters, minutes per epoch, peak
+  memory and the R43 length strata.
+- **Reader:** `scripts/r44_stage4.py` takes each family as explicit TAG:SEEDS
+  pieces, because the runs span three batches. It refuses mismatched seeds or
+  any model_rev other than 2, and prints the rule's verdict and the seeds 2–5
+  sensitivity. Tested on R43's already-open A and C runs, it reproduces the
+  step-1 table exactly (C − A +0.0006, 3/5 negative, a tie), so no new test
+  cell was opened. To run once, after batch 42:
+  `python3 scripts/r44_stage4.py --g5 b40_g5_c06:1 --g5 b42_g5_c06:2,3,4,5 --g6 b39_g6w384:1,2,3,4,5`.
+- **Timing:** 4 gen-5 runs at about 20–43 minutes each. Behind the 64 R45/R47
+  runs still queued at the two-GPU cap, they would start in about 8–9 hours.
+  Holding R47's queued jobs (`qhold`, then `qrls`) delays R47 by about 1 hour.
+  *Correction after approval:* that hold does not make batch 42 run next. At
+  16:13 the 18 queued and 2 running R45 runs were still ahead of it, so batch
+  42 starts once R45 part A drains (about 2.5–3 hours). R45 is left alone, as
+  approved. R47 is released once all four batch-42 runs have started. Held
+  jobs keep their place in the queue, so releasing R47 earlier would put it
+  back ahead of the batch-42 runs still waiting.
+- **Consequence for R45 part B:** its input, "stage 4's gen-6 runs", is
+  `b39_g6w384` seeds 1–5, which already exist. Part B (GPU,
+  `r45_eval_chopped.pbs`) therefore does not have to wait for batch 42.
+
 ### R45 — PLAN (approved by Jin 26 Oct 2026; part A submitted 27 Oct): controlled left-censoring on complete histories
 
 **Question (Jin's).** What does it cost to learn from histories whose start is
