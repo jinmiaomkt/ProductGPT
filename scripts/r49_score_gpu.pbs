@@ -1,0 +1,59 @@
+#!/bin/bash
+#PBS -N r49_score
+#PBS -l select=1:ncpus=8:ngpus=2:mem=64GB
+#PBS -q GPU
+#PBS -l walltime=12:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+# ============================================================================
+# R49 step 3, GPU: one arm on one shard of the out-of-sample customers.
+#   ARM=a  Qwen3-32B    R48's venv (transformers 4.57.6), YaRN factor 2 as R48
+#   ARM=b  Qwen3.6-27B  productgpt-llm5 (transformers 5.21.0), native 262,144
+# bf16 weights split over the job's two L40S (no quantisation).  Every job first
+# runs the self-check (T3/T4 with the real model on the GPU) and stops if it fails.
+#
+#     cd ~/ProductGPT/work_r48
+#     qsub -v ARM=b,SHARD=0,NSHARDS=4 scripts/r49_score_gpu.pbs     (etc.)
+#
+# Writes $R49/<tag>_out_shard<k>.npz/.json; a finished shard is skipped.
+# ============================================================================
+set -eo pipefail
+module purge
+module load python/3.11.4
+cd "$PBS_O_WORKDIR"
+export PYTHONUNBUFFERED=1 OMP_NUM_THREADS=8 HF_HUB_OFFLINE=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+: "${ARM:?pass ARM=a|b}" "${SHARD:?pass SHARD}" "${NSHARDS:?pass NSHARDS}"
+WHO="${WHO:-out}"
+ROOT=/storage/home/jinmiao/ProductGPT
+case "$ARM" in
+    a) M=Qwen3-32B;   VENV=productgpt-llm;  YARN=2; TAG=qwen3_32b ;;
+    b) M=Qwen3.6-27B; VENV=productgpt-llm5; YARN=0; TAG=qwen36_27b ;;
+    *) echo "ARM must be a or b"; exit 2 ;;
+esac
+source "$ROOT/venvs/$VENV/bin/activate"
+R46=$ROOT/runs/r46
+R49=$ROOT/runs/r49
+mkdir -p "$R49"
+LOG=$ROOT/logs/r49_score_${TAG}_${WHO}_s${SHARD}_${PBS_JOBID%%.*}.log
+exec > >(tee -a "$LOG") 2>&1
+echo "R49 score ARM=$ARM ($M) WHO=$WHO SHARD=$SHARD/$NSHARDS YARN=$YARN on $(hostname) at $(date), commit $(git rev-parse --short HEAD)"
+cat "$ROOT/models/$M/REVISION.txt"
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+
+set +e
+python -m llm_zeroshot.score --table "$R46/occasions_v6_S1024.npz" --model "$ROOT/models/$M" \
+    --out-dir "$R49" --tag ${TAG}_${WHO} --who "$WHO" \
+    --shard "$SHARD" --n-shards "$NSHARDS" --yarn "$YARN" --n-gpus 2 --selfcheck --device cuda
+rc=$?
+set -e
+if [ $rc -eq 0 ]; then
+    bash "$PBS_O_WORKDIR/scripts/notify.sh" "OK  R49 ${TAG} ${WHO} shard ${SHARD}/${NSHARDS} (job ${PBS_JOBID%%.*})" || true
+else
+    bash "$PBS_O_WORKDIR/scripts/notify.sh" "FAIL R49 ${TAG} ${WHO} shard ${SHARD}/${NSHARDS} exit=${rc} (job ${PBS_JOBID%%.*})" || true
+fi
+exit $rc

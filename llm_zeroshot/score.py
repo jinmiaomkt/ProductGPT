@@ -274,6 +274,9 @@ def main() -> None:
                         "model_class": type(model).__name__,
                         "transformers": transformers.__version__,
                         "torch": torch.__version__, "selfcheck": check})
+        if torch.cuda.is_available():
+            summary["gpu_peak_gb"] = [round(torch.cuda.max_memory_allocated(i) / 1e9, 1)
+                                      for i in range(torch.cuda.device_count())]
     if not a.dry_run:
         arr = {k: np.concatenate(v) for k, v in rows.items()}
         np.savez_compressed(stem.with_suffix(".npz"), **arr)

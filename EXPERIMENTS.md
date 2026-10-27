@@ -5278,3 +5278,119 @@ from useless: it learns each player's habits in context, and given a long
 enough history it captures two-thirds of the GRU's gain over class shares. Its
 losses concentrate early in a player's history and on the 10-draw decisions.
 In-sample scoring (WHO=in) was not run; for a zero-shot model it is equivalent.
+
+### R49 — PLAN (27 Oct 2026, at Jin's request; nothing run on real data): larger off-the-shelf LLMs, zero-shot, same prompt as R48
+
+**Why.** After R48, Jin asked to try "slightly more advanced off-the-shelf
+models". The obvious objection to R48 is that an 8B model is small. R49 asks
+whether a larger or newer open model, used the same way, closes the 0.39-nat
+gap to the GRU.
+
+**Arms.** Each arm changes the model and nothing else. The information, the
+prompt text, the scoring and the rows are R48's.
+- **A, more parameters: Qwen3-32B** (Apache-2.0, April 2025). Same family,
+  tokenizer and chat format as R48's Qwen3-8B, with 4× the parameters (64
+  layers, dense attention). Its `tokenizer.json` is byte-identical to Qwen3-8B's,
+  so every transcript is the same token sequence as in R48. Native context is
+  32,768, so it uses R48's YaRN factor 2 for every customer, as R48 did.
+- **B, a newer generation: Qwen3.6-27B** (Apache-2.0, released 22 Apr 2026). Qwen's
+  current dense model of comparable size. It has 64 layers: 48 Gated DeltaNet
+  (linear-attention) layers and 16 full-attention layers. Its native context is
+  262,144, so no rope scaling is applied. It has a new 248k-token vocabulary.
+  The checkpoint includes a vision tower, but only the text model is loaded.
+
+Both fit the 2-GPU-per-user allowance (2 × 44.5 GB) in bf16, without
+quantisation. A 70B model (e.g. Llama-3.3, Centaur) would need 4-bit weights.
+Closed frontier models (GPT-5, Claude) do not return token probabilities, so
+they cannot give the same NLL.
+
+**Fixed in advance (nothing is tuned; campaign 27 selects nothing).**
+- *Prompt:* `llm_zeroshot/prompt.py` is unchanged, so the transcripts are R48's,
+  character for character.
+- *Chat format:* both chat templates give exactly R48's ChatML in non-thinking
+  mode. T1 compares the hand-written format with each model's own
+  `apply_chat_template` and passes for both.
+- *Scoring:* R48's single forward pass per customer, with the nine letters
+  renormalised. bf16 weights are split layer by layer over the job's two L40S
+  (`device_map="balanced"`), with no quantisation.
+- *Software:*
+  - Arm A runs in R48's venv (transformers 4.57.6).
+  - Arm B needs transformers ≥ 5 for the Qwen3.6 architecture, so it gets a
+    separate venv `productgpt-llm5` (transformers 5.21.0, torch 2.6.0). Its
+    linear-attention layers run transformers' reference PyTorch path, with a
+    float32 recurrence. That is the path the tests exercise;
+    flash-linear-attention is not installed.
+- *Rows:* the 2,502 out-of-sample customers in 4 shards; both out-of-sample
+  cells (1,259,900 + 217,303). No customer is truncated or dropped.
+
+**Hypotheses and decision rules** (out-of-sample × holdout cell, as in R48).
+- **H1, still loses (each arm):** headline NLL > 0.9856, i.e. more than 0.10
+  nats worse than the plain GRU. This is R48's rule. The paired d against the
+  five GRU seeds is reported as in R48 step 4.
+- **H2, better than R48 (each arm):** paired against Qwen3-8B on the same
+  occasions, d = NLL(arm) − NLL(Qwen3-8B) < −0.02, the project's adoption
+  margin, with the 95% customer-bootstrap interval excluding zero.
+- **Prediction, written before any run:** both arms improve on Qwen3-8B, by
+  roughly 0.05–0.2 nats, and both still lose to the GRU by more than 0.10.
+- **Decision.**
+  - If H1 holds for both arms, "off-the-shelf loses on prediction" extends from
+    8B to the strongest open models that fit our hardware. The 8B → 32B
+    difference is reported as the return to scale.
+  - If H1 fails for an arm (within 0.10 of the GRU), the prediction claim is
+    narrowed to small models. By R48's rule the comparison then rests on
+    generation.
+  - Either way the next rung (a behavioural model such as Centaur, or a prompt
+    with the game's rules and worked examples) is Jin's call.
+- *Descriptive only:* arm B − arm A. It mixes generation, architecture,
+  tokenizer and 5B parameters, so it is not a one-factor contrast.
+- *Exploratory:* NLL and d by position in the window, per decision, and the
+  letter mass, as in R48.
+- One run per arm. Inference is deterministic, so uncertainty comes from the
+  customer bootstrap. No adoption rule applies; this is a benchmark.
+
+**Steps and gates.**
+0. *Laptop CPU tests, 27 Oct: ALL PASS.* No data and no GPU were used.
+   - `scripts/test_r48_zeroshot.py` T1–T6 pass three ways:
+     - the Qwen3-32B tokenizer with a tiny Qwen3;
+     - the Qwen3.6-27B tokenizer with a tiny random Qwen3.5/3.6 hybrid (three
+       Gated DeltaNet layers and one attention layer, `--arch qwen3_5`):
+       T3 max |diff| 5.7e-6, T4 0.0 in float64;
+     - R48's own configuration again, unchanged.
+   - A tiny *multimodal* Qwen3.5 checkpoint loads text-only with no missing
+     weight, and its logits equal the multimodal model's (difference 0.0).
+   - `llm_zeroshot.score.selfcheck` passes on CPU for both architectures.
+   - `scripts/r49_pair_llms.py` recovers planted gaps exactly on synthetic shards
+     and fails its gate when a row is missing.
+1. *Login node* (`scripts/r49_setup_login.sh`): venv `productgpt-llm5` and both
+   models' weights. The Hub commit of each is written to `REVISION.txt`.
+2. *CPU, short queue* (`scripts/r49_dryrun_cpu.pbs`): for each arm, the tests
+   with the downloaded tokenizer, the dry run (token lengths only) and
+   `scripts/r49_load_check.py` (bf16 weights loaded on CPU). Gates:
+   - the tests pass and every answer letter is found;
+   - arm A's token lengths equal R48's;
+   - no weight is missing or mis-shaped.
+3. *GPU* (`scripts/r49_score_gpu.pbs`, 2 L40S per job, 4 shards per arm, arms
+   interleaved). Each job first runs `--selfcheck`: T3 and T4 on a synthetic
+   customer with the real model in bf16 on the GPU. It stops if one pass differs
+   from per-occasion queries, or earlier predictions move, by more than 0.1 nats.
+   A look-ahead would move them by whole nats. Gate: R48's row gate,
+   `scripts/r48_summarise.py --n-shards 4`.
+4. *Analysis:*
+   - `r48_summarise.py` per arm;
+   - `r48_pair_gru.py` per arm against the five GRU seeds (H1);
+   - `r49_pair_llms.py --ref qwen3_8b_out:<runs>/r48:2` with both arms (H2 and
+     the descriptive B − A).
+
+**Compute.** These are estimates, until the first job measures the rate. Scaling
+R48's measured rate (3,100 tokens/s for 8B) by parameter count gives about 13 h
+of 2-GPU time for arm A and 11–12 h for arm B, about 25 h in all. Each job holds
+the account's whole 2-GPU allowance, so no other GPU job of Jin's runs at the
+same time. On 27 Oct the queue held R47 B2 ahead of R49 (22 jobs of 10–25 min).
+
+**Code.** Branch `r48-zeroshot`, which extends R48's code; R48's defaults are
+unchanged.
+- Modified: `llm_zeroshot/score.py` (`--n-gpus`, `--selfcheck`, transformers 5)
+  and `scripts/test_r48_zeroshot.py` (`--arch`).
+- New: `llm_zeroshot/synthetic.py`, `scripts/r49_setup_login.sh`,
+  `scripts/r49_dryrun_cpu.pbs`, `scripts/r49_load_check.py`,
+  `scripts/r49_score_gpu.pbs` and `scripts/r49_pair_llms.py`.

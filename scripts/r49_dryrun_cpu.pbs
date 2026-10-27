@@ -1,0 +1,50 @@
+#!/bin/bash
+#PBS -N r49_dryrun
+#PBS -l select=1:ncpus=8:mem=96GB
+#PBS -q short
+#PBS -l walltime=06:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+# ============================================================================
+# R49 step 2, CPU, for each arm:
+#   - the unit tests with the downloaded tokenizer (and, for arm B, the tiny
+#     hybrid Gated DeltaNet model)
+#   - the dry run: every transcript tokenised, no weights loaded, token-length
+#     distribution only (aggregates)
+#   - the load check: bf16 weights loaded on CPU as the scorer loads them; no
+#     weight may be missing or mis-shaped
+# Arm A (Qwen3-32B) runs in R48's venv; arm B (Qwen3.6-27B) in productgpt-llm5.
+#
+#     cd ~/ProductGPT/work_r48 && qsub scripts/r49_dryrun_cpu.pbs
+# ============================================================================
+set -eo pipefail
+module purge
+module load python/3.11.4
+cd "$PBS_O_WORKDIR"
+export PYTHONUNBUFFERED=1 OMP_NUM_THREADS=8 CUDA_VISIBLE_DEVICES="" HF_HUB_OFFLINE=1
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+ROOT=/storage/home/jinmiao/ProductGPT
+R46=$ROOT/runs/r46
+R49=$ROOT/runs/r49
+mkdir -p "$R49"
+LOG=$ROOT/logs/r49_dryrun_${PBS_JOBID%%.*}.log
+exec > >(tee -a "$LOG") 2>&1
+echo "R49 dry run on $(hostname) at $(date), commit $(git rev-parse --short HEAD)"
+
+run_arm () {      # venv, model dir, tag, test arch, yarn
+    source "$ROOT/venvs/$1/bin/activate"
+    echo "=== $3: $2 ($(python -c 'import transformers; print("transformers", transformers.__version__)'))"
+    cat "$2/REVISION.txt"
+    python scripts/test_r48_zeroshot.py --tokenizer "$2" --arch "$4"
+    python -m llm_zeroshot.score --table "$R46/occasions_v6_S1024.npz" --model "$2" \
+        --out-dir "$R49" --tag "$3_out" --who out --dry-run
+    python scripts/r49_load_check.py --model "$2" --yarn "$5"
+    deactivate
+}
+run_arm productgpt-llm  "$ROOT/models/Qwen3-32B"   qwen3_32b  qwen3   2
+run_arm productgpt-llm5 "$ROOT/models/Qwen3.6-27B" qwen36_27b qwen3_5 0
+echo "R49 dry run done at $(date)"
+bash "$PBS_O_WORKDIR/scripts/notify.sh" "R49 dry run finished (job ${PBS_JOBID%%.*})" || true

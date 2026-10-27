@@ -11,7 +11,7 @@
 #                                   which the text-only scorer never loads)
 #     The commit of each download is written to <model>/REVISION.txt.
 #
-#     cd ~/ProductGPT/work_r48 && nohup bash scripts/r49_setup_login.sh \
+#     cd ~/ProductGPT/work_r48 && nohup bash -l scripts/r49_setup_login.sh \
 #         > ~/ProductGPT/logs/r49_setup.log 2>&1 &
 # ============================================================================
 set -euo pipefail
