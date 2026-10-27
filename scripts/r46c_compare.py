@@ -106,7 +106,8 @@ def c1(out: Path, pre: str, smoke: bool) -> dict:
         recovered = float((np.abs(bz[test]) < 3).mean()) if test.any() else float("nan")
         say(f"   coefficients: {len(labels)}; tested (shared, identified, non-rare) {int(test.sum())}; "
             f"recovered |bias z| < 3: {recovered:.3f}; pooled 95% coverage {pooled:.3f}")
-        worst = np.argsort(-np.nan_to_num(np.abs(bz) * test, nan=0.0))[:6]
+        tested = np.flatnonzero(test)
+        worst = tested[np.argsort(-np.nan_to_num(np.abs(bz[tested]), nan=0.0))[:6]]
         say("   largest |bias z| among tested: " + ", ".join(f"{labels[i]} {bz[i]:+.1f}" for i in worst))
         keys = [k for k in IC.SD_QUANTITIES + IC.HG_QUANTITIES if k in runs[0]["fit"]["quantities"]]
         qs = {}
