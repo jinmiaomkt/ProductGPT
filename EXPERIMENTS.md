@@ -5510,3 +5510,50 @@ failure is the same problem in miniature: float32 rounding that varies by node.
 *Unit test correction.* T3 now runs in float64 with T4's architecture bound
 (1e-10 for Qwen3, 1e-6 for the hybrid). On the laptop it gives 7e-15 for both.
 All eight shards are resubmitted, in the original order, only once rule 1 holds.
+
+**Diagnostic result (28 Oct, 01:08; jobs 44508–44510, all on node a-11): no
+leak, in any of the three models.**
+
+The table shows the worst value over the customers. "True" is the mean
+|Δ log p| of the true letter. "TV" is the mean total-variation distance. All
+values are bf16.
+
+| | Qwen3-8B (R48, 1 GPU) | Qwen3-32B (A) | Qwen3.6-27B (B) |
+|---|---|---|---|
+| repeat, every statistic | 0.0 | 0.0 | 0.0 |
+| t4c before t, every statistic (incl. the 15.9k-token customer) | **0.0** | **0.0** | **0.0** |
+| t4c after t, largest | 11.1 | 3.29 | 4.40 |
+| t4 before t: largest / true / TV | 1.68 / 0.21 / 0.049 | 1.50 / 0.12 / 0.035 | 0.26 / 0.067 / 0.024 |
+| t3: largest / true / TV | 1.25 / 0.18 / 0.033 | 1.24 / 0.082 / 0.026 | 0.55 / 0.050 / 0.018 |
+| t3 true, seed 2 (the in-job customer) | 0.095 | 0.067 | 0.050 |
+| one pass − prefixes, mean NLL per customer | +0.022, −0.013, +0.023 | +0.022, +0.003, −0.014 | −0.001, −0.010, −0.001 |
+
+- **Rule 1 holds.** With the length fixed, every earlier prediction is
+  bit-for-bit identical, and repeat runs are bit-for-bit identical. So
+  differences appear only when a shape changes, and they are rounding.
+  - This includes R48's Qwen3-8B, so the R48 result is not in question on
+    leakage.
+  - t4 before t is also exactly 0 for two of the four customers per model:
+    those length changes left the kernel choices unchanged.
+- **My bf16-logit explanation was wrong.** With the output head in float32 the
+  numbers barely move (27B t3 true 0.050 → 0.034; 32B 0.082 → 0.068; 8B
+  0.18 → 0.15). The differences come from the bf16 hidden states, through
+  36–64 layers, not from rounding the logits.
+- **Rule 2.** Both arms pass the new gate on every customer: worst t3 true
+  0.082 (A) and 0.050 (B), against 0.1.
+  - Qwen3-8B would not: 0.18 worst, 0.095 on the in-job customer.
+  - That statistic grows with how confidently a model is wrong. On these
+    random synthetic decisions the 8B's NLL is 5.4–5.8, against 2.5–3.1 for
+    the larger models. In distribution terms (TV) the three models are close:
+    0.033, 0.026 and 0.018.
+  - The gate is not loosened, and it is not applied to R48.
+- **Rule 3, for the write-up.** Every model's per-occasion log-probabilities
+  carry bf16 rounding of this size. Per synthetic customer, the mean NLL moves
+  by up to ±0.023 between two equally valid evaluations.
+  - Nothing here says whether bf16 is *biased* relative to exact arithmetic.
+    That needs a float32 reference, which on our GPUs is possible only for the
+    8B (32 GB in float32).
+  - The R48 and R49 headlines are means over 217,303 occasions of 2,502
+    customers. The paired H2 contrast compares two bf16 pipelines.
+- **Resubmitted 28 Oct, 01:12 at dc28ac8:** jobs 44511–44518, in the order B0,
+  A0, B1, A1, B2, A2, B3, A3.
