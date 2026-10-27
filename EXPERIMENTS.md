@@ -4735,9 +4735,17 @@ stage-4 gen-6 runs.
 **Part A — SUBMITTED (27 Oct 2026): jobs 44361–44399 (39 runs)** from
 `~/ProductGPT/work_r45` at `8fae1d7`, on R44's frozen gen-6 configuration (R43's).
 PBS's variable lists for jobs 44361 (L), 44362 (T), 44364 (ZF) and 44373
-(count, 128) show the frozen line and each arm's chop settings. When they were
-submitted, the two GPUs were held by another session's `r48_score` jobs, so
-the run logs are not yet read.
+(count, 128) show the frozen line and each arm's chop settings. The logs of
+those four jobs (27 Oct, 16:00) confirm it:
+- **Code and configuration:** git `8fae1d7`, `[chop]` lines as intended, 40
+  epochs, patience 5, validation on campaign 27.
+- **Training rows:** L keeps all 1,091,391 (labels masked), T and Z keep
+  960,015 at k = 1, and count-128 keeps 794,273.
+- **Parameters:** ZF has 672 more (1,482,908; the censor vector and one h0
+  per layer).
+- **Speed:** about 37 s per epoch, 5.5 GB.
+
+17 runs had finished with exit 0 by then.
 
 *Part B pipeline tested* (job 44273, CPU, the 2-epoch smoke checkpoint, so
 the NLLs mean nothing):
