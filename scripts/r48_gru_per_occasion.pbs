@@ -1,0 +1,40 @@
+#!/bin/bash
+#PBS -N r48_gru_occ
+#PBS -l select=1:ncpus=8:mem=32GB
+#PBS -q short
+#PBS -l walltime=03:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+# ============================================================================
+# R48 step 4, CPU: score one seed of the b17 plain GRU (level 6, the 0.8856
+# reference) on every occasion of the two out-of-sample cells, so the zero-shot
+# LLM can be paired with it occasion by occasion. Inference only.
+#
+#     cd ~/ProductGPT/work_r48
+#     for s in 1 2 3 4 5; do qsub -v SEED=$s scripts/r48_gru_per_occasion.pbs; done
+#
+# Float32 on CPU; the runs were evaluated in bf16 on a GPU. scripts/r48_pair_gru.py
+# checks each file's per-cell mean NLL against the run's final.json.
+# Writes $OUT/b17_gru_v6_s<SEED>.npz (see scripts/eval_per_occasion.py).
+# ============================================================================
+set -eo pipefail
+module purge
+module load python/3.11.4
+cd "$PBS_O_WORKDIR"
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
+export PYTHONUNBUFFERED=1 OMP_NUM_THREADS=8 CUDA_VISIBLE_DEVICES=""
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+: "${SEED:?pass SEED}"
+RUN=/storage/home/jinmiao/ProductGPT/runs/gen5_hpcc_S1024_b4_b17_gru_v6_s${SEED}
+OUT=/storage/home/jinmiao/ProductGPT/runs/r48/gru_b17
+mkdir -p "$OUT"
+LOG=/storage/home/jinmiao/ProductGPT/logs/r48_gru_s${SEED}_${PBS_JOBID%%.*}.log
+exec > >(tee -a "$LOG") 2>&1
+echo "R48 GRU per-occasion, seed $SEED, on $(hostname) at $(date), commit $(git rev-parse --short HEAD)"
+
+python scripts/eval_per_occasion.py --ckpt "$RUN/gen5_multistream/hpcc/best.pt" --out-dir "$OUT" \
+    --cells outsample_users_calib_period,outsample_users_holdout_period
+echo "R48 GRU seed $SEED done at $(date)"

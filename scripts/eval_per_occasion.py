@@ -22,6 +22,10 @@ occasion of the out-of-sample x holdout cell:
                        0 = limited 5-stars offered, none owned (the placebo)
                       -1 = no individually identified limited product on offer
     n_ltd      int16   distinct limited 5-stars owned before the occasion
+    cell       int8    test cell, coded as llm_zeroshot.score.CELL_NAMES
+
+`--cells` scores other test cells as well (R48 adds the out-of-sample x
+calibration cell, to pair the GRU with the zero-shot LLM by position).
 
 Subgroup features are computed in the LEVEL-6 id space for every model (level-7
 tokens are collapsed with ProductVocab7.xlsx), so a level-6 and a level-7 model
@@ -62,6 +66,9 @@ from train5_multistream import (
 )
 
 CELL = "outsample_users_holdout_period"
+# the codes of llm_zeroshot.score.CELL_NAMES, so R48 can pair the two files
+CELL_CODES = {"insample_users_holdout_period": 2, "outsample_users_calib_period": 3,
+              "outsample_users_holdout_period": 4}
 N_CLASSES = 9
 LTD_LO, LTD_HI = 18, 56          # individually identified limited 5-stars, level-6 ids
 LEVEL6_TOP = 60
@@ -116,7 +123,11 @@ def main() -> None:
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--max-batches", type=int, default=0, help="smoke test only")
+    ap.add_argument("--cells", default=CELL, help="comma-separated test cells")
     a = ap.parse_args()
+    cells = a.cells.split(",")
+    if not set(cells) <= set(CELL_CODES):
+        raise SystemExit(f"unknown cell in {cells}; choose from {list(CELL_CODES)}")
 
     ckpt = Path(a.ckpt)
     tag = ckpt.parent.parent.parent.name.split("_b4_")[-1]
@@ -147,9 +158,10 @@ def main() -> None:
     to6 = collapse_table(cfg).to(device)
     first = cfg["first_prod_id"]
 
-    out = {k: [] for k in ("uid_hash", "pos", "label", "nll", "owned_offer", "n_ltd")}
+    out = {k: [] for k in ("uid_hash", "pos", "label", "nll", "owned_offer", "n_ltd", "cell")}
+    batches = ((cell, batch) for cell in cells for batch in tests[cell])
     with torch.no_grad():
-        for bi, batch in enumerate(tests[CELL]):
+        for bi, (cell, batch) in enumerate(batches):
             if a.max_batches and bi >= a.max_batches:
                 break
             lto = batch["lto"].to(device)
@@ -197,6 +209,7 @@ def main() -> None:
             out["nll"].append(nll[mask].cpu().numpy().astype(np.float32))
             out["owned_offer"].append(owned_offer[mask].cpu().numpy())
             out["n_ltd"].append(n_ltd[mask].cpu().numpy().astype(np.int16))
+            out["cell"].append(np.full(int(mask.sum()), CELL_CODES[cell], np.int8))
 
     arr = {k: np.concatenate(v) for k, v in out.items()}
     od = Path(a.out_dir).expanduser()
@@ -206,6 +219,10 @@ def main() -> None:
     print(f"[r31] {tag}: {len(arr['nll']):,} occasions from {len(np.unique(arr['uid_hash'])):,} customers; "
           f"mean NLL {arr['nll'].mean():.4f}; owned-offer {int((oo == 1).sum()):,} / "
           f"not-owned {int((oo == 0).sum()):,} / no limited offer {int((oo == -1).sum()):,}")
+    for cell in cells:
+        m = arr["cell"] == CELL_CODES[cell]
+        print(f"[r31] {tag} {cell}: {int(m.sum()):,} occasions, "
+              f"mean NLL {arr['nll'][m].astype(np.float64).mean():.6f}")
     print(f"[r31] wrote {od / (tag + '.npz')}")
 
 
