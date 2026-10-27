@@ -38,7 +38,7 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 44309[], 44310 | the R5-based stage 2 and read-out | 2026-10-26 | — | cancelled (amendment 7) |
 | 44315[] (20 elements) | `runs/r46/R6_K*_s*`, R6 = R4 + classes (CPU long, 16 CPUs, 128 GB, `70320f9`) | 2026-10-26 | R46 part A stage 2 | done, all exit 0 |
 | 44316 | `runs/r46/compare_*.json` | 2026-10-26 | R46 read-out | done 27 Oct 02:01; result in R46 part A |
-| 44338 | `runs/r46/se/R6_K6_s1` (CPU long, `ffbc46b`) | 2026-10-27 | R46 stage 3: SEs of the selected R6 | running (qstat 27 Oct 10:07) |
+| 44338 | `runs/r46/se/R6_K6_s1` (CPU long, `ffbc46b`) | 2026-10-27 | R46 stage 3: SEs of the selected R6 | done 10:18, exit 0; recorded under R46 stage 3 |
 | 44311[], 44314[] | `runs/r46_mc/{R1b,R3,R6_K2}` | 2026-10-26 | R46 SE coverage | done; see the coverage table |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
@@ -5181,3 +5181,241 @@ generates closer to the real sequences than free-running ProductGPT does.
 **Stage 3.** Sandwich SEs for R6_K6_s1 are job `44338` (long queue), written
 to `runs/r46/se/R6_K6_s1` so this read-out's files are untouched. It started
 at the estimate: training NLL 1.09023, max |gradient| 3e-14.
+
+### R46 — stage 3: sandwich SEs for the selected R6 (job 44338, 27 Oct 2026)
+
+- **The run.** Exit 0 in 11 minutes. It stayed at the stage-2 estimate:
+  - training NLL 1.09022777 in both runs, max |Δθ| 0;
+  - headline NLL 0.982646 in both.
+
+  The T1 read-out above is unchanged.
+- **Identification.**
+  - 196 of 197 SEs are finite. `fig[5]`, one element dummy, never varies on
+    the training rows and is not identified.
+  - The Hessian is not negative definite. The four coefficients on its
+    near-flat directions are all rare cells:
+    - three lag cells for a history's first decision: none → Buy1-FigB, none
+      → Buy1-Wep and none → Buy10-Wep;
+    - `unoff_b` = −14.2. No training customer bought Figure-B while it was
+      unoffered, so its MLE is −∞ and the ridge holds it.
+  - 9 coefficients are flagged rare.
+- **Coefficients (sandwich SE).**
+
+  | coefficient | estimate (SE) |
+  |---|---|
+  | banner loyalty | 2.35 (0.04) |
+  | buy incidence | 0.53 (0.07) |
+  | ten-pull | 1.92 (0.06) |
+  | copies of the featured figure, 1 / 2 / 3+ | −0.51 / −0.23 / −0.45 (SEs 0.01–0.04) |
+  | limited 5★ owned | −0.18 (0.006) |
+  | same-element limited figures owned | +0.15 (0.01) |
+  | the guarantee | +0.01 (0.008); indistinguishable from zero once holdings and pity are in |
+  | weapon losses, 1 / 2+ | +0.34 / +0.42 (0.03) |
+
+- **Half-lives**, delta method: decisions 1.76 (0.09), outcomes 3.49 (0.18)
+  occasions. By the G3 coverage result these are NOT the intervals to quote.
+- **Class weights:** 0.20, 0.21, 0.22, 0.13, 0.18, 0.07.
+
+### R46 — PLAN, part B (T2, generation), pre-registered 27 Oct 2026 before any rollout: the classical ladder as generators on the R36i yardstick
+
+**Question.** Part A: the classical ladder predicts worse than every neural
+cell (R6 0.9826 against the GRU's 0.8856). R36i: free-running ProductGPT
+generates worse than a 9×9 Markov chain (3.169 against 0.784). Part B asks
+two things.
+1. Fed their own output, do the identified state-dependence models stay
+   close to the real sequences? That is, does a model that predicts worse
+   generate better ("accuracy ≠ licence to simulate")?
+2. Which piece of state, fed back, helps or hurts?
+
+**What runs.**
+
+| arm | policy | re-drawn | seeds |
+|---|---|---|---|
+| free-running rung (×9) | M0, M1, R0, R1, R1b, R2, R3, R4 and R6 (K = 6, start 1), at their part-A estimates | decisions and acquisitions, both fed back | draws 17, 18, 19 |
+| teacher-forced rung (×9; diagnostic) | the same | decisions only; both input streams stay real | draws 17, 18, 19 |
+| reference | R36i's i.i.d. and Markov-1 (`simulation/baselines.py`) | as in R36i | draws 17, 18, 19 |
+
+- Nothing is re-estimated, tuned or tempered.
+- **The primary policy is R6**, selected in part A on campaign 27. No
+  generation result chooses among rungs.
+
+**The yardstick: R36i's, unchanged.**
+- **Cell and customers.** The `outsample_users_holdout_period` cell of
+  b33_campfe_hl2's data configuration (level 7, context 384). The same 300
+  customers (`default_rng(0)`) and 22,490 holdout rows, 8 replicates, chunks
+  of 6.
+- **Environment.** The same `AcquisitionEnv`, fitted on 600 training
+  customers' calibration rows, with pity warmed on each sequence's real
+  prefix.
+- **Scoring.** The same 27 functionals and scaler (fitted on the real set),
+  the same split-half band (120 splits, seed 3) and C2ST (5 folds, seed 0).
+  The band must reproduce q95 = 0.0781258 exactly.
+- **Comparators.** R36i's stored runs (job 42879, `results/r36i/r36i.json`),
+  not re-run:
+  - free-running b33: 3.169 ± 0.381;
+  - scheduled sampling: 1.311 at p = 0.35 and 1.710 at p = 0.15;
+  - Markov-1 0.784; i.i.d. 2.468;
+  - teacher-forced b33 0.417 and arm C −0.000, both diagnostic controls.
+
+**How a rung becomes a policy (`parametric/policy.py`).**
+- **The information set is T1's exactly.** Each scored customer's level-6
+  occasion row (matched by uid hash), with its 1,024-row window and
+  pre-window inventory.
+  - The level-7 R36i grid is the tail of the same event sequence, so grid row
+    t is window row t + offset.
+  - Each family keeps its own information set, as in T1: b33 reads level 7
+    over 384 rows, the rungs read level 6 over 1,024. Both act in the same
+    level-7 environment and are scored on the same functionals.
+- **One online update** computes every state block row by row:
+  - the previous decision, the runs and the Bawa term;
+  - the guarantee and weapon losses;
+  - the two decayed stocks, the holdings and the pity depths;
+  - the R6 class filter.
+
+  Before a sequence's own first holdout row, the update reads the real
+  streams and real decisions. From there, in free running, it reads the
+  sampled decision and the environment's acquisition, mapped from level-7 to
+  level-6 ids. The map is `ProductVocab7`'s `NewProductIndex6` column, the one
+  `scripts/eval_per_occasion.py` uses.
+- **Exogenous inputs stay real:** the offers, the campaign and the lagged
+  clock.
+- **R6's class weights** are filtered on the decisions the policy itself
+  generates. This is equal in law to drawing a class from the filtered
+  posterior at the holdout start and simulating within it.
+- **Sampling.** Ancestral at temperature 1, with one uniform per sequence and
+  row. The inverse-CDF draw and the random-number order are those of
+  `simulation/rollout.py`.
+- **Teacher-forced runs.** The state reads the real streams and the filter
+  the real decisions. So each sampled decision comes from exactly T1's
+  per-occasion distribution.
+- **The only model change.** `utilities()` accepts precomputed stocks, so the
+  per-row policy and the T1 scorer share one utility function.
+
+**Gates, before any rollout number is read; each one logged.**
+- **B1, alignment.**
+  - Each of the 300 customers is in the level-6 table, out of sample.
+  - On every grid row: the decision, previous decision and campaign agree,
+    and the level-7 offer and acquisition streams map onto the level-6 ones.
+    Zero mismatches.
+- **B2, the online state is T1's.**
+  - A replay with real decisions must reproduce, for every rung and within
+    1e-5:
+    - every state block of `features_v6_S1024.npz`, on the 300 customers'
+      window rows;
+    - T1's per-occasion probabilities (`occ_outsample_users_holdout_period.npz`),
+      on their holdout rows.
+  - Before the real data, `scripts/test_r46_policy.py` checks the same on
+    synthetic panels from `parametric/simulate.py`, with uneven lengths and
+    non-empty pre-window inventory.
+- **B3, the yardstick.** The band q95 is 0.0781258. This job's i.i.d. and
+  Markov-1 runs reproduce R36i's six per-seed energies within 1e-6 (same
+  code, seeds, chunking and venv).
+- **B4, per run (R36i's checks).**
+  - A decision on exactly 179,920 live rows (8 × 22,490), with 0 mismatched
+    rows.
+  - 0 altered real acquisitions before each sequence's own holdout start, and
+    on all rows when teacher-forced.
+
+If B1–B3 fail, nothing is reported until the cause is found and written up.
+
+**Reported per arm.**
+- As R36i:
+  - energy (mean over three draws, sd and range), × band and z;
+  - the C2ST AUC with its fold CIs;
+  - the top five functionals and the pooled decision shares.
+- New: the 27 per-statistic energies, each against its own band from the same
+  120 splits. These are computed for the rung arms, and for the R36i arms
+  from `r36i_functionals.npz`, which R36i saved for this and never scored.
+
+**Decision rules** (q = the band's q95).
+- **Inside:** energy ≤ q on 3 of 3 draws.
+- **"A beats B":** A − B < 0 on all three seed pairs, and |mean| > q (R43's
+  rule).
+  - Against b33 and b35, seeds pair in order: 17 ↔ 1, 18 ↔ 2, 19 ↔ 3 (their
+    training seeds).
+  - Against Markov-1 and i.i.d.: 17 ↔ 17, and so on.
+- **T2 pass, R36's rule as written.** On 3 of 3 draws, both must hold:
+  - the arm is inside its own band on at least 4 of the 5 pre-specified
+    functionals: spend, incidence, longest NotBuy run, switch rate, and the
+    satiation signature (sat_k0–k3 jointly);
+  - the C2ST AUC CI contains 0.5.
+
+  Only a rung that passes T2 may be used for the R35 counterfactuals.
+
+**Verdicts for R6, the primary policy.**
+
+| verdict | holds when |
+|---|---|
+| W1 a weaker predictor out-generates ProductGPT | free-running R6 beats free-running b33 |
+| W2 the classical state beats the chain | R6 beats Markov-1 (the outline's prediction, under R43's rule) |
+| W3 it beats the remedy | R6 beats scheduled sampling at p = 0.35 |
+| W4 licensed to simulate | R6 passes T2 |
+| W5 the loop is benign | R6's free-running − teacher-forced does not count as a difference |
+
+**The ladder, free running.**
+- Each step is tested under the rule above: R1 − R0, R1b − R1, R2 − R1,
+  R3 − R2, R4 − R3 and R6 − R4.
+- M1 is also tested against R36i's Markov-1: the same model class, fitted on
+  a different sample.
+- Exploratory: any other rung that beats Markov-1. There are nine rungs, so
+  the multiplicity is stated.
+
+**Predictions.**
+1. **W1 holds**, for R6 and for every rung with the lag matrix (M1, R1–R6).
+   Each is a bounded summary of the past, and Markov-1 already beats b33 by
+   2.4.
+2. **W2 holds.** Markov's top functionals were the longest NotBuy run, sat_k1
+   and acf lag 3. The spell, holdings and decayed-stock terms model exactly
+   these.
+3. **W3 holds.** This follows from 2, since Markov-1 beat p = 0.35 on every
+   seed.
+4. **W4 fails:** no rung passes T2. Arm C's AUC CI already excludes 0.5 on
+   every draw, so no generator in this environment can pass the AUC leg. The
+   energy band stays the operative criterion, as in R36i.
+5. **W5 holds: the loop costs R6 little.**
+   - Free-running / teacher-forced < 2 on every draw (b33: 7.6).
+   - Teacher-forced R6 lies farther from real than teacher-forced b33
+     (0.417), as its worse one-step law suggests.
+6. **The ladder.**
+   - R2 − R1 is the largest generative step after R1 − R0: the NotBuy run is
+     the leading functional of every R36i arm.
+   - R1b − R1 does not count.
+   - R4 − R3, tied in prediction (+0.0003), separates as a generator. R4 is
+     lower, and sat_k is among R3's top functionals. This is R36c's H1,
+     transposed to an identified model.
+7. **Shares.** The free-running NotBuy share is within 0.05 of the observed
+   0.425 for every rung with the lag matrix (b33: 0.156).
+
+**What each outcome licenses.**
+
+| outcome | reading |
+|---|---|
+| W1 and W2 hold | the spine in its cleanest form: a model 0.097 nats worse at one-step prediction generates closer than ProductGPT and than the chain |
+| W1 holds, W2 fails | classical state adds nothing generative beyond the chain; the spine rests on Markov-1 alone |
+| W1 fails | classical state also runs away when fed back, so generation failure is not specific to neural models |
+| W4 holds | a classical model is licensed for in-support counterfactuals (R35), which changes the paper's policy section |
+
+**Holdout.** There is no new selection: R6 was chosen in part A on campaign
+27. The rollouts read the holdout rows only to score them, as R36i did, so no
+holdout budget is consumed.
+
+**Compute: HPCC CPU, in parallel (Jin, 26 Oct).**
+1. **Smoke, `short` queue.** The unit tests, then every gate and one draw of
+   each mode for two rungs, on 12 customers × 2 replicates.
+2. **One PBS array, `scripts/r46b_rollout_cpu.pbs` with `-J 0-18`.**
+   - Element 0 is the reference: the band, i.i.d., Markov-1 and gate B3.
+   - Elements 1–18 are the nine rungs × the two modes. Each runs gates B1 and
+     B2 for its rung, then the three draws.
+   - 4 CPUs and 64 GB per element.
+3. **The read-out, `scripts/r46b_compare_cpu.pbs`, after the array.** It
+   writes the tables and the per-statistic energies, and computes the
+   verdicts by the rules above.
+
+There is no network forward pass, so each rollout should take minutes, and
+each element about an hour including the dataset build. No GPU; nothing runs
+on the laptop.
+
+**Out of scope.**
+- Gen-6 rollouts: R43 step 2, on hold behind R44.
+- Timing: the grid is fixed, as in R36.
+- Part C.
