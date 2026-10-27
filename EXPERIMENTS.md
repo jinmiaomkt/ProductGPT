@@ -46,6 +46,9 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 44360 | `runs/r46/partB/compare.json` | 2026-10-27 | R46 part B read-out | done 12:41; result in R46 part B |
 | 44452 | R46 part C unit tests (CPU short, `d119f99`) | 2026-10-27 | R46 part C | done, exit 0: 9 of 9 part C tests, 13 of 13 part B, 5 of 5 part A |
 | 44453[], 44454[], 44455 | `runs/r46/partC_smoke` (150 customers, 2 rounds) | 2026-10-27 | R46 part C smoke: every job kind, then the read-out | done, exit 0 throughout: C-G1–C-G5 pass on real data (C-G2 block 0, probs ≤ 5.6e-16); elements 4–17 min; numbers not read (1 replicate, 2 rounds). Caveat for the result: the env's published regular-banner rates give 0.015 5★ per item against the data's 0.031 (figure and weapon banners match) |
+| 44457 | `runs/r46/partC_smoke` read-out, re-run on `1934d57` | 2026-10-27 | R46 part C: the edited read-out on the smoke files | submitted |
+| 44458[], 44459[], 44460[] | `runs/r46/partC/{pboot,cboot,h6}` (`1934d57`) | 2026-10-27 | R46 part C: C1 40 elements (R6 0–19, R4 20–39), C2 50, H6 5 starts | submitted; H6 moved ahead of C2 (`qorder`), order only, so C3 starts sooner |
+| 44461[], 44462 | `runs/r46/partC/keane`, `partC/compare.json` | 2026-10-27 | R46 part C: C3 80 elements after the H6 fits (afterok), then the read-out (afterany) | submitted |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
