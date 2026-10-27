@@ -5123,3 +5123,29 @@ worktree `C:\Users\jinmiao\ProductGPT\wt_r48`. Files: `llm_zeroshot/prompt.py`,
 `llm_zeroshot/score.py`, `scripts/test_r48_zeroshot.py`,
 `scripts/r48_setup_login.sh`, `scripts/r48_dryrun_cpu.pbs`,
 `scripts/r48_score_gpu.pbs`.
+
+**Steps 1–2 — RESULT (27 Oct 2026).**
+- *Setup* on the login node finished cleanly: venv `productgpt-llm` (torch
+  2.6.0+cu124, transformers 4.57.6) and Qwen3-8B (16 GB) in
+  `~/ProductGPT/models/Qwen3-8B`.
+- *Dry run* (job 44339, short queue, commit 6fd19e5, exit 0). T1–T6 pass again
+  with the downloaded tokenizer, and every answer letter in the real table
+  tokenises as one letter token. No model was loaded and nothing was predicted.
+
+Transcript lengths in Qwen3 tokens:
+
+| customers | n | total | median | p90 | p99 | max | over 32,768 |
+|---|---|---|---|---|---|---|---|
+| out-of-sample | 2,502 | 46.4M | 17,492 | 31,092 | 33,299 | 37,088 | 44 (1.8%) |
+| in-sample | 2,502 | 46.5M | 17,445 | 31,113 | 33,484 | 38,689 | 54 (2.2%) |
+
+That is about 31 tokens per occasion: 46.4M tokens over the 1,477,203
+out-of-sample rows.
+
+**The context-length rule is triggered.** 44 out-of-sample transcripts exceed
+32,768 tokens, so as pre-registered every customer is scored with YaRN at
+factor 4. The longest transcript (38,689) needs only factor 1.2. Qwen's model
+card advises a factor matched to the need, and factor 4 also rescales the
+positions of the short transcripts that need no extension. Moving to factor 2
+(65,536 tokens) is therefore put to Jin as an amendment. It is decided from
+token counts only, before any prediction exists.
