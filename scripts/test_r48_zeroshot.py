@@ -18,7 +18,8 @@ transformers >= 5.
   T3  one forward pass equals asking each occasion separately (prefix up to and
       including that occasion's generation prompt)
   T4  no look-ahead: changing an occasion's decision and everything after it
-      leaves every earlier and same-occasion prediction unchanged
+      leaves every earlier and same-occasion prediction unchanged (T4c: the same
+      with only later decisions changed, so the transcript keeps its length)
   T5  the nine renormalised probabilities sum to one; the letter mass is <= 1
   T6  the transcript states offers only when they change and counts duplicates
 """
@@ -38,8 +39,8 @@ import numpy as np  # noqa: E402
 from llm_zeroshot.prompt import (ASSISTANT_PREFIX, IM_END, IM_START, LETTERS,  # noqa: E402
                                  system_prompt, transcript, user_turn)
 from llm_zeroshot.score import answer_positions, letter_token_ids, score_ids  # noqa: E402
-from llm_zeroshot.synthetic import (perturb_from, synthetic_customer,  # noqa: E402
-                                    synthetic_products)
+from llm_zeroshot.synthetic import (perturb_decisions_from, perturb_from,  # noqa: E402
+                                    synthetic_customer, synthetic_products)
 
 FAILS = []
 
@@ -123,7 +124,12 @@ def main():
     check("T3b the tiny model's predictions are not degenerate",
           float(lp.max(1).mean() - lp.min(1).mean()) > 0.1)
 
-    # T4 no look-ahead, in float64 so rounding (~1e-12) cannot pass for a leak
+    # T4 no look-ahead, in float64 so rounding (~1e-12) cannot pass for a leak.
+    # The Qwen3.5/3.6 Gated DeltaNet reference path casts to float32 whatever the
+    # model dtype (transformers torch_chunk_gated_delta_rule), so there the floor is
+    # float32 rounding (~1e-7 when the sequence length, and so every matrix shape,
+    # changes) and the bound is 1e-6.  A leak moves predictions by ~T4b (> 1e-3).
+    tol = 1e-10 if a.arch == "qwen3" else 1e-6
     model = model.double()
     lp, _ = score_ids(model, ids, tpos, letter_ids, "cpu")
     t = 20
@@ -133,8 +139,18 @@ def main():
     lp2, _ = score_ids(model, ids2, tpos2, letter_ids, "cpu")
     before = float(np.abs(lp2[: t + 1] - lp[: t + 1]).max())
     after = float(np.abs(lp2[t + 1:] - lp[t + 1:]).max())
-    check("T4 no look-ahead (occasions <= t unchanged)", before < 1e-10, f"max |diff| {before:.1e}")
-    check("T4b later occasions do respond (the perturbation is real)", after > 1e-3)
+    check("T4 no look-ahead (occasions <= t unchanged)", before < tol,
+          f"max |diff| {before:.1e} (bound {tol:.0e})")
+    check("T4b later occasions do respond (the perturbation is real)", after > 1e-3,
+          f"max |diff| {after:.2f}")
+    # T4c the same with only later decisions changed: same length, same shapes
+    lab3 = perturb_decisions_from(lab, t)
+    text3, answers3 = transcript(lab3, prev, lto, obt, inv, S3, system)
+    ids3, tpos3 = answer_positions(tok, text3, answers3, letter_ids)
+    lp3, _ = score_ids(model, ids3, tpos3, letter_ids, "cpu")
+    before3 = float(np.abs(lp3[: t + 1] - lp[: t + 1]).max())
+    check("T4c no look-ahead, same-length transcript", len(ids3) == len(ids) and before3 < tol,
+          f"max |diff| {before3:.1e}; later {float(np.abs(lp3[t + 1:] - lp[t + 1:]).max()):.2f}")
 
     # T5 normalisation
     s = np.exp(lp).sum(1)

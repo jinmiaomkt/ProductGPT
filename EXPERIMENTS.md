@@ -5390,6 +5390,31 @@ they cannot give the same NLL.
    must equal R48's dry run (46.4M, maximum 37,088). It holds by construction,
    because the tokenizer files are byte-identical (sha256 checked on HPCC) and
    the prompt code is unchanged. The other gates are unchanged.
+
+   *The dry run itself did run* (on `long` at 23:23, a minute after it was moved
+   there) before it could be deleted. Arm A passed every gate:
+   - the tests pass;
+   - its tokens equal R48's exactly (46,441,473, maximum 37,088, 44 over
+     32,768);
+   - Qwen3-32B loads with 0 missing and 0 mis-shaped weights (32.76B
+     parameters, YaRN factor 2).
+
+   Arm B failed one test: T4 found 7.6e-8 on HPCC (0.0 on the laptop), above
+   the float64 bound of 1e-10. The job exited 1, and PBS cancelled its eight
+   dependent GPU jobs before any of them ran. **Diagnosis: rounding, not a
+   leak.** Transformers' reference Gated DeltaNet code casts to float32
+   whatever the model dtype. When the transcript length changes, so does every
+   matrix shape, and HPCC's math library rounds the float32 recurrence
+   differently. A leak would move earlier predictions by about T4b's response
+   (0.45 nats). T3 passes, and the causal convolution truncates to the
+   sequence length.
+
+   **Test correction (27 Oct, before any run on real data):**
+   - T4's bound is 1e-6 for the hybrid architecture (the float32 rounding
+     floor) and stays 1e-10 for Qwen3.
+   - New T4c changes only later decisions, so the transcript keeps its length
+     and every shape is unchanged. It must also stay within the bound. On the
+     laptop it gives 0.0 for both architectures.
 3. *GPU* (`scripts/r49_score_gpu.pbs`, 2 L40S per job, 4 shards per arm, arms
    interleaved). Each job first runs `--selfcheck`: T3 and T4 on a synthetic
    customer with the real model in bf16 on the GPU. It stops if one pass differs

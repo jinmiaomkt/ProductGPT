@@ -47,3 +47,11 @@ def perturb_from(lab, obt, t):
     lab2[t:] = (lab2[t:] % 9) + 1
     obt2[t + 1:] = np.where(obt2[t + 1:] > 0, 59, 0)
     return lab2, obt2
+
+
+def perturb_decisions_from(lab, t):
+    """Change decision t and every later decision only.  Each answer is one letter
+    token, so the transcript keeps its length: every tensor keeps its shape."""
+    lab2 = lab.copy()
+    lab2[t:] = (lab2[t:] % 9) + 1
+    return lab2
