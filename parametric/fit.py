@@ -44,6 +44,8 @@ class Chunk:
     X: Dict[str, torch.Tensor]
     y: torch.Tensor
     masks: Dict[str, torch.Tensor]
+    # part C's customer bootstrap: how many times each user is drawn (None = once)
+    w: Optional[torch.Tensor] = None
 
 
 def log(msg: str) -> None:
@@ -67,8 +69,12 @@ def load_features(table: Path, feats: Path, *, build_if_missing: bool = False):
 
 
 def make_chunks(tab, F, roles: Dict[str, np.ndarray], users: np.ndarray,
-                row_budget: int = 196_608) -> List[Chunk]:
-    """Users sorted by length, cut so each chunk holds about `row_budget` padded rows."""
+                row_budget: int = 196_608, weights: Optional[np.ndarray] = None) -> List[Chunk]:
+    """Users sorted by length, cut so each chunk holds about `row_budget` padded rows.
+
+    `weights` (indexed like the table's users) multiply each user's
+    log-likelihood: an integer weight w is the user drawn w times.
+    """
     length = tab["length"]
     users = users[np.argsort(length[users], kind="stable")]
     out, i = [], 0
@@ -89,7 +95,8 @@ def make_chunks(tab, F, roles: Dict[str, np.ndarray], users: np.ndarray,
             X[k] = torch.as_tensor(a, dtype=torch.long if k in INT_KEYS else F64)
         y = torch.as_tensor(tab["label"][u, :S].astype(np.int64))
         masks = {k: torch.as_tensor(m[u, :S]) for k, m in roles.items()}
-        out.append(Chunk(u, X, y, masks))
+        w = None if weights is None else torch.as_tensor(weights[u], dtype=F64)
+        out.append(Chunk(u, X, y, masks, w))
         i = j
     return out
 
@@ -98,7 +105,8 @@ def make_chunks(tab, F, roles: Dict[str, np.ndarray], users: np.ndarray,
 def objective(spec, theta, chunks, n_rows, l2, *, backward: bool) -> float:
     tot = 0.0
     for ch in chunks:
-        ll = M.customer_ll(spec, theta, ch.X, ch.y, ch.masks["train"]).sum()
+        ll = M.customer_ll(spec, theta, ch.X, ch.y, ch.masks["train"])
+        ll = ll.sum() if ch.w is None else (ch.w * ll).sum()
         loss = -ll / n_rows
         if backward:
             loss.backward()
@@ -123,6 +131,8 @@ def grad_hess(spec, theta, chunks, *, scores: bool = False):
     for ch in chunks:
         w = torch.ones(len(ch.users), dtype=F64, requires_grad=True)
         ll = M.customer_ll(spec, th, ch.X, ch.y, ch.masks["train"])
+        if ch.w is not None:
+            ll = ch.w * ll
         g, = torch.autograd.grad((w * ll).sum(), th, create_graph=True)
         G += g.detach()
         Sc = torch.zeros(len(ch.users), P, dtype=F64) if scores else None
@@ -252,13 +262,13 @@ def sandwich(spec, theta, chunks):
 
 # ───────────────────────────── evaluation ─────────────────────────────
 @torch.no_grad()
-def score(spec, theta, chunks, roles_np, tab, *, prior_only=False):
+def score(spec, theta, chunks, roles_np, tab, *, prior_only=False, eval_roles=EVAL_ROLES):
     """Per-occasion predictive probabilities for every evaluation role."""
-    out = {r: {"uid_hash": [], "pos": [], "label": [], "prob": []} for r in EVAL_ROLES}
+    out = {r: {"uid_hash": [], "pos": [], "label": [], "prob": []} for r in eval_roles}
     for ch in chunks:
         lp = M.predictive(spec, theta, ch.X, ch.y, ch.masks["valid"], prior_only=prior_only)
         pr = lp.exp().numpy()
-        for r in EVAL_ROLES:
+        for r in eval_roles:
             m = ch.masks[r].numpy()
             if not m.any():
                 continue
@@ -452,11 +462,18 @@ def main() -> None:
                          "for numerical stability only (bounds never-observed transitions)")
     ap.add_argument("--build-features", action="store_true")
     ap.add_argument("--max-users", type=int, default=None, help="smoke only")
+    ap.add_argument("--score-roles", default=",".join(EVAL_ROLES),
+                    help="comma list of roles to score; part C's H6 scores `val` only, so the "
+                         "holdout is not read")
     a = ap.parse_args()
     torch.set_num_threads(a.threads)
     t0 = time.time()
+    eval_roles = tuple(r for r in a.score_roles.split(",") if r)
+    if not set(eval_roles) <= set(EVAL_ROLES):
+        raise SystemExit(f"--score-roles: unknown roles {sorted(set(eval_roles) - set(EVAL_ROLES))}")
 
-    tag = {"R5": f"R5_s{a.start}", "R6": f"R6_K{a.K}_s{a.start}"}.get(a.rung, a.rung)
+    tag = {"R5": f"R5_s{a.start}", "R6": f"R6_K{a.K}_s{a.start}",
+           "H6": f"H6_K{a.K}_s{a.start}"}.get(a.rung, a.rung)
     out = Path(a.out_dir) / tag
     out.mkdir(parents=True, exist_ok=True)
     log(f"R46 fit {tag}  threads={a.threads}  torch {torch.__version__}")
@@ -545,8 +562,10 @@ def main() -> None:
     res["derived"] = transformed(spec, theta, V)
 
     del train_chunks
-    eval_chunks = make_chunks(tab, F, roles, allu)
-    scored = score(spec, theta, eval_chunks, roles, tab)
+    # only the users some scored role covers (H6: in-sample users, campaign 27)
+    eval_u = allu[np.any([roles[r][allu].any(1) for r in eval_roles], axis=0)]
+    eval_chunks = make_chunks(tab, F, roles, eval_u)
+    scored = score(spec, theta, eval_chunks, roles, tab, eval_roles=eval_roles)
     res["cells"] = {}
     for r, d in scored.items():
         res["cells"][r] = metrics(d["label"].astype(np.int64), d["prob"])
@@ -555,7 +574,7 @@ def main() -> None:
         log(f"  {r:<32} n={res['cells'][r]['n']:>9,}  NLL {res['cells'][r]['nll']:.4f}  "
             f"buy {res['cells'][r]['nll_purchase']:.4f}  NotBuy {res['cells'][r]['nll_notbuy']:.4f}")
     if spec.K > 1:
-        pri = score(spec, theta, eval_chunks, roles, tab, prior_only=True)
+        pri = score(spec, theta, eval_chunks, roles, tab, prior_only=True, eval_roles=eval_roles)
         res["cells_prior_weights"] = {r: metrics(d["label"].astype(np.int64), d["prob"])
                                       for r, d in pri.items()}
     res["seconds"] = time.time() - t0

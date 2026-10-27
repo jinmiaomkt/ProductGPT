@@ -81,6 +81,7 @@ class Context:
 
     def __init__(self, tab: Dict[str, np.ndarray], prod: Dict[str, np.ndarray]):
         cal = ST.offer_calendar(tab)
+        self.calendar = cal          # part C rebuilds simulated tables on this calendar
         pr = ST.prior_runs(cal)
         top = max(int(tab["campaign"].max()), max(pr, default=0)) + 1
         self.runs_tab = np.zeros((top, 60), np.int64)
@@ -266,8 +267,13 @@ class Tracker:
         return F, new
 
     @torch.no_grad()
-    def propose(self, u: np.ndarray, *, keep_blocks: bool = False):
-        """(B,9) predictive probabilities at per-sequence rows u."""
+    def propose(self, u: np.ndarray, *, keep_blocks: bool = False, cls: Optional[np.ndarray] = None):
+        """(B,9) predictive probabilities at per-sequence rows u.
+
+        With `cls` (B,), each sequence's own class's probabilities instead:
+        part C's simulator draws a class per customer once, which is equal in
+        law to filtering.
+        """
         u = np.clip(np.asarray(u, dtype=np.int64), 0, self.L - 1)
         F, new = self._blocks(u)
         X = {k: torch.as_tensor(v[:, None], dtype=torch.long if k in ("prev_idx", "last_banner") else F64)
@@ -276,7 +282,9 @@ class Tracker:
         X["LO"] = torch.as_tensor(new["LO"][:, None], dtype=F64)
         lp, _ = M.log_probs(self.spec, self.theta, X)
         lp = lp[:, :, 0, :]                                        # (K,B,9)
-        if self.K == 1:
+        if cls is not None:
+            logp = lp[torch.as_tensor(np.asarray(cls, dtype=np.int64)), torch.arange(self.B)]
+        elif self.K == 1:
             logp = lp[0]
         else:
             lw = self.logpi[:, None] + self.cumF

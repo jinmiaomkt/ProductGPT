@@ -16,6 +16,11 @@ call the same function.
     R4     R3 + holdings, pity, guarantee                  cop_f, cop_w, elem, owned, pity0-3, guar, wloss
     R5     R4 in a buy-or-not nested logit (one lambda)    nest   -- off the ladder (amendment 7)
     R6     R4 with K latent classes                        d_asc, d_inc, d_loy, d_nb, cls
+    H6     part C's heterogeneity-only null: R4 without    asc, offer, a_out, out, holdings,
+           decision state dependence, K classes            d_asc, cls
+
+H6 drops the lag matrix (constants instead), the runs and Bawa terms, the
+decision stocks and the state-dependent class deviations; it nests in R6.
 
 The lag matrix makes constants redundant (every row has exactly one previous
 decision), so rungs with `lag` carry no `asc`; in R6 the class deviations of
@@ -29,7 +34,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 import torch
 
-RUNGS = ("M0", "M1", "R0", "R1", "R1b", "R2", "R3", "R4", "R5", "R6")
+RUNGS = ("M0", "M1", "R0", "R1", "R1b", "R2", "R3", "R4", "R5", "R6", "H6")
 
 ALT_BANNER = torch.tensor([0, 0, 1, 1, 2, 2, 3, 3, -1])
 BUY = torch.tensor([1, 1, 1, 1, 1, 1, 1, 1, 0], dtype=torch.float64)
@@ -39,6 +44,10 @@ BAN = torch.stack([(ALT_BANNER == b).to(torch.float64) for b in range(4)])   # (
 
 def flags(rung: str) -> Dict[str, bool]:
     i = RUNGS.index(rung)
+    if rung == "H6":
+        # part C: everything R4 has except decision state dependence
+        return dict(asc=True, lag=False, offer=True, rho=False, runs=False, stocks=False,
+                    outstock=True, hold=True, nest=False, classes=True, sd_classes=False)
     # Amendment 7 (26 Oct): R5 is off the ladder and R6 is R4 + latent
     # classes, so the nest belongs to R5 alone.
     f = dict(asc=rung in ("M0", "R0"), lag=rung == "M1" or i >= RUNGS.index("R1"),
@@ -46,6 +55,8 @@ def flags(rung: str) -> Dict[str, bool]:
              runs=i >= RUNGS.index("R2"), stocks=i >= RUNGS.index("R3"),
              hold=i >= RUNGS.index("R4"), nest=rung == "R5",
              classes=rung == "R6")
+    f["outstock"] = f["stocks"]
+    f["sd_classes"] = f["classes"]
     return f
 
 
@@ -75,6 +86,8 @@ class Spec:
         if f["stocks"]:
             add("a_dec", 1); add("a_out", 1); add("loy", 1); add("inc", 1)
             add("tenl", 1); add("out", 3)
+        elif f["outstock"]:
+            add("a_out", 1); add("out", 3)
         if f["hold"]:
             add("cop_f", 3); add("cop_w", 2); add("elem", 1); add("owned", 1)
             for b in range(4):
@@ -88,7 +101,9 @@ class Spec:
             add("nest", 1)
         if f["classes"]:
             K1 = self.K - 1
-            add("d_asc", K1, 8); add("d_inc", K1); add("d_loy", K1); add("d_nb", K1)
+            add("d_asc", K1, 8)
+            if f["sd_classes"]:
+                add("d_inc", K1); add("d_loy", K1); add("d_nb", K1)
             add("cls", K1)
         self.flags = f
 
@@ -198,6 +213,11 @@ def utilities(spec: Spec, P: Dict[str, torch.Tensor], X: Dict[str, torch.Tensor]
         U = U + P["loy"][0] * (LD[..., :4] @ BAN)
         U = U + (P["inc"][0] * LD[..., 4] + LO @ P["out"])[..., None] * BUY \
             + (P["tenl"][0] * LD[..., 5])[..., None] * TEN
+    elif f["outstock"]:
+        # H6: the outcome stock alone, on the buy decision as in R3
+        a_o = torch.sigmoid(P["a_out"][0])
+        LO = X["LO"] if "LO" in X else decay(X["ind"][..., 6:9], a_o)
+        U = U + (LO @ P["out"])[..., None] * BUY
     if f["hold"]:
         pit = X["pity"]
         v0 = pit[..., 0, :] @ P["pity0"]
@@ -211,10 +231,11 @@ def utilities(spec: Spec, P: Dict[str, torch.Tensor], X: Dict[str, torch.Tensor]
     U = U[None]
     if f["classes"] and spec.K > 1:
         zk = lambda v: torch.cat([torch.zeros(1, *v.shape[1:], dtype=dt), v], 0)
-        d_asc, d_inc, d_loy, d_nb = zk(P["d_asc"]), zk(P["d_inc"]), zk(P["d_loy"]), zk(P["d_nb"])
-        dU = z1(d_asc)[:, None, None, :] \
-            + (d_inc[:, None, None] * LD[None, ..., 4] + d_nb[:, None, None] * X["runs"][None, ..., 0])[..., None] * BUY \
-            + d_loy[:, None, None, None] * (LD[..., :4] @ BAN)[None]
+        dU = z1(zk(P["d_asc"]))[:, None, None, :]
+        if f["sd_classes"]:
+            d_inc, d_loy, d_nb = zk(P["d_inc"]), zk(P["d_loy"]), zk(P["d_nb"])
+            dU = dU + (d_inc[:, None, None] * LD[None, ..., 4] + d_nb[:, None, None] * X["runs"][None, ..., 0])[..., None] * BUY \
+                + d_loy[:, None, None, None] * (LD[..., :4] @ BAN)[None]
         U = U + dU
     return U
 

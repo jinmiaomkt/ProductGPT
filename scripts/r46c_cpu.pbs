@@ -1,0 +1,97 @@
+#!/bin/bash
+# ============================================================================
+# R46 part C (T3, identification), CPU arrays. Pre-registered in EXPERIMENTS.md,
+# R46 part C (27 Oct 2026). No GPU, no laptop (Jin, 26 Oct 2026).
+#
+#   STAGE=TEST             the unit tests (part C, then part A's and B's suites)
+#   STAGE=SMOKE1  -J 0-3   150 customers, 2 rounds: C1 R6, C1 R4, C2, the five H6 starts
+#   STAGE=SMOKE2  -J 0-3   150 customers, 2 rounds: C3 a/R4, a/R6, b/R4, b/R6
+#   STAGE=C1      -J 0-39  parametric bootstrap: 0-19 R6, 20-39 R4
+#   STAGE=C2      -J 0-49  customer bootstrap of R6
+#   STAGE=H6      -J 0-4   H6 (K = 6) on the real training rows, five starts
+#   STAGE=C3      -J 0-79  Keane: null (a, b) x fit (R4, R6) x 20 replicates
+#   STAGE=CMP              the read-out (SMOKE=1 for the smoke's)
+#
+# scripts/submit_r46c.sh submits C1, C2 and H6, then C3 after H6 and CMP after all.
+# Log per element: ~/ProductGPT/logs/r46c_<stage>_<array id>_<index>.log
+# Results: $R46/partC/{pboot,cboot,keane}/<tag>.json, $R46/partC/h6/H6_K6_s*/
+# ============================================================================
+#PBS -N r46c
+#PBS -l select=1:ncpus=8:mem=96GB
+#PBS -q short
+#PBS -l walltime=12:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+
+set -eo pipefail
+module purge
+module load python/3.11.4
+cd "$PBS_O_WORKDIR"
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
+export PYTHONUNBUFFERED=1
+export OMP_NUM_THREADS=8 NCPUS=8 MKL_NUM_THREADS=8
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+R46="${R46:-/storage/home/jinmiao/ProductGPT/runs/r46}"
+export R46
+STAGE="${STAGE:-TEST}"
+IDX="${PBS_ARRAY_INDEX:-0}"
+JID="${PBS_JOBID%%.*}"
+JID="${JID//[\[\]]/_}"
+LOG=/storage/home/jinmiao/ProductGPT/logs/r46c_${STAGE}_${JID}_${IDX}.log
+exec > >(tee -a "$LOG") 2>&1
+echo "R46 part C stage $STAGE element $IDX on $(hostname) at $(date), commit $(git rev-parse --short HEAD)"
+
+ID=(python scripts/r46c_identify.py)
+SMOKE_DIR="$R46/partC_smoke"
+H6_FIT=(python -m parametric.fit --table "$R46/occasions_v6_S1024.npz" --feats "$R46/features_v6_S1024.npz"
+        --rung H6 --K 6 --init-from "$R46/R4/result.json" --score-roles val)
+
+case "$STAGE" in
+  TEST)
+    python scripts/test_r46_identify.py
+    python scripts/test_r46_policy.py
+    python scripts/test_r46_parametric.py --quick
+    ;;
+  SMOKE1)
+    S=(--smoke --out-dir "$SMOKE_DIR")
+    case "$IDX" in
+      0) "${ID[@]}" --job pboot --dgp R6 --rep 0 "${S[@]}" ;;
+      1) "${ID[@]}" --job pboot --dgp R4 --rep 0 "${S[@]}" ;;
+      2) "${ID[@]}" --job cboot --rep 0 "${S[@]}" ;;
+      3) for s in 0 1 2 3 4; do
+           "${H6_FIT[@]}" --start "$s" --max-users 300 --out-dir "$SMOKE_DIR/h6"
+         done ;;
+    esac
+    ;;
+  SMOKE2)
+    NULLS=(a a b b); FITS=(R4 R6 R4 R6)
+    "${ID[@]}" --job keane --null "${NULLS[$IDX]}" --fit "${FITS[$IDX]}" --rep 0 --smoke --out-dir "$SMOKE_DIR"
+    ;;
+  C1)
+    if [ "$IDX" -lt 20 ]; then DGP=R6; REP=$IDX; else DGP=R4; REP=$((IDX - 20)); fi
+    "${ID[@]}" --job pboot --dgp "$DGP" --rep "$REP"
+    ;;
+  C2)
+    "${ID[@]}" --job cboot --rep "$IDX"
+    ;;
+  H6)
+    "${H6_FIT[@]}" --start "$IDX" --out-dir "$R46/partC/h6"
+    ;;
+  C3)
+    NULLS=(a b); FITS=(R4 R6)
+    NULL=${NULLS[$((IDX / 40))]}; FIT=${FITS[$(((IDX % 40) / 20))]}; REP=$((IDX % 20))
+    "${ID[@]}" --job keane --null "$NULL" --fit "$FIT" --rep "$REP"
+    ;;
+  CMP)
+    if [ -n "${SMOKE:-}" ]; then
+      python scripts/r46c_compare.py --out-dir "$SMOKE_DIR" --smoke
+    else
+      python scripts/r46c_compare.py --out-dir "$R46/partC"
+    fi
+    ;;
+  *) echo "unknown STAGE $STAGE"; exit 2 ;;
+esac
+echo "R46 part C stage $STAGE element $IDX done at $(date)"
