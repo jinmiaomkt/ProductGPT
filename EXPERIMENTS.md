@@ -5213,3 +5213,68 @@ majority class) is 0.407.
   With fewer than 64 earlier occasions it is worse than uniform (2.197). Even
   after 768 it stays about 0.25 nats above the GRU's cell average. Whether the
   GRU also gains with position needs the paired per-occasion file.
+
+**Step 4 — RESULT (27 Oct 2026): paired with the GRU occasion by occasion, the
+gap is 0.389 nats. It shrinks late in the window but never closes.**
+- *GRU per-occasion files:* the five b17 plain-GRU level-6 seeds (the 0.8856
+  reference) were scored on both out-of-sample cells. Jobs 44447–44451, CPU
+  short queue, float32, about 10 min each, commit bcefa0f.
+  `scripts/eval_per_occasion.py` gained `--cells` and a cell column; its R31
+  default is unchanged.
+- *Pairing:* `scripts/r48_pair_gru.py` (commit 3aaee9d), smoke-tested on
+  synthetic files. d = NLL(zero-shot) − NLL(GRU, mean over the 5 seeds),
+  positive = the GRU is better. 2,000-draw cluster bootstrap over all 2,502
+  customers, with one set of draws shared by every subgroup.
+- *Gates pass for all five seeds.* Each file holds exactly R48's 1,477,203
+  occasions, with the same customers, positions, labels and cells. Each per-cell
+  mean NLL matches the run's final.json within 7.6e-5, inside the 5e-4
+  tolerance, so float32 on CPU reproduces the bf16 GPU evaluation.
+
+**Headline cell (pre-registered).** Zero-shot 1.2750, GRU 0.8856, constant
+1.6638. **d = 0.389 [0.378, 0.403].** Against each seed alone, d runs from
+0.379 to 0.396. H1 holds on the paired test.
+
+**Per decision, headline cell.** The gap is largest on the 10-draw decisions:
+
+| decision | rows | d |
+|---|---|---|
+| 10 draws, Regular | 645 | 4.90 |
+| 10 draws, Weapon | 3,200 | 1.50 |
+| 10 draws, banner B | 3,475 | 1.16 |
+| 10 draws, banner A | 15,732 | 1.03 |
+| 1 draw, Weapon | 9,231 | 0.88 |
+| 1 draw, banner B | 13,739 | 0.63 |
+| 1 draw, Regular | 34,924 | 0.52 |
+| 1 draw, banner A | 47,990 | 0.30 |
+| no draw | 88,367 | **0.08** |
+
+On NotBuy, the most common decision, zero-shot nearly matches the GRU.
+
+**By position in the window (exploratory).** "Share" is the part of the GRU's
+gain over the constant that zero-shot achieves, (constant − LLM) / (constant −
+GRU). Intervals for d run about ±0.01–0.02, except holdout 64–255 (±0.04) and
+holdout 0–63 (±0.2).
+
+| position | calib LLM | calib GRU | calib d | calib share | holdout LLM | holdout GRU | holdout d | holdout share |
+|---|---|---|---|---|---|---|---|---|
+| 0–63 | 2.81 | 0.99 | 1.82 | −149% | 3.29 | 1.15 | 2.14 (841 rows) | −215% |
+| 64–255 | 1.94 | 0.98 | 0.96 | −33% | 1.85 | 0.98 | 0.87 | −16% |
+| 256–511 | 1.49 | 0.95 | 0.54 | 29% | 1.32 | 0.89 | 0.43 | 43% |
+| 512–767 | 1.28 | 0.92 | 0.36 | 55% | 1.16 | 0.86 | 0.30 | 63% |
+| 768–1023 | 1.15 | 0.88 | 0.27 [0.26, 0.28] | 66% | 1.13 | 0.87 | 0.26 [0.25, 0.27] | 67% |
+
+- The GRU also improves with history, but only by about 0.1 nats (0.99 → 0.88).
+  Zero-shot improves by 1.7.
+- The gap shrinks from 1.8 to 0.27 nats over the window (calibration cell,
+  change −1.55 [−1.57, −1.53]). It is still narrowing at the end, but slowly:
+  0.36 → 0.27 (calibration) and 0.30 → 0.26 (holdout) over the last two bins.
+- So reading a player's own history in context recovers at most about
+  two-thirds of what the trained GRU gains over the constant. Even with 768+
+  earlier occasions, the zero-shot model stays 0.26 nats behind.
+
+**R48 conclusion.** On prediction, an off-the-shelf LLM used zero-shot with the
+same information is decisively worse than the GRU (0.39 nats paired). It is far
+from useless: it learns each player's habits in context, and given a long
+enough history it captures two-thirds of the GRU's gain over class shares. Its
+losses concentrate early in a player's history and on the 10-draw decisions.
+In-sample scoring (WHO=in) was not run; for a zero-shot model it is equivalent.
