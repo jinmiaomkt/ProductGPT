@@ -2,6 +2,8 @@
 # R47 parts B1-B3 -- the half-life profile (pre-registered in EXPERIMENTS.md R47).
 #
 #   bash scripts/submit_r47b.sh b12           # B1 and B2: 42 runs
+#   bash scripts/submit_r47b.sh b2            # B2 alone: 21 runs (the re-run after
+#                                            #   job 44401's stock_only fix, fb95fd2)
 #   bash scripts/submit_r47b.sh b3 <HL>       # B3 at B2's best half-life HL
 #                                            #   (a number, or "inf"): 12 runs
 #
@@ -13,8 +15,8 @@
 set -euo pipefail
 export PATH="$PATH:/opt/pbs/bin"
 FROZEN="${FROZEN:-$HOME/ProductGPT/r44_frozen_g6.env}"
-part="${1:?usage: submit_r47b.sh b12 | b3 <HL>}"
-[[ "$(basename "$PWD")" == "work_r47" ]] || { echo "submit from ~/ProductGPT/work_r47"; exit 2; }
+part="${1:?usage: submit_r47b.sh b12 | b2 | b3 <HL>}"
+[[ "$(basename "$PWD")" == work_r47* ]] || { echo "submit from ~/ProductGPT/work_r47 (or work_r47fix)"; exit 2; }
 [[ -s "$FROZEN" ]] || { echo "no frozen R44 gen-6 configuration at $FROZEN"; exit 3; }
 HP="$(tr -d ' \n' < "$FROZEN")"
 [[ "$HP" == *WINDOW=* && "$HP" == *LR=* ]] || { echo "unexpected content in $FROZEN: $HP"; exit 4; }
@@ -28,6 +30,12 @@ case "$part" in
     for seed in 1 2 3; do
       for hl in 1 2 5 10 30 100 inf; do
         go "SEED=${seed},${COMMON},$(hl_vars "$hl"),SLOT_STATE=full,TAG=r47b1_hl${hl}"
+        go "SEED=${seed},${COMMON},$(hl_vars "$hl"),SLOT_STATE=stock_only,TAG=r47b2_hl${hl}"
+      done
+    done ;;
+  b2)
+    for seed in 1 2 3; do
+      for hl in 1 2 5 10 30 100 inf; do
         go "SEED=${seed},${COMMON},$(hl_vars "$hl"),SLOT_STATE=stock_only,TAG=r47b2_hl${hl}"
       done
     done ;;
