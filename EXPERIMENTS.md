@@ -5012,3 +5012,114 @@ in 0.25–4, max |z| < 5, and structural max |z| < 3.5.
 At every size, the estimate's likelihood is at least the truth's, so the
 optimiser reaches the maximum. The real fitting sample is about 1.4 million
 rows: 6 times the largest panel above.
+
+### R48 — PLAN, DRAFT FOR JIN'S REVIEW (26 Oct 2026; nothing run on real data): an off-the-shelf LLM, zero-shot, as a predictor of the next decision
+
+**Why.** At the 26 Oct coauthor meeting the off-the-shelf comparison was set
+to start with the most basic generative-AI baseline: an open-weight LLM used
+zero-shot (tool P1 in `0 Research Meetings\Off-the-Shelf GenAI Baselines.pptx`).
+The question is how much of ProductGPT's predictive accuracy a practitioner
+gets by prompting a generic model with the same data and training nothing.
+
+**Model.** Qwen3-8B: Apache-2.0, 36 layers, 32,768-token native context. It
+runs in bf16, non-thinking mode, on one L40S. Why this model:
+- Open weights give exact token probabilities, so the NLL is the same quantity
+  ProductGPT reports, not stated probabilities.
+- It runs on HPCC, so no player data leaves SMU.
+- It is ungated, so no Hugging Face token is needed (Llama is gated).
+- It fits one GPU at 16-bit with room for a 30k-token transcript.
+
+**Information given: the same as ProductGPT's.**
+- The products featured on each banner (stated whenever they change).
+- The products obtained since the previous occasion.
+- Every earlier decision.
+- Holdings before the 1,024-occasion window, and the decision just before it.
+- Each product's attribute row from the level-6 table ProductGPT embeds: rarity,
+  limited or standard, character or weapon, element, gender, weapon type.
+
+**Not given:** the game's rules (pity, soft pity, the 50/50 guarantee), worked
+examples, product names, campaign ids, the clock (IPT), or any parameter fitted
+to our data.
+
+**Prompt (fixed in advance; nothing is tuned, so campaign 27 selects nothing).**
+- *System prompt:* the setting, the four banners, the product legend P13–P56,
+  and the nine decisions as letters A–I. It ends "Answer with the letter only".
+- *Each occasion* is a user turn ("Occasion t.", the featured products if they
+  changed, the products obtained since the previous occasion), then an
+  assistant turn holding the decision letter.
+- The exact system prompt is written to `qwen3_8b_<who>_system_prompt.txt`
+  for review before the GPU run.
+
+**Scoring.** One forward pass per customer over the whole transcript. At each
+answer the full-vocabulary log-probabilities of the nine letters are read and
+renormalised over the nine, giving p̂(decision). The mass on the nine letters
+is reported as a format check and never used to select anything.
+
+**Rows.** R46's occasion table (`occasions_v6_S1024.npz`, gate G1 passed): gen
+5's exact rows, 1,024-occasion window and customer partition, so the headline
+cell has 217,303 rows.
+- Out-of-sample customers are scored first: the headline cell and the
+  out-of-sample × calibration cell.
+- In-sample customers are scored only if GPU time allows. For a zero-shot model
+  the two groups are equivalent, since nothing is trained.
+
+**Metrics.**
+- Primary: NLL on the out-of-sample × holdout cell.
+- Also: NLL in the other cells, per-class NLL, hit rate and letter mass.
+- A per-occasion file (`uid_hash`, `pos`, `label`, `nll`, the nine log-probs)
+  is paired with the GRU by customer and bootstrapped over customers, as in R31.
+- References: uniform (log 9 = 2.197), best constant (≈ 1.65), plain GRU
+  (0.8856).
+
+**Hypotheses and decision rules.**
+- **H1, off-the-shelf loses:** headline NLL > 0.9856, i.e. more than 0.10 nats
+  worse than the plain GRU. If H1 fails, the claim "off-the-shelf loses on
+  prediction" is dropped and the comparison rests on generation.
+- **H2, it is not useless:** headline NLL < 1.65, the best constant. The model
+  can read each player's own history in context. If H2 fails, that is reported
+  as a finding: zero-shot does worse than knowing only the class shares.
+- No adoption rule applies; this is a benchmark, not a candidate component.
+- One run. Inference is deterministic (no sampling, no seeds), so the
+  multi-seed rule does not apply. Uncertainty comes from the customer bootstrap.
+
+**Context-length rule (set before any prediction is seen).** The CPU dry run
+reports the token-length distribution only; no model or prediction is
+involved.
+- If no transcript exceeds 32,768 tokens, Qwen3 runs as shipped.
+- Otherwise every customer is scored with YaRN at factor 4, Qwen's documented
+  setting, so one configuration covers all.
+- No customer is truncated or dropped.
+- Synthetic transcripts run to about 51 tokens per occasion, so the limit can
+  bind for the longest windows.
+
+**Steps and gates.**
+0. *Laptop CPU tests, 26 Oct: ALL PASS* (`scripts/test_r48_zeroshot.py`). They
+   use synthetic customers, the real Qwen3 tokenizer and a tiny random Qwen3.
+   - T1: the hand-written chat format equals `apply_chat_template`.
+   - T2: every answer letter is one token at its character.
+   - T3: one forward pass equals per-occasion queries (max |diff| 6e-6).
+   - T4: no look-ahead. In float64, changing an occasion's decision and
+     everything after it leaves earlier predictions unchanged (diff 0.0).
+   - T5: the nine probabilities sum to one.
+   - T6: offers are stated once per campaign.
+1. *Login node:* venv `productgpt-llm` and the model weights, about 16 GB
+   (`scripts/r48_setup_login.sh`). The eval venv is not touched.
+2. *CPU, short queue (`scripts/r48_dryrun_cpu.pbs`):* the tests again with the
+   downloaded tokenizer, plus the dry run, which gives the token lengths. Gate:
+   tests pass, and the scorer finds every answer letter.
+3. *GPU (`scripts/r48_score_gpu.pbs`):* out-of-sample customers in 2 shards.
+   Gate: the shards' rows sum to G1's two out-of-sample cells (1,259,900 +
+   217,303).
+4. *Ledger:* the results, then pairing with the GRU per occasion.
+
+**Compute.** One forward pass per customer, up to about 30k tokens, for about
+2,500 customers per group. The time is an estimate (a few GPU-hours) until step
+3 measures the rate. On 26 Oct the GPU queue held R44 (2 running, 18 queued),
+so R48 needs Jin's call on priority.
+
+**Code.** Branch `r48-zeroshot`, cut from `r46-parametric` at 70320f9 so it can
+reuse `parametric.data` and `parametric.state.product_table` unchanged. Local
+worktree `C:\Users\jinmiao\ProductGPT\wt_r48`. Files: `llm_zeroshot/prompt.py`,
+`llm_zeroshot/score.py`, `scripts/test_r48_zeroshot.py`,
+`scripts/r48_setup_login.sh`, `scripts/r48_dryrun_cpu.pbs`,
+`scripts/r48_score_gpu.pbs`.

@@ -1,0 +1,52 @@
+#!/bin/bash
+#PBS -N r48_score
+#PBS -l select=1:ncpus=8:ngpus=1:mem=64GB
+#PBS -q GPU
+#PBS -l walltime=24:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+# ============================================================================
+# R48 step 3, GPU: zero-shot Qwen3-8B on one shard of the customers.
+#
+#     cd ~/ProductGPT/work_r48
+#     qsub -v SHARD=0,NSHARDS=2,WHO=out,YARN=0 scripts/r48_score_gpu.pbs
+#     qsub -v SHARD=1,NSHARDS=2,WHO=out,YARN=0 scripts/r48_score_gpu.pbs
+#
+# YARN=4 only if the dry run found a transcript over 32,768 tokens (the
+# context-length rule in EXPERIMENTS.md R48); then every shard uses it.
+# Writes $R48/qwen3_8b_<WHO>_shard<k>.npz/.json; a finished shard is skipped.
+# ============================================================================
+set -eo pipefail
+module purge
+module load python/3.11.4
+cd "$PBS_O_WORKDIR"
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-llm/bin/activate
+export PYTHONUNBUFFERED=1 OMP_NUM_THREADS=8 HF_HUB_OFFLINE=1
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+: "${SHARD:?pass SHARD}" "${NSHARDS:?pass NSHARDS}"
+WHO="${WHO:-out}"
+YARN="${YARN:-0}"
+M=/storage/home/jinmiao/ProductGPT/models/Qwen3-8B
+R46=/storage/home/jinmiao/ProductGPT/runs/r46
+R48=/storage/home/jinmiao/ProductGPT/runs/r48
+mkdir -p "$R48"
+LOG=/storage/home/jinmiao/ProductGPT/logs/r48_score_${WHO}_s${SHARD}_${PBS_JOBID%%.*}.log
+exec > >(tee -a "$LOG") 2>&1
+echo "R48 score WHO=$WHO SHARD=$SHARD/$NSHARDS YARN=$YARN on $(hostname) at $(date), commit $(git rev-parse --short HEAD)"
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+
+set +e
+python -m llm_zeroshot.score --table "$R46/occasions_v6_S1024.npz" --model "$M" \
+    --out-dir "$R48" --tag qwen3_8b_${WHO} --who "$WHO" \
+    --shard "$SHARD" --n-shards "$NSHARDS" --yarn "$YARN" --device cuda
+rc=$?
+set -e
+if [ $rc -eq 0 ]; then
+    bash "$PBS_O_WORKDIR/scripts/notify.sh" "OK  R48 ${WHO} shard ${SHARD}/${NSHARDS} (job ${PBS_JOBID%%.*})" || true
+else
+    bash "$PBS_O_WORKDIR/scripts/notify.sh" "FAIL R48 ${WHO} shard ${SHARD}/${NSHARDS} exit=${rc} (job ${PBS_JOBID%%.*})" || true
+fi
+exit $rc

@@ -1,0 +1,164 @@
+"""R48 tests: the transcript, the answer positions and the one-pass scorer.
+
+Runs on CPU with synthetic customers, the real Qwen3 tokenizer and a tiny
+randomly initialised Qwen3 model -- no data, no model weights, no GPU.
+
+    python scripts/test_r48_zeroshot.py [--tokenizer Qwen/Qwen3-8B]
+
+  T1  the hand-written chat format equals tokenizer.apply_chat_template
+      (non-thinking generation prompt) for a single turn
+  T2  every answer letter is one token, at its character, with the letter's id
+  T3  one forward pass equals asking each occasion separately (prefix up to and
+      including that occasion's generation prompt)
+  T4  no look-ahead: changing an occasion's decision and everything after it
+      leaves every earlier and same-occasion prediction unchanged
+  T5  the nine renormalised probabilities sum to one; the letter mass is <= 1
+  T6  the transcript states offers only when they change and counts duplicates
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+os.environ["CUDA_VISIBLE_DEVICES"] = ""          # never touch the laptop GPU
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+
+import numpy as np  # noqa: E402
+
+from llm_zeroshot.prompt import (ASSISTANT_PREFIX, IM_END, IM_START, LETTERS,  # noqa: E402
+                                 system_prompt, transcript, user_turn)
+from llm_zeroshot.score import answer_positions, letter_token_ids, score_ids  # noqa: E402
+
+FAILS = []
+
+
+def check(name, ok, detail=""):
+    print(f"[{'PASS' if ok else 'FAIL'}] {name}" + (f"  {detail}" if detail else ""))
+    if not ok:
+        FAILS.append(name)
+
+
+def synthetic_products():
+    rng = np.random.default_rng(0)
+    p = {k: np.zeros(60, np.int64) for k in ("rarity", "fig", "lto", "female")}
+    p["element"] = np.full(60, -1, np.int64)
+    p["wtype"] = np.full(60, -1, np.int64)
+    for i in range(13, 57):
+        p["rarity"][i] = rng.choice([3, 4, 5])
+        p["fig"][i] = int(i < 40)
+        p["lto"][i] = int(rng.random() < 0.5)
+        p["female"][i] = int(rng.random() < 0.5)
+        p["element"][i] = rng.integers(0, 7) if i < 40 else -1
+        p["wtype"][i] = rng.integers(0, 5)
+    return p
+
+
+def synthetic_customer(S, seed):
+    rng = np.random.default_rng(seed)
+    lab = rng.integers(1, 10, S)
+    prev = np.concatenate([[rng.integers(1, 10)], lab[:-1]])
+    lto = np.zeros((S, 4), np.int64)
+    for start in range(0, S, 15):                       # a new campaign every 15 rows
+        lto[start:start + 15] = [rng.integers(13, 40), rng.choice([0, rng.integers(13, 40)]),
+                                 rng.integers(40, 57), rng.integers(40, 57)]
+    obt = np.zeros((S, 10), np.int64)
+    for t in range(1, S):
+        k = {1: 1, 2: 10, 3: 1, 4: 10, 5: 1, 6: 10, 7: 1, 8: 10, 9: 0}[int(lab[t - 1])]
+        obt[t, :k] = rng.choice(list(range(13, 57)) + [59], size=k)
+    inv = np.zeros(44)
+    inv[[0, 5, 5 - 0]] = [1, 2, 2]
+    return lab, prev, lto, obt, inv
+
+
+def tiny_model(vocab):
+    import torch
+    from transformers import Qwen3Config, Qwen3ForCausalLM
+    torch.manual_seed(0)
+    cfg = Qwen3Config(vocab_size=vocab, hidden_size=64, intermediate_size=128,
+                      num_hidden_layers=2, num_attention_heads=4, num_key_value_heads=2,
+                      head_dim=16, max_position_embeddings=65536, tie_word_embeddings=False)
+    m = Qwen3ForCausalLM(cfg).eval()
+    with torch.no_grad():                                   # spread the letter logits so
+        m.lm_head.weight.mul_(30.0)                         # differences are visible
+    return m
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--tokenizer", default="Qwen/Qwen3-8B")
+    a = ap.parse_args()
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained(a.tokenizer)
+    prod = synthetic_products()
+    system = system_prompt(prod)
+    letter_ids = letter_token_ids(tok)
+
+    # T1 chat format
+    u = "Occasion 1. Featured now: banner A P13; banner B closed; Weapon banner P41."
+    ref = tok.apply_chat_template([{"role": "system", "content": system},
+                                   {"role": "user", "content": u}],
+                                  tokenize=False, add_generation_prompt=True,
+                                  enable_thinking=False)
+    mine = f"{IM_START}system\n{system}{IM_END}\n" + user_turn(u) + ASSISTANT_PREFIX
+    check("T1 chat format matches apply_chat_template", ref == mine)
+
+    # T2 positions
+    S = 300
+    lab, prev, lto, obt, inv = synthetic_customer(S, 1)
+    text, answers = transcript(lab, prev, lto, obt, inv, S, system)
+    ids, tpos = answer_positions(tok, text, answers, letter_ids)
+    got = [LETTERS.index(tok.decode([ids[p]])) + 1 for p in tpos]
+    check("T2 answer tokens decode to the true decisions", got == list(lab),
+          f"{len(ids):,} tokens for {S} occasions ({len(ids) / S:.1f}/occasion)")
+
+    # T3 one pass == per-occasion prefixes
+    model = tiny_model(len(tok))
+    S3 = 40
+    lab, prev, lto, obt, inv = synthetic_customer(S3, 2)
+    text, answers = transcript(lab, prev, lto, obt, inv, S3, system)
+    ids, tpos = answer_positions(tok, text, answers, letter_ids)
+    lp, mass = score_ids(model, ids, tpos, letter_ids, "cpu")
+    worst = 0.0
+    for k, p in enumerate(tpos):
+        lpk, _ = score_ids(model, ids[:p + 1], [p], letter_ids, "cpu")
+        worst = max(worst, float(np.abs(lpk[0] - lp[k]).max()))
+    check("T3 one pass equals per-occasion queries", worst < 1e-4, f"max |diff| {worst:.2e}")
+    check("T3b the tiny model's predictions are not degenerate",
+          float(lp.max(1).mean() - lp.min(1).mean()) > 0.1)
+
+    # T4 no look-ahead, in float64 so rounding (~1e-12) cannot pass for a leak
+    model = model.double()
+    lp, _ = score_ids(model, ids, tpos, letter_ids, "cpu")
+    t = 20
+    lab2, obt2 = lab.copy(), obt.copy()
+    lab2[t:] = (lab2[t:] % 9) + 1
+    obt2[t + 1:] = np.where(obt2[t + 1:] > 0, 59, 0)
+    text2, answers2 = transcript(lab2, prev, lto, obt2, inv, S3, system)
+    ids2, tpos2 = answer_positions(tok, text2, answers2, letter_ids)
+    lp2, _ = score_ids(model, ids2, tpos2, letter_ids, "cpu")
+    before = float(np.abs(lp2[: t + 1] - lp[: t + 1]).max())
+    after = float(np.abs(lp2[t + 1:] - lp[t + 1:]).max())
+    check("T4 no look-ahead (occasions <= t unchanged)", before < 1e-10, f"max |diff| {before:.1e}")
+    check("T4b later occasions do respond (the perturbation is real)", after > 1e-3)
+
+    # T5 normalisation
+    s = np.exp(lp).sum(1)
+    check("T5 renormalised probabilities sum to one", np.allclose(s, 1.0, atol=1e-9))
+    check("T5b letter mass <= 1", bool((mass <= 1e-9).all()))
+
+    # T6 transcript content
+    lab, prev, lto, obt, inv = synthetic_customer(30, 3)
+    text, _ = transcript(lab, prev, lto, obt, inv, 30, system)
+    check("T6 offers stated once per campaign", text.count("Featured now:") == 2)
+    check("T6b duplicates counted", " x2" in text)
+    check("T6c pre-window holdings stated once", text.count("Owned before this record") == 1)
+
+    print(f"\n{'ALL PASS' if not FAILS else 'FAILED: ' + ', '.join(FAILS)}")
+    sys.exit(1 if FAILS else 0)
+
+
+if __name__ == "__main__":
+    main()
