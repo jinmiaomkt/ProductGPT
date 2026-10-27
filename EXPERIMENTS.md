@@ -34,7 +34,8 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 44320–44337 | `b41_*` (18 runs, from `~/ProductGPT/work_gen6` at `6b96b7d`) | 2026-10-27 | R44 stage 3: 6 candidates × seeds 11–13 | all 18 finished, exit 0 (qstat 2026-10-27); frozen gen-5 c06, gen-6 R43 |
 | 44361–44399 | `r45a_*` (39 runs, from `~/ProductGPT/work_r45` at `8fae1d7`) | 2026-10-27 | R45 part A: censored training, arms L/T/Z/ZF × k 1/2/4 + count, seeds 1–3 | all 39 finished, exit 0 (qstat 2026-10-27 18:30) |
 | 44400–44441 | `r47b1_*`, `r47b2_*` (42 runs, from `~/ProductGPT/work_r47` at `010fc89`) | 2026-10-27 | R47 B1–B2: half-life profile, full vs stock-only slots, seeds 1–3 | held 16:15 so batch 42 ran first; released 18:30 (queued again) |
-| 44443–44446 | `b42_g5_c06_s2`–`s5` (4 runs, from `~/ProductGPT/work_gen6` at `9b3eccd`) | 2026-10-27 | R44 stage 4: gen-5 c06 seeds 2–5 (gen 6 reuses b39_g6w384) | 2 finished exit 0, 2 running (qstat 2026-10-27 18:30) |
+| 44443–44446 | `b42_g5_c06_s2`–`s5` (4 runs, from `~/ProductGPT/work_gen6` at `9b3eccd`) | 2026-10-27 | R44 stage 4: gen-5 c06 seeds 2–5 (gen 6 reuses b39_g6w384) | all 4 finished, exit 0; holdout read once: tie (R44 stage 4) |
+| 44465 | `r43_strata` on gen-5 c06 seeds 1–5 (CPU, short queue) | 2026-10-27 | R44 stage 4: length strata for gen 5 | queued (qsub 2026-10-27) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -4445,7 +4446,7 @@ so that prediction rests on a premise that no longer holds.
 - `results/r36i/r36i_42868_chunk32.*`;
 - log `~/ProductGPT/logs/r36i_42879.log`.
 
-### R44 — PLAN (approved by Jin 26 Oct 2026; stages 2–3 done and both families frozen 27 Oct, stage 4 next): tune gen 6 and the rev-2 incumbent on equal terms
+### R44 — RESULT (approved by Jin 26 Oct 2026; stage 4 read 27 Oct): gen 6 and the rev-2 incumbent, tuned on equal terms, tie
 
 **Why.** R43 step 1 compared gen 6 at the incumbent's hyperparameters, which
 R30 tuned for the gen-5 stack, on the pre-fix code. Gen 6 has never been
@@ -4674,6 +4675,65 @@ when R47 was released (42 queued again). The log of job 44443 (s2) confirms
 c06's settings: dropout 0.05, lr 3.24e-4, wd 0.01, accum 4, warmup 0.1, d_ff
 288, 1,024 occasions, 1,482,236 parameters. The headline cell has 217,303
 events, as in R43. Jobs 44443 and 44444 exited 0.
+
+**Stage 4 — RESULT (27 Oct 2026): a tie. Tuning bought neither family
+anything on the holdout.** All four batch-42 runs exited 0 and none stopped on
+the time budget. The holdout was opened once:
+`scripts/r44_stage4.py --g5 b40_g5_c06:1 --g5 b42_g5_c06:2,3,4,5 --g6 b39_g6w384:1,2,3,4,5`,
+output saved in `results/r44/stage4_holdout.txt` on HPCC.
+
+Headline cell, `outsample_users_holdout_period`:
+
+| | s1 | s2 | s3 | s4 | s5 | mean | sd |
+|---|---|---|---|---|---|---|---|
+| G5 c06 (frozen) | 0.8755 | 0.8874 | 0.8795 | 0.8626 | 0.9038 | **0.8818** | 0.0152 |
+| G6 R43 (frozen) | 0.8808 | 0.8826 | 0.8852 | 0.8713 | 0.8713 | **0.8782** | 0.0065 |
+| G6 − G5 | +0.0053 | −0.0048 | +0.0057 | +0.0087 | −0.0325 | **−0.0035** | |
+
+- **Decision: TIE.** The mean of −0.0035 is far inside ±0.02, and only 2 of 5
+  seeds are negative.
+- **Pre-stated sensitivity, seeds 2–5:** −0.0057, 2 of 4 negative, also a
+  tie. Seed 1's +0.0053 leans toward gen 5, as disclosure 2 expected, but it
+  changes nothing.
+- **Gen 6's small edge in the mean is one seed.** Gen-5 c06 seed 5 stopped
+  early, best at epoch 6. It was also the worst on validation (0.8963), so
+  early stopping did its job: a bad draw, not a fault. Without seed 5,
+  G6 − G5 is +0.0037.
+- **The other cells agree.**
+  - *In-sample customers, holdout period:* −0.0037, 2 of 5 seeds negative.
+  - *Out-of-sample customers, calibration period:* +0.0016, 1 of 5
+    negative.
+- **Tuned gen 5 is no better than untuned gen 5.**
+  - c06 averages 0.8818 against R43's untuned arm A at 0.8776. Paired by
+    seed, c06 − A is +0.0041 (−0.0051, +0.0020, +0.0124, −0.0104, +0.0218).
+  - c06 is twice as noisy across seeds (sd 0.0152 against 0.0074).
+  - Stage 2's validation gain of about 0.019 for c06 was mostly seed-1 luck.
+    Fresh seeds gave 0.8777 on validation, and the holdout did not keep it.
+- **Cost, reported whatever the NLL says:**
+  - Both models have 1,482,236 parameters.
+  - Gen 6 reads full histories at 0.65 minutes per epoch. Gen 5 reads the
+    last 1,024 occasions at 1.23, so gen 6 is about 1.9× faster.
+  - Best epoch: 22.0 for gen 6, 16.4 for gen 5.
+  - Peak memory: 5.5 GB for gen 6; gen 5's trainer does not log it.
+- **Selected window:** gen 6 kept 384.
+- **Length strata:** gen 5 c06's are being scored (CPU job 44465). Gen 6's
+  are R43's (`results/r43/strata.json`).
+
+Against the predictions:
+1. *A tie:* holds.
+2. *Tuning moves each family by less than 0.01 from its R43 value:* holds.
+   Gen 5 moved +0.0041, the wrong way. Gen 6 did not move, since its frozen
+   configuration is R43's.
+3. *Gen 6's best window is 384 or longer, and 128 ranks last:* half holds.
+   384 was selected, but at stage 2 (by median) 128 ranked third and
+   unlimited ranked last.
+
+**Consequence (pre-registered):** this is the ceiling reading at this tuning
+budget. Across R30, R43 and R44, this architecture and data sit at about
+0.88 nats on the headline cell, however the history is read or tuned. R43
+step 2 (generation) can go ahead with the two frozen configurations. Gen-5's
+frozen configuration is c06, although untuned arm A did as well on the
+holdout and with half the seed variance.
 - **Consequence for R45 part B:** its input, "stage 4's gen-6 runs", is
   `b39_g6w384` seeds 1–5, which already exist. Part B (GPU,
   `r45_eval_chopped.pbs`) therefore does not have to wait for batch 42.
