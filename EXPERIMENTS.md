@@ -36,8 +36,9 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 44303 | `runs/r46` export (CPU, `12fdf05`) | 2026-10-26 | R46 G1, G2 | done: G1 exact, G2 explained |
 | 44308[] | `runs/r46/{M0,M1,R0,R1,R1b,R2,R3,R4}` (CPU short, 16 CPUs each, `dba1f7b`) | 2026-10-26 | R46 part A stage 1 | M0–R2 done (exit 0); R3, R4 running (qstat 23:20); R5 elements 8–11 cancelled before any result (amendment 7) |
 | 44309[], 44310 | the R5-based stage 2 and read-out | 2026-10-26 | — | cancelled (amendment 7) |
-| 44315[] (20 elements) | `runs/r46/R6_K*_s*`, R6 = R4 + classes (CPU long, 16 CPUs, 128 GB, `70320f9`) | 2026-10-26 | R46 part A stage 2 | held on 44308[] (afterany) |
-| 44316 | `runs/r46/compare_*.json` | 2026-10-26 | R46 read-out | held on 44315[] (afterany) |
+| 44315[] (20 elements) | `runs/r46/R6_K*_s*`, R6 = R4 + classes (CPU long, 16 CPUs, 128 GB, `70320f9`) | 2026-10-26 | R46 part A stage 2 | done, all exit 0 |
+| 44316 | `runs/r46/compare_*.json` | 2026-10-26 | R46 read-out | done 27 Oct 02:01; result in R46 part A |
+| 44338 | `runs/r46/se/R6_K6_s1` (CPU long, `ffbc46b`) | 2026-10-27 | R46 stage 3: SEs of the selected R6 | running (qstat 27 Oct 10:07) |
 | 44311[], 44314[] | `runs/r46_mc/{R1b,R3,R6_K2}` | 2026-10-26 | R46 SE coverage | done; see the coverage table |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
@@ -5043,3 +5044,140 @@ jobs 44311[] and 44314[].
 At every size, the estimate's likelihood is at least the truth's, so the
 optimiser reaches the maximum. The real fitting sample is about 1.4 million
 rows: 6 times the largest panel above.
+
+### R46 — RESULT, part A (T1 one-step prediction), 27 Oct 2026: the classical ladder does not reach the neural band
+
+**Runs.**
+- Stage 1: `44308[]`, M0–R4, all exit 0. Stage 2: `44315[]`, 20 R6 fits,
+  all exit 0. The commits were `dba1f7b` and `70320f9`.
+- The holdout was opened once, by compare job `44316` (27 Oct, 02:01).
+- Every rung scored exactly the G1 rows in every cell (checked from the run
+  files).
+- Each rung is one deterministic maximum-likelihood fit. The intervals are
+  customer-cluster bootstrap CIs over per-occasion NLL differences (1,000
+  replicates). They do not include estimation uncertainty.
+
+**Selection, by the pre-registered rules.**
+- R6: within K, the start with the best training NLL; across K, the best
+  campaign-27 NLL. K = 6 won with start 1. Campaign-27 NLL by K:
+
+  | K | campaign-27 NLL |
+  |---|---|
+  | 2 | 0.97339 |
+  | 3 | 0.97079 |
+  | 4 | 0.96979 |
+  | 6 | 0.96898 |
+
+- K = 6 is the top of the pre-registered grid, and campaign-27 NLL was still
+  falling by about 0.0008 per step. More classes might gain a little more.
+- At K = 2 and 3, all five starts reach one optimum. The K = 6 starts span
+  0.0009 in training NLL.
+- The best rung by campaign-27 NLL is R6. The holdout played no part in any
+  choice.
+
+**The ladder, out-of-sample customers × holdout (217,303 rows).**
+
+| rung | P | campaign 27 | **NLL** | purchases | NotBuy | hit | macro F1 | ECE | in-sample × holdout | out-of-sample × calibration |
+|---|---|---|---|---|---|---|---|---|---|---|
+| M0 marginal | 8 | 1.6496 | 1.6638 | 2.0761 | 1.0622 | 0.407 | 0.064 | 0.061 | 1.6684 | 1.7122 |
+| M1 Markov-1 | 80 | 1.1549 | 1.1121 | 1.3315 | 0.7921 | 0.663 | 0.570 | 0.055 | 1.1067 | 1.2193 |
+| R0 offer | 30 | 1.4473 | 1.5494 | 1.9324 | 0.9905 | 0.445 | 0.129 | 0.076 | 1.5532 | 1.5595 |
+| R1 + last decision | 102 | 1.0825 | 1.0747 | 1.2631 | 0.7997 | 0.657 | 0.572 | 0.056 | 1.0695 | 1.1638 |
+| R1b + habit ρ | 103 | 1.0813 | 1.0745 | 1.2639 | 0.7982 | 0.658 | 0.572 | 0.056 | 1.0694 | 1.1636 |
+| R2 + run structure | 107 | 1.0142 | 1.0181 | 1.2269 | 0.7134 | 0.662 | 0.579 | 0.026 | 1.0127 | 1.1222 |
+| R3 + long memory | 115 | 0.9892 | 0.9958 | 1.2098 | 0.6837 | 0.661 | 0.574 | 0.024 | 0.9910 | 1.0936 |
+| R4 + holdings, pity | 137 | 0.9804 | 0.9962 | 1.2244 | 0.6632 | 0.660 | 0.571 | 0.023 | 0.9916 | 1.0873 |
+| **R6** R4 + 6 classes | 197 | **0.9690** | **0.9826** | 1.2043 | 0.6593 | 0.662 | 0.574 | 0.023 | 0.9774 | 1.0739 |
+
+**What each piece of information is worth (out-of-sample × holdout; negative
+means it helps).**
+
+| step | information | Δ NLL [95% CI] | purchases | NotBuy | verdict |
+|---|---|---|---|---|---|
+| R1 − R0 | last decision | −0.4747 [−0.4930, −0.4574] | −0.669 | −0.191 | matters materially |
+| R1b − R1 | habit persistence (ρ = 0.097) | −0.0001 [−0.0002, −0.0001] | +0.001 | −0.002 | matters, but worth nothing |
+| R2 − R1 | run structure | −0.0566 [−0.0586, −0.0547] | −0.036 | −0.086 | matters materially |
+| R3 − R2 | long memory | −0.0222 [−0.0237, −0.0206] | −0.017 | −0.030 | matters materially |
+| R4 − R3 | holdings, pity, guarantee | +0.0003 [−0.0006, +0.0012] | +0.015 | −0.021 | **does not matter on the holdout** |
+| R6 − R4 | persistent taste | −0.0135 [−0.0150, −0.0121] | −0.020 | −0.004 | matters, not materially |
+| R6 − M1 | everything, against Markov-1 | −0.1295 [−0.1334, −0.1258] | −0.127 | −0.133 | matters materially |
+
+**Against the neural families (decision rule: "loses" above 0.9056).**
+- R6 at 0.9826 **loses** to every R30 stage-4 cell:
+  - by +0.0970 against the plain GRU at level 6 (0.8856 ± 0.0067);
+  - by +0.0777 against the weakest cell, the transformer at level 6 (0.9049).
+- The neural families gain 0.2265 nats over Markov-1. The parametric ladder
+  recovers 0.1295 of that (57%).
+- The remaining 0.0970 sits mostly on WHAT is bought:
+  - purchase classes: 1.2043 against the GRU's 1.0644 (+0.140);
+  - NotBuy: 0.6593 against 0.6246 (+0.035) (R30 stage 5 per-class
+    numbers).
+- Calibration is slightly worse: ECE 0.023 against 0.010–0.019 for the
+  neural families.
+
+**Predictions, scored.**
+1. **The tie extends: FAILED.** The best rung is 0.9826, not 0.89–0.905.
+   The classical state summaries leave about 0.1 nats on the table. So the
+   R21–R25 "information ceiling" is a ceiling for neural architectures, not
+   for any summary of the observed state.
+2. **Timing state carries the gain: holds, with one failure.**
+   - Holds: the largest steps are the last decision, the run structure and
+     the long memory.
+   - Holds: R4 adds at most 0.015 (it adds +0.0003).
+   - FAILED: "concentrated on Figure-B". On the holdout, R4 makes both
+     Figure-B classes WORSE: Buy1-FigB 1.042 → 1.086 and Buy10-FigB 1.836 →
+     1.861.
+   - R4 does help on the calibration-period cell (−0.0063 [−0.0067,
+     −0.0060]) and on campaign 27 (−0.0088). The holdings effects estimated
+     on campaigns < 27 do not carry to campaigns 28–30 for purchases. Test
+     why before interpreting.
+3. *(Withdrawn, amendment 7.)*
+4. **Heterogeneity buys nothing out of sample: FAILED.** The classes gain
+   0.0135 on out-of-sample customers, the same as in sample (0.0142).
+   - Here class weights are filtered from each customer's own history, and
+     that knowledge transfers to new customers.
+   - The neural customer embedding and mixture head did not transfer
+     (R7/R15). A filtered latent class is the form of heterogeneity that
+     does.
+5. **State dependence survives the classes: HOLDS.**
+   - From R4 to R6: banner loyalty 2.00 → 2.06 (class-weighted; no
+     shrinkage), buy loyalty 0.61 → 0.38 (−38%), ten-pull loyalty 2.84 →
+     1.92 (−33%). The repeat-the-last-decision premium shrinks by a median
+     of 19%. All shrink by less than half.
+   - The decision half-life is a few occasions: 2.9 in R4, 1.8 in R6. Adding
+     taste shortens the memory, the Keane and Heckman pattern: part of
+     apparent long memory is persistent taste.
+   - These are point estimates. By the G3 coverage result, the half-life
+     intervals must come from a profile likelihood or the part C bootstrap,
+     not from the sandwich SEs.
+
+**Other findings.**
+- **Roy's habit term is absorbed by the lag matrix.** ρ = 0.097, but it is
+  worth 0.0001 nats.
+- **R3's "long memory of outcomes" was inventory.**
+  - Without holdings, the outcome stock (5★ wins, featured wins, lost 50/50s)
+    barely decays: α = 0.993, half-life 101 occasions.
+  - Once holdings enter (R4), its half-life falls to 3.2 occasions.
+- **Data issue in campaign 27.**
+  - All 42 Figure-B purchases that happen while Figure-B is "not offered"
+    are in campaign 27, where offer slot 1 is empty on every row. That is 24
+    in the campaign-27 cell and 18 in the out-of-sample × calibration cell.
+  - Training and holdout have none. Campaign 27's offer record most likely
+    misses a Figure-B banner.
+  - Those rows cost each offer-aware rung a near-constant 0.0016–0.0017 on
+    campaign-27 NLL, which explains the 12–16-nat Figure-B per-class values
+    there. They change no selection.
+  - Gen 5's offer stream carries the same record, so this is worth checking
+    for the neural validation too.
+
+**What this licenses.** On one-step prediction, a classical state-dependence
+model with 197 identified parameters does not reach the neural band. Deep
+sequence models extract a further 0.08–0.10 nats, mostly on which banner and
+pack is bought. The paper can say the neural accuracy edge is real against
+the marketing benchmark, as well as against Markov-1. The spine's test is
+still part B: whether the classical ladder, despite predicting worse,
+generates closer to the real sequences than free-running ProductGPT does.
+
+**Stage 3.** Sandwich SEs for R6_K6_s1 are job `44338` (long queue), written
+to `runs/r46/se/R6_K6_s1` so this read-out's files are untouched. It started
+at the estimate: training NLL 1.09023, max |gradient| 3e-14.
