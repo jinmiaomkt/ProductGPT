@@ -30,7 +30,8 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 41582–41617 | `b19_*` (36 runs) | 2026-09-26 | R32: hybrid designs seq_ra / seq_ar / block | queued (qstat 2026-09-26) |
 | 41643–41692 | `b22_*`, `b23_*` (50 runs) | 2026-09-27 | R33 ladder re-run after the parameterisation and weight-decay fixes | queued (qstat 2026-09-27) |
 | 42880–42897 | `b39_*` (18 runs, from `~/ProductGPT/work_gen6` at `93dcfbf`) | 2026-10-20 | R43 step 1: gen 6 against the rev-2 incumbent | complete, all 18 exit 0; result in R43 |
-| 44211–44258 | `b40_*` (48 runs, from `~/ProductGPT/work_gen6` at `a8ed3f9`) | 2026-10-26 | R44 stage 2: paired search, gen 5 and gen 6 | 44211–44212 running, rest queued (qstat 2026-10-26) |
+| 44211–44258 | `b40_*` (48 runs, from `~/ProductGPT/work_gen6` at `a8ed3f9`) | 2026-10-26 | R44 stage 2: paired search, gen 5 and gen 6 | complete, all 48 exit 0; ranking in R44 |
+| 44320–44337 | `b41_*` (18 runs, from `~/ProductGPT/work_gen6` at `6b96b7d`) | 2026-10-27 | R44 stage 3: 6 candidates × seeds 11–13 | submitted (qsub 2026-10-27) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -4539,6 +4540,44 @@ logs of jobs 44211 (gen 5) and 44212 (gen 6) confirm that configuration 0 ran
 as drawn: d96, d_ff 288, N6, lr 3.28e-4, dropout 0.1, weight decay 0,
 accumulation 8, warmup 0.1, model_rev 2, and window 384 for gen 6. Both models
 have 1,482,236 parameters.
+
+**Stage 2 — RESULT (27 Oct 2026; validation only, one seed each, so a search
+signal, not a finding, per P7).** All 48 runs exited 0. The ranking comes from
+`scripts/summarize_search.py --prefix b40_`, which opens no test cell. The
+top 3 per family, with the R43 configuration (batch 39, seed 1) eligible:
+
+| family | candidate | validation NLL |
+|---|---|---|
+| gen 5 | c06: d96 N6, lr 3.24e-4, dropout 0.05, weight decay 0.01, accum 4, d_ff 288, warmup 0.1 | 0.8601 |
+| gen 5 | c23: d128 N4, lr 1.77e-4, dropout 0.1, weight decay 0, accum 4, d_ff 256, warmup 0.02 | 0.8630 |
+| gen 5 | c07: d128 N4, lr 2.22e-4, dropout 0.3, weight decay 0.1, accum 4, d_ff 512, warmup 0.02 | 0.8712 |
+| gen 6 | c23 (as gen-5 c23, window 768) | 0.8687 |
+| gen 6 | R43's configuration (b39 C s1, window 384) | 0.8741 |
+| gen 6 | c02: d96 N6, lr 3.97e-4, dropout 0.05, weight decay 0.05, accum 4, d_ff 192, warmup 0.02, window 384 | 0.8748 |
+
+The R43 gen-5 configuration (0.8793) is not in gen 5's top 3. Search signals,
+to be confirmed:
+- **Tuning helped gen 5 more.** Its best search configuration beats R43's by
+  about 0.019; gen 6's best beats R43's by about 0.005.
+- **Gen 5 does slightly better in matched pairs.** On identical
+  hyperparameters, gen 6 is worse in 18 of 24 pairs, by +0.006 on average.
+- **No clear window effect.** By median validation over each window's six
+  runs: 768 0.885, 384 0.887, 128 0.891, unlimited 0.893.
+- **Bad draws for both families:** c03 and c22 (low learning rate with heavy
+  dropout).
+
+**Stage 3 — SUBMITTED (27 Oct 2026): batch 41, jobs 44320–44337**, approved
+by Jin.
+- **Runs:** the 6 candidates above, each on fresh seeds 11, 12 and 13, from
+  `~/ProductGPT/work_gen6` at `6b96b7d`.
+- **Script:** `scripts/submit_batch41.sh` re-draws the stage-2 strings and
+  changes only SEED and TAG. A dry run with a stand-in `qsub` checked the 18
+  strings.
+- **Logs:** jobs 44320 (gen-6 c02 s11) and 44321 (gen-5 c06 s11) confirm the
+  settings.
+- **Freezing:** each family by its validation mean over the three seeds.
+- **Afterwards, as approved:** write gen 6's frozen configuration to
+  `~/ProductGPT/r44_frozen_g6.env`, then launch R45 part A and R47 B1–B2.
 
 ### R45 — PLAN, DRAFT FOR JIN'S REVIEW (27 Oct 2026; nothing trained): controlled left-censoring on complete histories
 
