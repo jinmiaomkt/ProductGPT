@@ -40,6 +40,9 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 44316 | `runs/r46/compare_*.json` | 2026-10-26 | R46 read-out | done 27 Oct 02:01; result in R46 part A |
 | 44338 | `runs/r46/se/R6_K6_s1` (CPU long, `ffbc46b`) | 2026-10-27 | R46 stage 3: SEs of the selected R6 | done 10:18, exit 0; recorded under R46 stage 3 |
 | 44311[], 44314[] | `runs/r46_mc/{R1b,R3,R6_K2}` | 2026-10-26 | R46 SE coverage | done; see the coverage table |
+| 44354, 44355, 44356 | R46 part B smoke, B1 diagnosis, smoke after amendment B-1 (CPU short) | 2026-10-27 | R46 part B gates | 44354 stopped at B1 (amendment B-1); 44356 passed every gate |
+| 44357[] (19 elements) | `runs/r46/partB/{ref,fr_*,tf_*}` (CPU short, 4 CPUs, 64 GB, `db28464`) | 2026-10-27 | R46 part B: the ladder as generators on the R36i yardstick | running (qstat 27 Oct 12:16) |
+| 44358 | `runs/r46/partB/compare.json` | 2026-10-27 | R46 part B read-out | held until 44357[] ends |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
