@@ -10,8 +10,12 @@
 # R49 step 3, GPU: one arm on one shard of the out-of-sample customers.
 #   ARM=a  Qwen3-32B    R48's venv (transformers 4.57.6), YaRN factor 2 as R48
 #   ARM=b  Qwen3.6-27B  productgpt-llm5 (transformers 5.21.0), native 262,144
-# bf16 weights split over the job's two L40S (no quantisation).  Every job first
-# runs the self-check (T3/T4 with the real model on the GPU) and stops if it fails.
+# bf16 weights split over the job's two L40S (no quantisation).  Every job gates
+# itself before scoring (the CPU queues were full on 27 Oct, so the step-2 gates
+# moved here) and stops at the first failure:
+#   1. the unit tests T1-T6 with the downloaded tokenizer (CPU, about a minute)
+#   2. --strict-load: no weight missing or mis-shaped
+#   3. --selfcheck: T3/T4 with the real model on the GPU
 #
 #     cd ~/ProductGPT/work_r48
 #     qsub -v ARM=b,SHARD=0,NSHARDS=4 scripts/r49_score_gpu.pbs     (etc.)
@@ -31,8 +35,8 @@ source "$PBS_O_WORKDIR/env.sh"
 WHO="${WHO:-out}"
 ROOT=/storage/home/jinmiao/ProductGPT
 case "$ARM" in
-    a) M=Qwen3-32B;   VENV=productgpt-llm;  YARN=2; TAG=qwen3_32b ;;
-    b) M=Qwen3.6-27B; VENV=productgpt-llm5; YARN=0; TAG=qwen36_27b ;;
+    a) M=Qwen3-32B;   VENV=productgpt-llm;  YARN=2; TAG=qwen3_32b;  ARCH=qwen3 ;;
+    b) M=Qwen3.6-27B; VENV=productgpt-llm5; YARN=0; TAG=qwen36_27b; ARCH=qwen3_5 ;;
     *) echo "ARM must be a or b"; exit 2 ;;
 esac
 source "$ROOT/venvs/$VENV/bin/activate"
@@ -46,10 +50,15 @@ cat "$ROOT/models/$M/REVISION.txt"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 
 set +e
-python -m llm_zeroshot.score --table "$R46/occasions_v6_S1024.npz" --model "$ROOT/models/$M" \
-    --out-dir "$R49" --tag ${TAG}_${WHO} --who "$WHO" \
-    --shard "$SHARD" --n-shards "$NSHARDS" --yarn "$YARN" --n-gpus 2 --selfcheck --device cuda
+python scripts/test_r48_zeroshot.py --tokenizer "$ROOT/models/$M" --arch "$ARCH"
 rc=$?
+if [ $rc -eq 0 ]; then
+    python -m llm_zeroshot.score --table "$R46/occasions_v6_S1024.npz" --model "$ROOT/models/$M" \
+        --out-dir "$R49" --tag ${TAG}_${WHO} --who "$WHO" \
+        --shard "$SHARD" --n-shards "$NSHARDS" --yarn "$YARN" --n-gpus 2 \
+        --strict-load --selfcheck --device cuda
+    rc=$?
+fi
 set -e
 if [ $rc -eq 0 ]; then
     bash "$PBS_O_WORKDIR/scripts/notify.sh" "OK  R49 ${TAG} ${WHO} shard ${SHARD}/${NSHARDS} (job ${PBS_JOBID%%.*})" || true

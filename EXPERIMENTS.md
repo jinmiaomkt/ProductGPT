@@ -5371,6 +5371,25 @@ they cannot give the same NLL.
    - no weight is missing or mis-shaped.
    Each gate exits non-zero on failure. The GPU jobs are submitted with
    `-W depend=afterok:<dry run>`, so none starts unless every gate passes.
+
+   *Amended 27 Oct, 23:30, before any run on real data: the gates move into
+   each GPU job.* The dry run (job 44491) waited an hour without starting,
+   because both CPU queues were full (`short` 224/224 cores, `long` also
+   short of cores). It was deleted, along with its eight dependent GPU jobs.
+   Each GPU job now gates itself before scoring and stops at the first
+   failure:
+   - the unit tests T1–T6 with the downloaded tokenizer;
+   - `--strict-load`: no weight may be missing or mis-shaped. It replaces the
+     CPU load check. Smoke-tested on tiny checkpoints with transformers 4.57.6
+     and 5.21.0: it passes a complete checkpoint and stops one missing a
+     weight. On a tiny multimodal Qwen3.5 checkpoint it finds 0 missing
+     weights.
+   - `--selfcheck`, as before.
+
+   The token-length gate for arm A moves to step 4: the shards' token totals
+   must equal R48's dry run (46.4M, maximum 37,088). It holds by construction,
+   because the tokenizer files are byte-identical (sha256 checked on HPCC) and
+   the prompt code is unchanged. The other gates are unchanged.
 3. *GPU* (`scripts/r49_score_gpu.pbs`, 2 L40S per job, 4 shards per arm, arms
    interleaved). Each job first runs `--selfcheck`: T3 and T4 on a synthetic
    customer with the real model in bf16 on the GPU. It stops if one pass differs

@@ -111,7 +111,8 @@ def cell_codes(tab: Dict[str, np.ndarray]) -> np.ndarray:
     return code
 
 
-def load_model(name: str, device: str, yarn: float, n_gpus: int = 1):
+def load_model(name: str, device: str, yarn: float, n_gpus: int = 1, strict: bool = False):
+    """strict (R49): stop unless every weight the text model needs is in the checkpoint."""
     import torch
     import transformers
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -131,9 +132,17 @@ def load_model(name: str, device: str, yarn: float, n_gpus: int = 1):
         if not device.startswith("cuda") or torch.cuda.device_count() < n_gpus:
             raise SystemExit(f"--n-gpus {n_gpus} needs that many visible GPUs")
         kw["device_map"] = "balanced"               # whole layers, about half on each GPU
-        model = AutoModelForCausalLM.from_pretrained(name, **kw).eval()
-    else:
-        model = AutoModelForCausalLM.from_pretrained(name, **kw).to(device).eval()
+    model = AutoModelForCausalLM.from_pretrained(name, output_loading_info=strict, **kw)
+    if strict:
+        model, info = model
+        missing = list(info.get("missing_keys", []))
+        mismatched = list(info.get("mismatched_keys", []))
+        prefixes = sorted({".".join(k.split(".")[:2]) for k in info.get("unexpected_keys", [])})
+        print(f"[r48] load: {type(model).__name__}, {len(missing)} missing, "
+              f"{len(mismatched)} mis-shaped, unexpected prefixes {prefixes}", flush=True)
+        if missing or mismatched:
+            raise SystemExit(f"strict load FAILED: missing {missing[:5]}, mis-shaped {mismatched[:5]}")
+    model = model.eval() if n_gpus > 1 else model.to(device).eval()
     return tok, model
 
 
@@ -184,6 +193,8 @@ def main() -> None:
                     help="T3/T4 on a synthetic customer with the real model first (R49)")
     ap.add_argument("--selfcheck-tol", type=float, default=0.1,
                     help="largest allowed T3 / T4-before difference, in nats")
+    ap.add_argument("--strict-load", action="store_true",
+                    help="stop if any weight is missing or mis-shaped (R49)")
     ap.add_argument("--max-customers", type=int, default=0, help="smoke only")
     ap.add_argument("--dry-run", action="store_true",
                     help="tokenise only; report the token-length distribution")
@@ -215,7 +226,7 @@ def main() -> None:
         from transformers import AutoTokenizer
         tok, model = AutoTokenizer.from_pretrained(a.model), None
     else:
-        tok, model = load_model(a.model, a.device, a.yarn, a.n_gpus)
+        tok, model = load_model(a.model, a.device, a.yarn, a.n_gpus, a.strict_load)
     letter_ids = letter_token_ids(tok)
     # Qwen3's config says 40,960 but its card gives 32,768 as the native context;
     # Qwen3.5/3.6 are native to their config's 262,144
