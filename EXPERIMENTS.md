@@ -5626,3 +5626,209 @@ Exploratory, with 9 rungs tested: R2, R3, R4 and R6 each beat Markov-1, by
 - `runs/r46/partB/compare.json`, which holds every per-statistic energy and
   the verdicts;
 - logs `~/ProductGPT/logs/r46b_44359_*` and `r46b_compare_44360.log`.
+
+### R46 — PLAN, part C (T3, identification), pre-registered 27 Oct 2026 before any part C run: what the real design identifies, the intervals to quote, and Keane's test on the Genshin structure
+
+Jin, 27 Oct: "move to stage C". The generation evaluation (part B) is to be
+discussed later; nothing here depends on it.
+
+**Question.** Part A's coefficients are readable marketing quantities only if
+three things hold on the real data.
+1. **The real design identifies them.** The design is the offer calendar (one
+   tuple per campaign, 26 training campaigns), the real window lengths and
+   the real gacha rules. R34 found the decay and the duplicate weights
+   identified on synthetic schedules and the free kernel not, and left a
+   real-calendar re-run open as "confirmatory".
+2. **Their intervals are right.** G3's coverage runs (800 customers) found
+   the per-coefficient sandwich intervals calibrated, except for the decays
+   (`a_dec` coverage 0.55) and the rare states.
+3. **The state dependence is not persistent taste in disguise.** R6 keeps
+   most of R4's loyalty (T1 prediction 5). But six classes may not absorb all
+   the heterogeneity, which is Keane's (1997) objection. The reading
+   programme's replication (`02_keane_1997_stress`) showed the pooled bias on
+   Keane's ketchup design: a true lag of 0 estimated at 0.44 by the pooled
+   logit, and recovered by the mixture. This re-runs that test on the Genshin
+   structure.
+
+The outline's R5 is replaced by R6 (amendment 7).
+
+**Arms.**
+
+| arm | asks | data-generating process | fitted | replicates |
+|---|---|---|---|---|
+| C1 parametric bootstrap | identification and SE calibration on the real design | R6 (K = 6, start 1) and R4 at their part-A estimates, simulated on the real design | the same rung, started at the truth, with sandwich SEs | 20 per rung |
+| C2 customer bootstrap | the intervals to quote | the real training rows, in-sample customers resampled with replacement | R6, started at its estimate | 50 |
+| C3 Keane stress test | is the state dependence heterogeneity? | H6 (below) fitted to the real data, and a continuous version of it, simulated on the real design | R4 (default start, as in part A) and R6 (started at H6 embedded in R6) | 20 per null, both fits on each table |
+
+**The real design (C1, C3).**
+- **Customers and rows.** The 2,416 in-sample customers with training rows.
+  For each, the window rows up to the last training row: 1,064,851 rows, of
+  which 1,064,818 are training rows. The other 33 are campaign-27 rows that
+  sit in a window ahead of a later campaign-26 row (campaign ids interleave
+  in 118 windows). They are simulated, because the state passes through them,
+  but they are not in the likelihood, exactly as in the real fit.
+- **Kept real (exogenous):**
+  - the offers, campaign ids and clock (`ipt`);
+  - the window lengths and the pre-window inventory;
+  - row 0's previous decision and obtained block.
+- **Simulated:**
+  - **Decisions.** Each decision is drawn from the rung's probabilities given
+    the simulated state. The state is `parametric/policy.py`'s Tracker, which
+    part B gated to equal `state.build`.
+  - **Classes.** R6 draws each customer's class once from the class weights.
+  - **Acquisitions.** Each purchase's acquisitions come from R36a's
+    `AcquisitionEnv`: the published rarity rates with pity, and the
+    calibrated identity process.
+    - It is built here on level-6 ids, and fitted on the in-sample customers'
+      training rows.
+    - Pity starts at zero at the window start, as `state.build`'s counters do.
+- **Draws.** One uniform per customer and row, the inverse-CDF draw of part B,
+  and one generator per replicate.
+- **Refit.** `state.build` on the simulated table, with the real offer
+  calendar. Then `parametric/fit.py`'s estimator on the training mask, as in
+  part A: L-BFGS, Newton polish, ridge precision 0.01.
+
+**H6, the heterogeneity-only null (C3).**
+- **What it keeps.** It is R4 without decision state dependence, with six
+  latent classes:
+  - the constants, the offer and the campaign phase;
+  - the outcome stock (5★ wins, featured wins, lost 50/50s) with its decay;
+  - holdings, pity, the guarantee and weapon losses;
+  - class-specific constants only.
+- **What it drops.** The lag matrix (a constant per alternative instead), the
+  run and Bawa terms, and the decision stocks (banner, buy and ten-pull
+  loyalty). That is everything T1 prediction 5 calls state dependence.
+- **Fitting.** On the real training rows, as R6 was:
+  - K = 6, with five starts warm-started from R4's shared blocks, the best
+    kept by training NLL;
+  - scored on campaign 27 only; the holdout is not read.
+- **Nesting.** H6 nests in R6, with:
+  - equal lag rows;
+  - zero loyalty, run and Bawa terms;
+  - zero class deviations in buy loyalty, banner loyalty and the NotBuy
+    spell.
+
+  So R6 fitted to H6 data has the truth in its family.
+- **Null (a), finite.** H6 as fitted.
+- **Null (b), continuous.**
+  - The six class constant vectors are replaced by 200 equally weighted
+    classes, drawn once (seed 46499) from a normal with the same
+    class-weighted mean and covariance.
+  - Six fitted classes cannot represent this heterogeneity exactly, which is
+    Keane's worry.
+
+**Quantities** (as part A read them; class-weighted for R6).
+- **State dependence (SD):**
+  - banner loyalty `loy`, buy loyalty `inc` and ten-pull loyalty `tenl`;
+  - the repeat-the-last-decision premium: lag[j, j] minus the mean of column
+    j over the other previous decisions, taking the median over the eight
+    alternatives;
+  - the decision and outcome half-lives.
+- **Holdings and gacha (HG):**
+  - copies of the featured figure (1, 2, 3+) and weapon copies (1, 2+);
+  - limited 5★ owned and same-element figures;
+  - the guarantee and weapon losses (1, 2+);
+  - the 5★ pity depth and soft-pity hinge per banner.
+
+**Gates (each logged; nothing is read until they pass).**
+- **C-G1, design.** The simulated table has the real design:
+  - 2,416 customers and 1,064,818 training rows;
+  - offers, campaigns, clock, lengths and pre-window inventory equal to the
+    real table's (checksum).
+- **C-G2, simulation.** For 100 customers per replicate, `state.build` on the
+  simulated streams reproduces, within 1e-6, every block the simulator's
+  state used and the drawn class's probabilities. This is B2's test on
+  generated streams.
+- **C-G3, optimum.** Where the truth is in the fitted family (C1, and R6 on
+  null (a)), the penalised training objective at the estimate is no worse
+  than at the truth.
+- **C-G4, bootstrap.** The multinomial weights sum to 2,416 in every
+  replicate; the weighted training rows are logged.
+- **C-G5, pairing.** In C3, the R4 and R6 fits of one replicate read the same
+  simulated table (checksum).
+- **Unit tests first** (`scripts/test_r46_identify.py`, HPCC CPU):
+  - H6 embedded in R6 gives identical probabilities;
+  - the Tracker's class-specific probabilities equal `model.log_probs` on
+    `state.build` features;
+  - integer weights equal duplicated customers;
+  - the existing rungs' parameter layouts, and the part A and B test suites,
+    are unchanged.
+
+**Decision rules.**
+- **C1, per coefficient** (R = 20 replicates):
+  - bias z = mean(θ̂ − θ) / (sd / √20);
+  - ratio = median sandwich SE / replicate sd;
+  - coverage of θ̂ ± 1.96 SE.
+
+  Half-lives are tested on the log scale. Class-specific coefficients (`d_*`,
+  `cls`) are reported but not tested, because class labels can switch.
+  - **I1, identified on the real design:** every SD and HG quantity has
+    |bias z| < 3, and so do at least 90% of the identified, non-rare shared
+    coefficients.
+  - **I2, the sandwich is usable:**
+    - the pooled coverage of the identified, non-rare shared coefficients is
+      in 0.90–0.98;
+    - the ratio is in 0.67–1.5 for each SD and HG quantity.
+
+    A quantity that fails takes its interval from C2.
+- **C2, the quoted intervals.** For each SD and HG quantity, and for every
+  rare-state coefficient: the estimate ± 1.96 bootstrap sd. Half-lives use
+  the logit-α scale, transformed back. Percentile ranges are reported beside
+  them.
+- **C3, per SD quantity Q** (`loy`, `inc`, `tenl`, the repeat premium):
+  - The test is the Monte Carlo p-value of the real R6 estimate against the
+    20 null R6 estimates, one-sided in the direction of the real estimate:
+    p = (1 + #{null estimates at least as extreme}) / 21.
+  - **I3, the state dependence is not heterogeneity:** p ≤ 0.048 (the real
+    estimate beyond all 20 null estimates) for all four Q, under both nulls.
+  - **I4, Keane's pooled bias on this structure:** R4 on null (a) reports
+    positive banner loyalty and repeat premium, with bias z > 3 against the
+    null's zero.
+
+**Predictions.**
+1. **I1 holds** for R4 and R6, including both half-lives. The real panel has
+   1.06 million training rows, over four times G3's largest (2,000 × 120).
+2. **I2 holds** for the shared coefficients, except the decision half-life:
+   its ratio is below 0.67 (the sandwich is too small, as in G3), so its
+   interval comes from C2.
+3. C2's decision half-life interval lies within 1–3 occasions.
+4. H6 is worse than R6 on campaign 27 by more than 0.1 nats.
+5. **I4 holds:** heterogeneity alone produces apparent loyalty in a pooled
+   model.
+6. R6 on null (a) finds no state dependence: each Q is within 3 Monte Carlo
+   SE of 0.
+7. R6 on null (b) finds some (positive, bias z > 3), but less than a quarter
+   of each real estimate.
+8. **I3 holds.**
+
+**What each outcome licenses.**
+
+| outcome | reading |
+|---|---|
+| I1 and I2 hold | the part-A coefficients and SEs are identified on the real design; R34's open item is closed for the parametric model |
+| I1 fails for a quantity | the calendar does not identify it, and it is reported as such |
+| I3 holds | "state dependence survives the classes" is not an artefact of heterogeneity of either kind |
+| I3 fails under (b) only | the evidence for state dependence leans on the six-class approximation, and the paper says so |
+
+**Holdout.** Not read. C1–C3 fit and simulate on training rows only, and H6
+is scored on campaign 27 only.
+
+**Compute: HPCC CPU, `short` queue, PBS arrays, 8 CPUs and 96 GB per
+element.**
+1. **Smoke.** The unit tests, then one element of each kind on 150
+   customers.
+2. **Arrays:**
+   - C1 `-J 0-39`, C2 `-J 0-49` and the H6 fits `-J 0-4`;
+   - C3 `-J 0-79`, after the H6 fits (`afterok`);
+   - the read-out after everything (`afterany`).
+3. **Seeds:**
+   - C1: 46000 + r for R6 and 46100 + r for R4;
+   - C2: 46200 + r;
+   - C3: 46300 + r for null (a) and 46400 + r for null (b).
+4. **Size.** About 1–3 hours per element, 175 elements in all.
+
+**Out of scope.**
+- A profile likelihood for the decays: the outline's alternative, since C2
+  gives the intervals.
+- Identification of the unselected rungs.
+- The generation evaluation (Jin, 27 Oct: to be discussed later).
