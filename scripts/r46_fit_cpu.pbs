@@ -55,10 +55,12 @@ case "$STAGE" in
         --init-from "$R46/R4/result.json"
     ;;
   3)
+    # Written to $R46/se/<tag>, never over the stage-2 run the T1 read-out used.
     : "${TAG:?STAGE=3 needs TAG=R6_K<k>_s<start>}"
     K=$(echo "$TAG" | sed -E 's/R6_K([0-9]+)_s([0-9]+)/\1/')
     START=$(echo "$TAG" | sed -E 's/R6_K([0-9]+)_s([0-9]+)/\2/')
-    python -m parametric.fit "${COMMON[@]}" --rung R6 --K "$K" --start "$START" \
+    python -m parametric.fit --table "$R46/occasions_v6_S1024.npz" --feats "$R46/features_v6_S1024.npz" \
+        --out-dir "$R46/se" --threads 16 --rung R6 --K "$K" --start "$START" \
         --theta-from "$R46/$TAG/result.json" --se
     ;;
 esac
