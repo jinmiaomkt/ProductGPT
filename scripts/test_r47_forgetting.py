@@ -15,6 +15,12 @@ Tests for R47's forgetting options in gen 6 (slot_state, camp_decay). CPU only.
       and the logits differ from slot_state=full.
   F6  no decay (the infinite half-life) under stock_only: the slots' count is
       the cumulative tier-weighted stock.
+  F7  training gradients over several chunks: the per-chunk backward the
+      trainer uses (on_chunk) gives exactly the gradient of one full autograd
+      pass at the same chunk size, for every parameter including the stock's
+      (tier weights, kernel, half-life), under full and stock_only and with
+      camp_decay < 1. (Batch 44401 failed here: stock_only's slot count
+      carried the stock's graph into the second chunk.)
 
     python scripts/test_r47_forgetting.py
 """
@@ -205,12 +211,42 @@ def f5_f6():
           f"({float((c - want).abs().max()):.1e})", float((c - want).abs().max()) < 1e-5)
 
 
+def f7():
+    print("F7 per-chunk backward = one full autograd pass, all parameters")
+    lto, obt, prev, uid, camp = history()
+    g = torch.Generator().manual_seed(7)
+    wts = torch.randn(lto.size(0), lto.size(1), 18, generator=g)
+    struct_keys = ("tier_raw", "attr_w", "attr_self", "half_life_raw")
+    for slot_state, delta, freeze in (("full", 1.0, False), ("stock_only", 1.0, True),
+                                      ("stock_only", 1.0, False), ("stock_only", 0.3, False)):
+        m = model(slot_state=slot_state, camp_decay=delta, decay_freeze=freeze).train()
+
+        def cb(c0, c1, logits):
+            (logits.float() * wts[:, c0:c1]).sum().backward()
+
+        m.zero_grad()
+        m.stream_forward(lto, obt, prev, uid, camp, chunk=7, on_chunk=cb)
+        got = {n: p.grad.clone() for n, p in m.named_parameters() if p.grad is not None}
+        m.zero_grad()
+        (m.stream_forward(lto, obt, prev, uid, camp, chunk=7).float() * wts).sum().backward()
+        ref = {n: p.grad.clone() for n, p in m.named_parameters() if p.grad is not None}
+        struct = sorted(n for n in ref if any(s in n for s in struct_keys))
+        same = set(got) == set(ref)
+        worst = max(float((got[n] - ref[n]).abs().max() / (ref[n].abs().max() + 1e-12))
+                    for n in ref) if same else float("inf")
+        live = all(float(ref[n].abs().sum()) > 0 for n in struct)
+        check(f"{slot_state}, delta {delta}, half-life {'frozen' if freeze else 'learned'}: "
+              f"6 chunks = one pass (max rel {worst:.1e}; stock params {', '.join(struct)})",
+              same and worst < 1e-4 and live and len(struct) >= (2 if freeze else 3))
+
+
 def main() -> None:
     f1()
     f2()
     f3()
     f4()
     f5_f6()
+    f7()
     print()
     if FAIL:
         print(f"{len(FAIL)} FAILED:")

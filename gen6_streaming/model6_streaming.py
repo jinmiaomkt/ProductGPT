@@ -464,8 +464,18 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
                         for i in range(len(self.event_model))]
         count, since, stock, pity, _ = self.computed_scan(obtained_ids, prev_dec_ids, st0,
                                                           campaign=campaign)
-        track = torch.is_grad_enabled() and stock.requires_grad
-        stock_leaf = stock.detach().requires_grad_(True) if track else stock
+        # Per-chunk backward (on_chunk) frees the graph after each chunk, so every
+        # computed-state tensor that carries a gradient enters the chunks as a
+        # detached leaf. That is the stock, and under R47's stock_only also the
+        # slot count, which is the thresholded decayed stock. One backward
+        # through the shared graph after the last chunk then delivers the
+        # structural parameters' exact gradient. Without on_chunk the caller
+        # back-propagates once, so the graph is kept intact.
+        per_chunk = on_chunk is not None and torch.is_grad_enabled()
+        leaf_s = per_chunk and stock.requires_grad
+        leaf_c = per_chunk and count.requires_grad
+        stock_leaf = stock.detach().requires_grad_(True) if leaf_s else stock
+        count_leaf = count.detach().requires_grad_(True) if leaf_c else count
 
         st = st0
         outs: List[torch.Tensor] = []
@@ -473,7 +483,7 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
             t1 = min(S, t0 + C)
             sl = slice(t0, t1)
             r = self._rows(lto_ids[:, sl], obtained_ids[:, sl], prev_dec_ids[:, sl], user_idx,
-                           count[:, sl], since[:, sl], stock_leaf[:, sl],
+                           count_leaf[:, sl], since[:, sl], stock_leaf[:, sl],
                            pity[:, sl] if pity is not None else None, censored)
             s, hs, ks, vs = self._encode(r, st, t0)
             logits = self._head(s, user_idx, campaign[:, sl] if campaign is not None else None)
@@ -486,9 +496,14 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
                 outs.append(logits)
             else:
                 on_chunk(t0, t1, logits)
-        if track and stock_leaf.grad is not None:
+        roots, grads = [], []
+        if leaf_s and stock_leaf.grad is not None:
+            roots.append(stock), grads.append(stock_leaf.grad)
+        if leaf_c and count_leaf.grad is not None:
+            roots.append(count), grads.append(count_leaf.grad)
+        if roots:
             with torch.autocast(stock.device.type, enabled=False):
-                stock.backward(stock_leaf.grad)
+                torch.autograd.backward(roots, grads)
         return torch.cat(outs, dim=1) if on_chunk is None else None
 
     def forward(self, lto_ids, obtained_ids=None, prev_dec_ids=None, user_idx=None,
