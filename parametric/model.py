@@ -191,8 +191,10 @@ def utilities(spec: Spec, P: Dict[str, torch.Tensor], X: Dict[str, torch.Tensor]
     LD = None
     if f["stocks"]:
         a_d, a_o = torch.sigmoid(P["a_dec"][0]), torch.sigmoid(P["a_out"][0])
-        LD = decay(X["ind"][..., :6], a_d)
-        LO = decay(X["ind"][..., 6:9], a_o)
+        # A rollout carries the stocks row by row (parametric/policy.py) and
+        # passes them in; the T1 scorer computes them here from `ind`.
+        LD = X["LD"] if "LD" in X else decay(X["ind"][..., :6], a_d)
+        LO = X["LO"] if "LO" in X else decay(X["ind"][..., 6:9], a_o)
         U = U + P["loy"][0] * (LD[..., :4] @ BAN)
         U = U + (P["inc"][0] * LD[..., 4] + LO @ P["out"])[..., None] * BUY \
             + (P["tenl"][0] * LD[..., 5])[..., None] * TEN

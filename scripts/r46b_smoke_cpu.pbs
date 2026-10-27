@@ -1,0 +1,36 @@
+#!/bin/bash
+# ============================================================================
+# R46 part B smoke, CPU, one job (EXPERIMENTS.md R46 part B, compute step 1):
+# the policy unit tests, then every gate and one draw of each mode for two
+# rungs (R3, R6) plus the reference, on 12 customers x 2 replicates.
+# Numbers mean nothing. Written to runs/r46/partB/smoke.
+#     qsub scripts/r46b_smoke_cpu.pbs
+# ============================================================================
+#PBS -N r46b_smoke
+#PBS -l select=1:ncpus=4:mem=64GB
+#PBS -q short
+#PBS -l walltime=03:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+
+set -eo pipefail
+module purge
+module load python/3.11.4
+cd "$PBS_O_WORKDIR"
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
+export PYTHONUNBUFFERED=1 OMP_NUM_THREADS=4 NCPUS=4
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+LOG=/storage/home/jinmiao/ProductGPT/logs/r46b_smoke_${PBS_JOBID%%.*}.log
+exec > >(tee -a "$LOG") 2>&1
+echo "R46 part B smoke on $(hostname) at $(date), commit $(git rev-parse --short HEAD)"
+python scripts/test_r46_policy.py
+python scripts/r46b_generate.py --reference --smoke
+for R in R3 R6; do
+    for M in fr tf; do
+        python scripts/r46b_generate.py --rung "$R" --mode "$M" --smoke
+    done
+done
+echo "R46 part B smoke done at $(date)"

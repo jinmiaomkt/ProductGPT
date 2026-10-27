@@ -1,0 +1,28 @@
+#!/bin/bash
+# ============================================================================
+# R46 part B read-out, CPU: every arm on the R36i yardstick, the per-statistic
+# energies, and the pre-registered verdicts (scripts/r46b_compare.py).
+# Submitted after the r46b_rollout array by scripts/submit_r46b.sh.
+# Log: ~/ProductGPT/logs/r46b_compare_<id>.log; result runs/r46/partB/compare.json
+# ============================================================================
+#PBS -N r46b_cmp
+#PBS -l select=1:ncpus=4:mem=16GB
+#PBS -q short
+#PBS -l walltime=03:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+
+set -eo pipefail
+module purge
+module load python/3.11.4
+cd "$PBS_O_WORKDIR"
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
+export PYTHONUNBUFFERED=1 OMP_NUM_THREADS=4
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+LOG=/storage/home/jinmiao/ProductGPT/logs/r46b_compare_${PBS_JOBID%%.*}.log
+exec > >(tee -a "$LOG") 2>&1
+echo "R46 part B compare on $(hostname) at $(date), commit $(git rev-parse --short HEAD)"
+python scripts/r46b_compare.py

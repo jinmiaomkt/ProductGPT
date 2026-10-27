@@ -1,0 +1,50 @@
+#!/bin/bash
+# ============================================================================
+# R46 part B, CPU array: the classical ladder as generators on the R36i
+# yardstick, one arm per element, all in parallel (EXPERIMENTS.md R46 part B).
+# No GPU, no laptop (Jin, 26 Oct 2026).
+#
+#   element 0       the reference: band, i.i.d., Markov-1 at draws 17-19 (gate B3)
+#   elements 1-18   rung x mode: M0 M1 R0 R1 R1b R2 R3 R4 R6, each free-running
+#                   (odd) and teacher-forced (even), draws 17, 18, 19 in turn
+#
+#     qsub -J 0-18 scripts/r46b_rollout_cpu.pbs     (scripts/submit_r46b.sh)
+#     SMOKE=1: every element on 12 customers x 2 replicates, one draw,
+#              written to runs/r46/partB/smoke
+# Log per element: ~/ProductGPT/logs/r46b_<array id>_<index>.log
+# Results: runs/r46/partB/<arm>.json and <arm>_functionals.npz
+# ============================================================================
+#PBS -N r46b_roll
+#PBS -l select=1:ncpus=4:mem=64GB
+#PBS -q short
+#PBS -l walltime=12:00:00
+#PBS -j oe
+
+set -eo pipefail
+module purge
+module load python/3.11.4
+cd "$PBS_O_WORKDIR"
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
+export PYTHONUNBUFFERED=1
+export OMP_NUM_THREADS=4 NCPUS=4 MKL_NUM_THREADS=4
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+IDX="${PBS_ARRAY_INDEX:-0}"
+JID="${PBS_JOBID%%.*}"
+JID="${JID//[\[\]]/_}"
+LOG=/storage/home/jinmiao/ProductGPT/logs/r46b_${JID}_${IDX}.log
+exec > >(tee -a "$LOG") 2>&1
+echo "R46 part B element $IDX on $(hostname) at $(date), commit $(git rev-parse --short HEAD)"
+
+EXTRA=()
+[ "${SMOKE:-0}" = "1" ] && EXTRA+=(--smoke)
+RUNGS=(M0 M1 R0 R1 R1b R2 R3 R4 R6)
+MODES=(fr tf)
+if [ "$IDX" = "0" ]; then
+    python scripts/r46b_generate.py --reference "${EXTRA[@]}"
+else
+    K=$((IDX - 1))
+    python scripts/r46b_generate.py --rung "${RUNGS[$((K / 2))]}" --mode "${MODES[$((K % 2))]}" "${EXTRA[@]}"
+fi
+echo "R46 part B element $IDX done at $(date)"
