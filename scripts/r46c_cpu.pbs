@@ -15,9 +15,11 @@
 # scripts/submit_r46c.sh submits C1, C2 and H6, then C3 after H6 and CMP after all.
 # Log per element: ~/ProductGPT/logs/r46c_<stage>_<array id>_<index>.log
 # Results: $R46/partC/{pboot,cboot,keane}/<tag>.json, $R46/partC/h6/H6_K6_s*/
+# Memory: a full-size element peaks at 4-6 GB. 24 GB lets nine elements share a
+# short-queue node (78-80 CPUs, 503 GB); 96 GB capped it at five.
 # ============================================================================
 #PBS -N r46c
-#PBS -l select=1:ncpus=8:mem=96GB
+#PBS -l select=1:ncpus=8:mem=24GB
 #PBS -q short
 #PBS -l walltime=12:00:00
 #PBS -j oe
