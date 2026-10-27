@@ -5087,7 +5087,8 @@ reports the token-length distribution only; no model or prediction is
 involved.
 - If no transcript exceeds 32,768 tokens, Qwen3 runs as shipped.
 - Otherwise every customer is scored with YaRN at factor 4, Qwen's documented
-  setting, so one configuration covers all.
+  setting, so one configuration covers all. *(Amended to factor 2 on 27 Oct,
+  before any prediction; see the amendment after the step 1–2 result.)*
 - No customer is truncated or dropped.
 - Synthetic transcripts run to about 51 tokens per occasion, so the limit can
   bind for the longest windows.
@@ -5149,3 +5150,17 @@ card advises a factor matched to the need, and factor 4 also rescales the
 positions of the short transcripts that need no extension. Moving to factor 2
 (65,536 tokens) is therefore put to Jin as an amendment. It is decided from
 token counts only, before any prediction exists.
+
+**Amendment (27 Oct 2026, Jin): YaRN factor 2, not 4.** It was decided from the
+dry-run token counts alone; no model had been run on real data.
+- Factor 2 extends the context to 65,536 tokens, which covers the longest
+  transcript (38,689) with room to spare.
+- Every customer is still scored with the same configuration, and none is
+  truncated or dropped. The rest of the plan is unchanged.
+- Checked on the login node (config only, no weights) that transformers 4.57.6
+  applies the factor as set. The `rope_scaling` argument `load_model` passes
+  reaches Qwen3's rotary embedding as YaRN with attention scaling 1.0693
+  (= 1 + 0.1 ln 2). The slowest frequencies are stretched 2× and the fastest
+  are left unchanged.
+- Step 3 runs as `qsub -v SHARD=k,NSHARDS=2,WHO=out,YARN=2
+  scripts/r48_score_gpu.pbs` for k = 0, 1.

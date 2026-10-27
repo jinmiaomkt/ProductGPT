@@ -10,11 +10,12 @@
 # R48 step 3, GPU: zero-shot Qwen3-8B on one shard of the customers.
 #
 #     cd ~/ProductGPT/work_r48
-#     qsub -v SHARD=0,NSHARDS=2,WHO=out,YARN=0 scripts/r48_score_gpu.pbs
-#     qsub -v SHARD=1,NSHARDS=2,WHO=out,YARN=0 scripts/r48_score_gpu.pbs
+#     qsub -v SHARD=0,NSHARDS=2,WHO=out,YARN=2 scripts/r48_score_gpu.pbs
+#     qsub -v SHARD=1,NSHARDS=2,WHO=out,YARN=2 scripts/r48_score_gpu.pbs
 #
-# YARN=4 only if the dry run found a transcript over 32,768 tokens (the
-# context-length rule in EXPERIMENTS.md R48); then every shard uses it.
+# YARN=2: the dry run found transcripts over 32,768 tokens (max 38,689), which
+# triggers the context-length rule in EXPERIMENTS.md R48; the factor was amended
+# from 4 to 2 on 27 Oct, before any prediction. Every shard uses it.
 # Writes $R48/qwen3_8b_<WHO>_shard<k>.npz/.json; a finished shard is skipped.
 # ============================================================================
 set -eo pipefail

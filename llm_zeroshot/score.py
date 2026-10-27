@@ -176,7 +176,7 @@ def main() -> None:
         if a.dry_run:
             continue
         if len(ids) > 32768 and not a.yarn:
-            raise SystemExit(f"a transcript has {len(ids):,} tokens > 32,768; rerun with --yarn 4")
+            raise SystemExit(f"a transcript has {len(ids):,} tokens > 32,768; rerun with --yarn 2")
         logp9, mass = score_ids(model, ids, tpos, letter_ids, a.device)
         lab = tab["label"][i, :L].astype(np.int64)
         rows["uid_hash"].append(np.full(L, tab["uid_hash"][i], np.int64))
