@@ -41,8 +41,9 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 44338 | `runs/r46/se/R6_K6_s1` (CPU long, `ffbc46b`) | 2026-10-27 | R46 stage 3: SEs of the selected R6 | done 10:18, exit 0; recorded under R46 stage 3 |
 | 44311[], 44314[] | `runs/r46_mc/{R1b,R3,R6_K2}` | 2026-10-26 | R46 SE coverage | done; see the coverage table |
 | 44354, 44355, 44356 | R46 part B smoke, B1 diagnosis, smoke after amendment B-1 (CPU short) | 2026-10-27 | R46 part B gates | 44354 stopped at B1 (amendment B-1); 44356 passed every gate |
-| 44357[] (19 elements) | `runs/r46/partB/{ref,fr_*,tf_*}` (CPU short, 4 CPUs, 64 GB, `db28464`) | 2026-10-27 | R46 part B: the ladder as generators on the R36i yardstick | running (qstat 27 Oct 12:16) |
-| 44358 | `runs/r46/partB/compare.json` | 2026-10-27 | R46 part B read-out | held until 44357[] ends |
+| 44357[], 44358 | first part B array and read-out (`db28464`) | 2026-10-27 | R46 part B | cancelled after 8 minutes: B3's real-set check compared NaN as unequal (fixed in `19c1062`); outputs deleted |
+| 44359[] (19 elements) | `runs/r46/partB/{ref,fr_*,tf_*}` (CPU short, 4 CPUs, 64 GB, `19c1062`) | 2026-10-27 | R46 part B: the ladder as generators on the R36i yardstick | done, all 19 exit 0, every gate passed |
+| 44360 | `runs/r46/partB/compare.json` | 2026-10-27 | R46 part B read-out | done 12:41; result in R46 part B |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -5451,3 +5452,177 @@ skips row 0 of a truncated window.**
   block must be empty, and it is not compared. Every other row must still
   match exactly. The job logs how many windows are truncated and at how many
   of them level 6 holds an outcome.
+
+### R46 — RESULT, part B (T2 generation), 27 Oct 2026: the classical ladder generates ten times closer than free-running ProductGPT, and nothing passes T2
+
+**Runs.**
+- Array `44359[]` (19 elements, CPU short queue, `19c1062`) and read-out
+  `44360`. All exit 0; the whole compare log was read.
+- A first submission (`44357[]`, `44358`) was cancelled after 8 minutes.
+  Its check that our real functionals equal R36i's compared NaN as unequal.
+  The two sets are identical: NaN in the same 1,725 of 8,100 cells, zero
+  difference elsewhere. Only the comparison changed; its outputs were
+  deleted.
+
+**Gates: all passed, in every element.**
+- **B1.** 0 mismatches on all 300 customers. 226 windows are truncated at
+  384 rows; at 146 of them level 6 holds an outcome on row 0 (amendment B-1).
+- **B2.** For every rung, every state block replays T1's features with error
+  exactly 0. The probabilities match T1's on all 22,490 holdout rows, within
+  3e-8 (T1 stored float32).
+  - Free running: each sequence's first holdout probabilities equal T1's.
+  - Teacher forcing: probabilities on every holdout row equal T1's.
+- **B3.**
+  - The band reproduces: q95 = 0.0781258.
+  - The real functionals equal R36i's.
+  - i.i.d. and Markov-1 reproduce R36i's six per-seed energies with |diff| 0.
+- **B4.** Every run decided on exactly 179,920 live rows, with 0 mismatched
+  rows and 0 altered real acquisitions.
+
+**Energy on the R36i yardstick** (300 customers × 8 replicates; band q95 0.078;
+mean over three draws, ± sd [range]; AUC is the mean C2ST AUC). Rows marked
+R36i are its stored runs, not re-run.
+
+| arm | energy | × band | AUC | top functionals |
+|---|---|---|---|---|
+| **free-running R4** | **0.308 ± 0.006** [0.303, 0.315] | 3.9 | 0.821 | longest NotBuy run, sat_k1, share Buy10-Reg |
+| **free-running R6** (primary) | **0.318 ± 0.008** [0.309, 0.324] | 4.1 | 0.813 | longest NotBuy run, share Buy10-Reg, sat_k1 |
+| free-running R2 | 0.333 ± 0.015 [0.316, 0.343] | 4.3 | 0.843 | longest NotBuy run, sat_k1, switch rate |
+| free-running R3 | 0.358 ± 0.021 [0.334, 0.374] | 4.6 | 0.833 | longest NotBuy run, share Buy10-Reg, sat_k1 |
+| free-running R1b | 0.741 ± 0.013 | 9.5 | 0.884 | longest NotBuy run, sat_k1, switch rate |
+| free-running R1 | 0.755 ± 0.020 | 9.7 | 0.882 | longest NotBuy run, share Buy10-Reg, switch rate |
+| Markov-1 (R36i) | 0.784 ± 0.006 | 10.0 | 0.885 | longest NotBuy run, sat_k1, acf lag 3 |
+| free-running M1 | 0.857 ± 0.015 | 11.0 | 0.888 | longest NotBuy run, share Buy10-Reg, acf lag 3 |
+| scheduled sampling p = 0.35 (R36i) | 1.311 ± 0.299 | 16.8 | 0.841 | longest NotBuy run, sat_k1 |
+| free-running R0 | 1.856 ± 0.011 | 23.8 | 0.912 | switch rate, longest NotBuy run |
+| free-running M0 | 2.442 ± 0.008 | 31.3 | 0.912 | switch rate, longest NotBuy run |
+| i.i.d. (R36i) | 2.468 ± 0.008 | 31.6 | 0.913 | switch rate, longest NotBuy run |
+| free-running b33 (R36i) | 3.169 ± 0.381 | 40.6 | 0.869 | longest NotBuy run, sat_k1, incidence |
+
+Teacher-forced runs, which are diagnostics: arm C −0.000; b33 0.417 (R36i);
+R3 0.554; R6 0.554; R4 0.558; R2 0.663; R1b 1.145; R1 1.151; M1 1.469;
+R0 1.843; M0 2.434.
+
+**Verdicts for R6, by the pre-registered rules.**
+
+| verdict | result |
+|---|---|
+| W1 a weaker predictor out-generates ProductGPT | **holds**: R6 − free-running b33 = −2.97, −3.15, −2.43 (mean −2.85) |
+| W2 the classical state beats the chain | **holds**: R6 − Markov-1 = −0.467, −0.460, −0.472 (mean −0.466) |
+| W3 it beats the remedy | **holds**: R6 − scheduled sampling p = 0.35 = −0.81, −1.34, −0.84 (mean −0.99) |
+| W4 licensed to simulate | **fails**: no draw passes T2. R6 is inside its own band only on spend (1 of 5); its AUC CIs span 0.788–0.848 |
+| W5 the loop is benign | **fails as written**: free-running − teacher-forced = −0.217, −0.258, −0.232, which counts as a difference. But it is negative: free running is CLOSER to real than teacher forcing (ratio 0.55–0.60) |
+
+**The ladder, free running** (step, then the per-pair differences and mean;
+"counts" means R43's rule).
+
+| step | information | Δ energy | counts? |
+|---|---|---|---|
+| R1 − R0 | last decision | −1.07, −1.12, −1.11 (−1.10) | yes |
+| R1b − R1 | habit | −0.050, +0.005, +0.003 (−0.014) | no |
+| R2 − R1 | run structure | −0.435, −0.407, −0.423 (−0.422) | yes |
+| R3 − R2 | long memory | +0.022, +0.034, +0.018 (+0.025) | no; same sign, below the band |
+| R4 − R3 | holdings, pity, guarantee | −0.059, −0.072, −0.019 (−0.050) | no; same sign, below the band |
+| R6 − R4 | persistent taste | +0.018, +0.018, −0.005 (+0.010) | no |
+| M1 − Markov-1 (R36i) | same model class, different fitting sample | +0.070, +0.088, +0.058 (+0.072) | no; same sign, just below the band |
+
+Exploratory, with 9 rungs tested: R2, R3, R4 and R6 each beat Markov-1, by
+0.43–0.48 on every pair. R1 and R1b do not (−0.03 and −0.04).
+
+**Predictions, scored.**
+1. **Every lagged rung beats free-running b33: HOLDS.** All seven rungs with
+   the lag matrix do.
+2. **W2: HOLDS.**
+3. **W3: HOLDS.**
+4. **W4 fails: HOLDS.** No rung passes T2.
+5. **The loop costs R6 little: HOLDS, more strongly than predicted.**
+   - Free-running / teacher-forced is 0.60, 0.55 and 0.57, against a
+     predicted "< 2" (b33: 7.6).
+   - W5 nevertheless fails by its letter, because the difference counts, in
+     the direction the rule did not anticipate.
+   - Teacher-forced R6 is farther from real than teacher-forced b33 (0.554
+     against 0.417): holds.
+6. **The ladder: two of three hold.**
+   - R2 − R1 is the largest step after R1 − R0: holds.
+   - R1b − R1 does not count: holds.
+   - FAILED: R4 − R3 does not separate. It is negative on every pair, but its
+     mean (0.050) is under the band. The H1 transposition gets direction,
+     not size.
+7. **NotBuy share within 0.05 of observed: FAILED for every rung.**
+   - Free-running rungs generate NotBuy on 31.5–35.9% of holdout rows,
+     against 42.5% observed.
+   - Every model-free arm and every teacher-forced arm is low too: Markov-1
+     38.0%, i.i.d. 37.4%, teacher-forced rungs 35–41%.
+   - So most of this is the calibration-to-holdout shift in NotBuy, not the
+     loop. Free-running b33 (15.6%) is the outlier.
+
+**What the numbers show.**
+1. **The spine, in its cleanest form.** R6 predicts one step worse than
+   every neural cell (0.9826 against 0.8856). Yet on R36i's yardstick it
+   generates:
+   - ten times closer to real than free-running ProductGPT (0.318 against
+     3.169);
+   - 2.5 times closer than the 9×9 chain;
+   - four times closer than the scheduled-sampling remedy;
+
+   and it does so on every draw. Better one-step prediction does not
+   translate into better generation, and here the ordering is reversed.
+2. **The generative gain is the last decision and the run structure.**
+   - After R2, no step counts. Long memory, holdings and classes move the
+     energy by less than the band.
+   - R4 is the lowest arm (0.308) but cannot be told apart from R2 or R6.
+   - The Bawa run length and the NotBuy-spell and buy-run terms are what fix
+     the chain's leading failure, the longest NotBuy run (per-statistic
+     energy 0.398 for Markov-1, 0.158 for R2).
+   - ProductGPT sees all of this information, so its failure lies in what it
+     does with its state under feedback, not in missing information.
+3. **Classical state dependence does not run away.**
+   - Free-running R6's rare classes stay at 1.5–3.5% of rows, and Buy10-FigA
+     sits at the observed 7.3%.
+   - b33 inflates the rare classes 3.6- to 18-fold: Buy10-FigB 1.3% → 11.1%,
+     Buy1-Wep 4.4% → 15.9%, Buy10-Wep 1.0% → 18.3%.
+   - The parametric utilities are bounded functions of a few summaries; the
+     loop feeds back nothing they did not see in training.
+4. **For a state-dependence model, teacher forcing is a measure of one-step
+   accuracy, not of the per-step law alone.**
+   - A teacher-forced draw conditions on the REAL previous decision, so
+     consecutive sampled decisions lose their dependence on each other.
+     The generated sequences then switch too often: R6's switch-rate
+     energy is 0.634 teacher-forced against 0.096 free-running.
+   - Across the ladder, teacher-forced energy falls in the same order as T1
+     NLL: M0 > R0 > M1 > R1 ≈ R1b > R2 > R3 ≈ R4 ≈ R6 > b33.
+   - b33 is the closest teacher-forced arm and the farthest free-running one.
+   - This qualifies R36i's V4 reading ("teacher forcing removes 88% of the
+     distance"). The same broken dependence sits inside b33's teacher-forced
+     0.417. The R36i verdicts stand as computed; their "per-step law"
+     label is looser than it read.
+5. **Not licensed.** R6 is still 4.1 times the band and detectable (AUC
+   0.81). The functionals that give it away:
+   - the longest NotBuy run (energy 0.139);
+   - the Buy10-Regular share (0.191): R6 generates it on 1.8% of rows
+     against 0.3% observed;
+   - the purchase autocorrelations;
+   - the switch rate (0.096).
+
+   Under R36's rule no rung may be used for R35's counterfactuals.
+6. **The fitting sample matters at the band's scale.** M1 (maximum
+   likelihood on every in-sample customer, campaigns < 27) and R36i's
+   Markov-1 (600 training customers, campaigns < 28, Laplace +1) are the same
+   model class. M1 is worse on every pair, by 0.072, just under the band.
+
+**What this licenses.**
+- The paper can state that on R36i's yardstick, the classical
+  state-dependence models (R2–R6) generate sequences about ten times closer
+  to real customers than free-running ProductGPT and 2.5 times closer than a
+  first-order chain, while predicting about 0.1 nats worse. "Accuracy is not
+  a licence to simulate" therefore has a classical exhibit beside the
+  neural one.
+- It cannot say that any generator is indistinguishable from real customers:
+  every generator is outside the band, and every AUC CI excludes 0.5 (arm C's
+  too).
+
+**Artifacts** (HPCC, gitignored):
+- `runs/r46/partB/{ref,fr_*,tf_*}.json` and `*_functionals.npz`;
+- `runs/r46/partB/compare.json`, which holds every per-statistic energy and
+  the verdicts;
+- logs `~/ProductGPT/logs/r46b_44359_*` and `r46b_compare_44360.log`.
