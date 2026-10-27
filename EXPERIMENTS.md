@@ -33,7 +33,8 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 44211–44258 | `b40_*` (48 runs, from `~/ProductGPT/work_gen6` at `a8ed3f9`) | 2026-10-26 | R44 stage 2: paired search, gen 5 and gen 6 | complete, all 48 exit 0; ranking in R44 |
 | 44320–44337 | `b41_*` (18 runs, from `~/ProductGPT/work_gen6` at `6b96b7d`) | 2026-10-27 | R44 stage 3: 6 candidates × seeds 11–13 | all 18 finished, exit 0 (qstat 2026-10-27); frozen gen-5 c06, gen-6 R43 |
 | 44361–44399 | `r45a_*` (39 runs, from `~/ProductGPT/work_r45` at `8fae1d7`) | 2026-10-27 | R45 part A: censored training, arms L/T/Z/ZF × k 1/2/4 + count, seeds 1–3 | queued (qstat 2026-10-27) |
-| 44400–44441 | `r47b1_*`, `r47b2_*` (42 runs, from `~/ProductGPT/work_r47` at `010fc89`) | 2026-10-27 | R47 B1–B2: half-life profile, full vs stock-only slots, seeds 1–3 | queued (qstat 2026-10-27) |
+| 44400–44441 | `r47b1_*`, `r47b2_*` (42 runs, from `~/ProductGPT/work_r47` at `010fc89`) | 2026-10-27 | R47 B1–B2: half-life profile, full vs stock-only slots, seeds 1–3 | held 16:15 so batch 42 runs first; released once all 4 batch-42 runs start |
+| 44443–44446 | `b42_g5_c06_s2`–`s5` (4 runs, from `~/ProductGPT/work_gen6` at `9b3eccd`) | 2026-10-27 | R44 stage 4: gen-5 c06 seeds 2–5 (gen 6 reuses b39_g6w384) | queued behind R45 part A (qstat 2026-10-27) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -4664,6 +4665,11 @@ holdout opened once. There are 10 runs, of which 6 already exist:
   approved. R47 is released once all four batch-42 runs have started. Held
   jobs keep their place in the queue, so releasing R47 earlier would put it
   back ahead of the batch-42 runs still waiting.
+
+**Stage 4 — SUBMITTED (27 Oct 2026, 16:15): batch 42, jobs 44443–44446**,
+from `~/ProductGPT/work_gen6` at `9b3eccd`. R47's 42 queued jobs
+(44400–44441) were held just before; their ids are in
+`~/ProductGPT/r47_held_jobs.txt`.
 - **Consequence for R45 part B:** its input, "stage 4's gen-6 runs", is
   `b39_g6w384` seeds 1–5, which already exist. Part B (GPU,
   `r45_eval_chopped.pbs`) therefore does not have to wait for batch 42.
