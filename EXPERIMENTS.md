@@ -5369,6 +5369,8 @@ they cannot give the same NLL.
    - the tests pass and every answer letter is found;
    - arm A's token lengths equal R48's;
    - no weight is missing or mis-shaped.
+   Each gate exits non-zero on failure. The GPU jobs are submitted with
+   `-W depend=afterok:<dry run>`, so none starts unless every gate passes.
 3. *GPU* (`scripts/r49_score_gpu.pbs`, 2 L40S per job, 4 shards per arm, arms
    interleaved). Each job first runs `--selfcheck`: T3 and T4 on a synthetic
    customer with the real model in bf16 on the GPU. It stops if one pass differs

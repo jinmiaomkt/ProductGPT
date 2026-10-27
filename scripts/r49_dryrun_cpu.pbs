@@ -17,6 +17,9 @@
 # Arm A (Qwen3-32B) runs in R48's venv; arm B (Qwen3.6-27B) in productgpt-llm5.
 #
 #     cd ~/ProductGPT/work_r48 && qsub scripts/r49_dryrun_cpu.pbs
+#
+# Every gate exits non-zero on failure, so the GPU jobs can be submitted with
+# -W depend=afterok:<this job> and start only if all gates pass.
 # ============================================================================
 set -eo pipefail
 module purge
@@ -45,6 +48,14 @@ run_arm () {      # venv, model dir, tag, test arch, yarn
     deactivate
 }
 run_arm productgpt-llm  "$ROOT/models/Qwen3-32B"   qwen3_32b  qwen3   2
+# gate: arm A tokenises exactly as R48 did (same tokenizer, same transcripts)
+python -c "
+import json, sys
+a = json.load(open('$R49/qwen3_32b_out_shard0.dryrun.json'))['tokens']
+b = json.load(open('$ROOT/runs/r48/qwen3_8b_out_shard0.dryrun.json'))['tokens']
+print('arm A tokens', a); print('R48 tokens  ', b)
+sys.exit(0 if a == b else 'GATE FAILED: arm A token lengths differ from R48')
+"
 run_arm productgpt-llm5 "$ROOT/models/Qwen3.6-27B" qwen36_27b qwen3_5 0
 echo "R49 dry run done at $(date)"
 bash "$PBS_O_WORKDIR/scripts/notify.sh" "R49 dry run finished (job ${PBS_JOBID%%.*})" || true
