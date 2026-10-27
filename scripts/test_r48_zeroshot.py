@@ -109,8 +109,17 @@ def main():
     check("T2 answer tokens decode to the true decisions", got == list(lab),
           f"{len(ids):,} tokens for {S} occasions ({len(ids) / S:.1f}/occasion)")
 
+    # T3 and T4 run in float64 so rounding (~1e-12) cannot pass for a leak.  The
+    # Qwen3.5/3.6 Gated DeltaNet reference path casts to float32 whatever the model
+    # dtype (transformers torch_chunk_gated_delta_rule), so there the floor is
+    # float32 rounding (~1e-7 when the sequence length, and so every matrix shape,
+    # changes) and the bound is 1e-6.  A leak moves predictions by ~T4b (> 1e-3).
+    # (T3 ran in float32 with a 1e-4 bound until 28 Oct, when CPU rounding on an
+    # HPCC GPU node reached 1.66e-4 for the qwen3 tiny model: jobs 44503/5/7.)
+    tol = 1e-10 if a.arch == "qwen3" else 1e-6
+    model = tiny_model(len(tok), a.arch).double()
+
     # T3 one pass == per-occasion prefixes
-    model = tiny_model(len(tok), a.arch)
     S3 = 40
     lab, prev, lto, obt, inv = synthetic_customer(S3, 2)
     text, answers = transcript(lab, prev, lto, obt, inv, S3, system)
@@ -120,18 +129,12 @@ def main():
     for k, p in enumerate(tpos):
         lpk, _ = score_ids(model, ids[:p + 1], [p], letter_ids, "cpu")
         worst = max(worst, float(np.abs(lpk[0] - lp[k]).max()))
-    check("T3 one pass equals per-occasion queries", worst < 1e-4, f"max |diff| {worst:.2e}")
+    check("T3 one pass equals per-occasion queries", worst < tol,
+          f"max |diff| {worst:.1e} (bound {tol:.0e})")
     check("T3b the tiny model's predictions are not degenerate",
           float(lp.max(1).mean() - lp.min(1).mean()) > 0.1)
 
-    # T4 no look-ahead, in float64 so rounding (~1e-12) cannot pass for a leak.
-    # The Qwen3.5/3.6 Gated DeltaNet reference path casts to float32 whatever the
-    # model dtype (transformers torch_chunk_gated_delta_rule), so there the floor is
-    # float32 rounding (~1e-7 when the sequence length, and so every matrix shape,
-    # changes) and the bound is 1e-6.  A leak moves predictions by ~T4b (> 1e-3).
-    tol = 1e-10 if a.arch == "qwen3" else 1e-6
-    model = model.double()
-    lp, _ = score_ids(model, ids, tpos, letter_ids, "cpu")
+    # T4 no look-ahead
     t = 20
     lab2, obt2 = perturb_from(lab, obt, t)
     text2, answers2 = transcript(lab2, prev, lto, obt2, inv, S3, system)
@@ -152,7 +155,7 @@ def main():
     check("T4c no look-ahead, same-length transcript", len(ids3) == len(ids) and before3 < tol,
           f"max |diff| {before3:.1e}; later {float(np.abs(lp3[t + 1:] - lp[t + 1:]).max()):.2f}")
 
-    # T5 normalisation
+    # T5 normalisation (float64 model)
     s = np.exp(lp).sum(1)
     check("T5 renormalised probabilities sum to one", np.allclose(s, 1.0, atol=1e-9))
     check("T5b letter mass <= 1", bool((mass <= 1e-9).all()))

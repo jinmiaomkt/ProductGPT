@@ -26,9 +26,9 @@ USAGE (HPCC; see scripts/r48_score_gpu.pbs and scripts/r48_dryrun_cpu.pbs)
 
 R49 (larger models; scripts/r49_score_gpu.pbs) adds:
     --n-gpus 2     bf16 weights split layer by layer over two GPUs (no quantisation)
-    --selfcheck    before scoring, T3 and T4 of scripts/test_r48_zeroshot.py on a
-                   synthetic customer with the real model on the real device;
-                   stops if either shows a difference above --selfcheck-tol
+    --selfcheck    before scoring, T3, T4 and T4c of scripts/test_r48_zeroshot.py
+                   on a synthetic customer with the real model on the real
+                   device; stops on a leak or a broken one-pass (see selfcheck())
 The defaults reproduce R48 exactly.
 """
 from __future__ import annotations
@@ -146,32 +146,76 @@ def load_model(name: str, device: str, yarn: float, n_gpus: int = 1, strict: boo
     return tok, model
 
 
+def compare_logp(a: np.ndarray, b: np.ndarray, lab: np.ndarray) -> Dict[str, float]:
+    """Two (K, 9) log-probability arrays for the same occasions: the largest
+    difference over all nine letters, |difference in log p of the true letter|
+    (mean, max) and the total-variation distance (mean, max)."""
+    k, i = np.arange(len(lab)), np.asarray(lab) - 1
+    true = np.abs(a[k, i] - b[k, i])
+    tv = 0.5 * np.abs(np.exp(a) - np.exp(b)).sum(1)
+    return {"max": float(np.abs(a - b).max()), "true_mean": float(true.mean()),
+            "true_max": float(true.max()), "tv_mean": float(tv.mean()),
+            "tv_max": float(tv.max())}
+
+
 def selfcheck(model, tok, system: str, letter_ids: Sequence[int], S: int = 40, t: int = 20
               ) -> Dict[str, float]:
-    """T3 and T4 of scripts/test_r48_zeroshot.py with the real model on its device.
+    """T3, T4 and T4c of scripts/test_r48_zeroshot.py with the real model on its device.
 
-    t3: max |log p| difference between one pass and per-occasion prefixes
-    t4_before: max change at occasions <= t when decision t and everything after
-               it change (a leak would show here)
-    t4_after: the same at later occasions (must be visibly non-zero)
-    In bf16 the first two are rounding-level, not exactly zero.
+    In bf16, a comparison that changes the transcript's length changes the shape
+    of every matrix product and so rounds differently: on 28 Oct the largest
+    difference over the nine letters reached 0.9 nats for Qwen3-32B
+    (scripts/r49_numerics_gpu.py separates this from a leak).  So the gate reads:
+      t4c_before    only later decisions changed, so the length and every shape
+                    stay the same: any change at occasions <= t beyond the
+                    run-to-run difference (repeat_max) is a leak
+      t3_true_mean  one pass vs per-occasion prefixes: mean |difference in log p
+                    of the true letter|, the quantity that enters the NLL
+      t4_after_max, t4c_after_max  later occasions respond (the changes are real)
+    The largest differences over all nine letters are reported as well.
     """
-    from llm_zeroshot.synthetic import perturb_from, synthetic_customer
+    from llm_zeroshot.synthetic import perturb_decisions_from, perturb_from, synthetic_customer
     lab, prev, lto, obt, inv = synthetic_customer(S, 2)
-    text, answers = transcript(lab, prev, lto, obt, inv, S, system)
-    ids, tpos = answer_positions(tok, text, answers, letter_ids)
+
+    def ids_of(lab_, obt_):
+        text, answers = transcript(lab_, prev, lto, obt_, inv, S, system)
+        return answer_positions(tok, text, answers, letter_ids)
+
+    def lp_of(ids, tpos):
+        return score_ids(model, ids, tpos, letter_ids, "")[0]
+
+    ids, tpos = ids_of(lab, obt)
     lp, mass = score_ids(model, ids, tpos, letter_ids, "")
-    t3 = 0.0
-    for k, p in enumerate(tpos):
-        lpk, _ = score_ids(model, ids[:p + 1], [p], letter_ids, "")
-        t3 = max(t3, float(np.abs(lpk[0] - lp[k]).max()))
-    lab2, obt2 = perturb_from(lab, obt, t)
-    text2, answers2 = transcript(lab2, prev, lto, obt2, inv, S, system)
-    ids2, tpos2 = answer_positions(tok, text2, answers2, letter_ids)
-    lp2, _ = score_ids(model, ids2, tpos2, letter_ids, "")
-    return {"t3": t3, "t4_before": float(np.abs(lp2[: t + 1] - lp[: t + 1]).max()),
-            "t4_after": float(np.abs(lp2[t + 1:] - lp[t + 1:]).max()),
+    repeat = compare_logp(lp, lp_of(ids, tpos), lab)
+    lpp = np.stack([lp_of(ids[:p + 1], [p])[0] for p in tpos])
+    t3 = compare_logp(lp, lpp, lab)
+    lp2 = lp_of(*ids_of(*perturb_from(lab, obt, t)))
+    ids3, tpos3 = ids_of(perturb_decisions_from(lab, t), obt)
+    if len(ids3) != len(ids):
+        raise SystemExit("selfcheck: the same-length perturbation changed the length")
+    lp3 = lp_of(ids3, tpos3)
+    b, f = slice(0, t + 1), slice(t + 1, None)
+    k = np.arange(S)
+    return {"t3_max": t3["max"], "t3_true_mean": t3["true_mean"],
+            "t4_before_max": compare_logp(lp[b], lp2[b], lab[b])["max"],
+            "t4_after_max": compare_logp(lp[f], lp2[f], lab[f])["max"],
+            "t4c_before_max": compare_logp(lp[b], lp3[b], lab[b])["max"],
+            "t4c_after_max": compare_logp(lp[f], lp3[f], lab[f])["max"],
+            "repeat_max": repeat["max"],
+            "nll_onepass": float(-lp[k, lab - 1].mean()),
+            "nll_prefix": float(-lpp[k, lab - 1].mean()),
             "letter_mass": float(np.exp(mass).mean()), "tokens": len(ids)}
+
+
+def selfcheck_failures(check: Dict[str, float], tol: float) -> List[str]:
+    bad = []
+    if check["t4c_before_max"] > check["repeat_max"] + 1e-6:
+        bad.append("earlier predictions moved when only later decisions changed (leak)")
+    if check["t3_true_mean"] > tol:
+        bad.append("one pass differs from per-occasion queries")
+    if min(check["t4_after_max"], check["t4c_after_max"]) < 1e-3:
+        bad.append("later predictions do not respond to the changes")
+    return bad
 
 
 def main() -> None:
@@ -192,7 +236,8 @@ def main() -> None:
     ap.add_argument("--selfcheck", action="store_true",
                     help="T3/T4 on a synthetic customer with the real model first (R49)")
     ap.add_argument("--selfcheck-tol", type=float, default=0.1,
-                    help="largest allowed T3 / T4-before difference, in nats")
+                    help="largest allowed T3 mean |difference in log p of the true "
+                         "letter|, in nats")
     ap.add_argument("--strict-load", action="store_true",
                     help="stop if any weight is missing or mis-shaped (R49)")
     ap.add_argument("--max-customers", type=int, default=0, help="smoke only")
@@ -237,10 +282,9 @@ def main() -> None:
     if a.selfcheck and model is not None:
         check = selfcheck(model, tok, system, letter_ids)
         print(f"[r48] selfcheck {json.dumps(check)}", flush=True)
-        if (check["t3"] > a.selfcheck_tol or check["t4_before"] > a.selfcheck_tol
-                or check["t4_after"] < 1e-3):
-            raise SystemExit("selfcheck FAILED: one pass differs from per-occasion queries, "
-                             "or earlier predictions respond to later occasions")
+        bad = selfcheck_failures(check, a.selfcheck_tol)
+        if bad:
+            raise SystemExit("selfcheck FAILED: " + "; ".join(bad))
 
     rows = {k: [] for k in ("uid_hash", "pos", "label", "cell", "nll", "logp9", "mass")}
     lengths, t0 = [], time.time()

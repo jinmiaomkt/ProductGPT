@@ -5440,3 +5440,73 @@ unchanged.
 - New: `llm_zeroshot/synthetic.py`, `scripts/r49_setup_login.sh`,
   `scripts/r49_dryrun_cpu.pbs`, `scripts/r49_load_check.py`,
   `scripts/r49_score_gpu.pbs` and `scripts/r49_pair_llms.py`.
+
+**Amendment 2 (28 Oct 2026, 00:55; no real data scored by any job): the GPU
+self-check stopped both arms.**
+
+*What happened.* The GPU queue cleared after midnight. Every job stopped at a
+gate before scoring a single customer:
+- **44500, arm B shard 0.** The tests passed and Qwen3.6-27B loaded with 0
+  missing and 0 mis-shaped weights. The self-check then failed: t3 0.55 and
+  t4_before 0.26 nats, against the 0.1 bound. t4_after was 3.37 and the
+  letter mass 0.998.
+- **44501, arm A shard 0.** Qwen3-32B loaded with 0 missing weights. The
+  self-check failed by more: t3 0.72, t4_before 0.87, t4_after 5.55, letter
+  mass 0.9999.
+- **44503, 44505 and 44507, arm A shards 1–3.** These failed the CPU unit test
+  T3 (tiny model, float32) at 1.66e-4 against a 1e-4 bound. Each stopped within
+  10 seconds. The same test measured 5.72e-6 in job 44501.
+- **44502, 44504 and 44506 (arm B shards 1–3)** are held.
+
+*Reading, a hypothesis until the diagnostic below.* I set the self-check's bound
+wrongly. It bounds the *largest* difference over all nine letters, but in bf16
+the logits alone round in steps of 0.125 when |logit| is between 16 and 32. Both
+t3 and t4 also change the transcript's length, which changes the shape of every
+matrix product. That points to rounding, made largest on the least likely
+letters. Arm A is a dense full-attention model, and it fails by more than the
+hybrid, so the hybrid's linear attention is not the cause. The T3 unit-test
+failure is the same problem in miniature: float32 rounding that varies by node.
+
+*Diagnostic, run before any further scoring.*
+- The script, `scripts/r49_numerics_gpu.py` (PBS `scripts/r49_numerics_gpu.pbs`),
+  uses synthetic customers only.
+- Models:
+  - Qwen3-8B on one GPU, exactly as R48 ran it;
+  - Qwen3-32B and Qwen3.6-27B on two GPUs.
+- Each runs in bf16, then again with the output head in float32.
+- Customers: four synthetic customers, three of 40 occasions and one of 300
+  (about 15k tokens, near the real median of 17.5k).
+- Comparisons:
+  - **repeat:** the same transcript twice (run-to-run nondeterminism);
+  - **t4c:** only later decisions changed, so the length and every shape stay
+    the same, and rounding cannot differ;
+  - **t4:** the self-check's T4, with the length changing;
+  - **t3:** the self-check's T3, one pass against per-occasion prefixes.
+- Statistics for each comparison: the largest difference over the nine
+  letters; |difference in log p of the true letter| (the quantity that enters
+  the NLL; mean and max); and the total-variation distance between the two
+  predicted distributions (mean and max).
+
+*Decision rule, fixed before the diagnostic runs:*
+1. **Leak test.** For every model and customer, t4c at occasions ≤ t must not
+   exceed the repeat difference plus 1e-6; 0 is expected. t4c at later
+   occasions must exceed 1e-3. If any model fails, R49 stops and goes to Jin.
+   If Qwen3-8B fails, the R48 result is in question as well.
+2. **If (1) holds,** the length-dependent differences are rounding, and the
+   in-job self-check becomes this gate, the same for both arms. Tested on CPU:
+   it passes honest tiny models of both architectures and catches a simulated
+   leak, where every position sees the mean hidden state.
+   - t4c as in (1), on the real model in the job;
+   - t4_after and t4c_after > 1e-3;
+   - t3 measured as mean |difference in log p of the true letter| ≤ 0.1 nats.
+     That is the old bound, now applied to the quantity that enters the NLL
+     instead of the worst of nine letters.
+
+   The selfcheck still reports the old statistics.
+3. **Reporting.** Each model's rounding level is reported with the result: t3's
+   true-letter mean, and the one-pass against per-occasion NLL. R48's pipeline
+   is identical, so the 8B's level describes the R48 headline too.
+
+*Unit test correction.* T3 now runs in float64 with T4's architecture bound
+(1e-10 for Qwen3, 1e-6 for the hybrid). On the laptop it gives 7e-15 for both.
+All eight shards are resubmitted, in the original order, only once rule 1 holds.

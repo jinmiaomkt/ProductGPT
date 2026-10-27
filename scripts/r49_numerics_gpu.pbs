@@ -1,0 +1,54 @@
+#!/bin/bash
+#PBS -N r49_numerics
+#PBS -l select=1:ncpus=8:ngpus=2:mem=64GB
+#PBS -q GPU
+#PBS -l walltime=02:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+# ============================================================================
+# R49 diagnosis (28 Oct): is the selfcheck difference bf16 rounding or a leak?
+# Synthetic customers only; see scripts/r49_numerics_gpu.py.
+#   MODEL=8b   Qwen3-8B     R48's venv, YaRN 2, ONE GPU as in R48
+#                           (qsub -l select=1:ncpus=8:ngpus=1:mem=64GB ...)
+#   MODEL=32b  Qwen3-32B    R48's venv, YaRN 2, two GPUs (arm A)
+#   MODEL=27b  Qwen3.6-27B  productgpt-llm5, native context, two GPUs (arm B)
+#
+#     cd ~/ProductGPT/work_r48
+#     qsub -v MODEL=27b scripts/r49_numerics_gpu.pbs
+# Writes $ROOT/runs/r49/numerics_<model>.json
+# ============================================================================
+set -eo pipefail
+module purge
+module load python/3.11.4
+cd "$PBS_O_WORKDIR"
+export PYTHONUNBUFFERED=1 OMP_NUM_THREADS=8 HF_HUB_OFFLINE=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+: "${MODEL:?pass MODEL=8b|32b|27b}"
+ROOT=/storage/home/jinmiao/ProductGPT
+case "$MODEL" in
+    8b)  M=Qwen3-8B;    VENV=productgpt-llm;  YARN=2; NG=1 ;;
+    32b) M=Qwen3-32B;   VENV=productgpt-llm;  YARN=2; NG=2 ;;
+    27b) M=Qwen3.6-27B; VENV=productgpt-llm5; YARN=0; NG=2 ;;
+    *) echo "MODEL must be 8b, 32b or 27b"; exit 2 ;;
+esac
+source "$ROOT/venvs/$VENV/bin/activate"
+LOG=$ROOT/logs/r49_numerics_${MODEL}_${PBS_JOBID%%.*}.log
+exec > >(tee -a "$LOG") 2>&1
+echo "R49 numerics MODEL=$MODEL ($M) YARN=$YARN NG=$NG on $(hostname) at $(date), commit $(git rev-parse --short HEAD)"
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+
+set +e
+python scripts/r49_numerics_gpu.py --model "$ROOT/models/$M" --yarn "$YARN" --n-gpus "$NG" \
+    --out "$ROOT/runs/r49/numerics_${MODEL}.json"
+rc=$?
+set -e
+if [ $rc -eq 0 ]; then
+    bash "$PBS_O_WORKDIR/scripts/notify.sh" "OK  R49 numerics ${MODEL} (job ${PBS_JOBID%%.*})" || true
+else
+    bash "$PBS_O_WORKDIR/scripts/notify.sh" "FAIL R49 numerics ${MODEL} exit=${rc} (job ${PBS_JOBID%%.*})" || true
+fi
+exit $rc
