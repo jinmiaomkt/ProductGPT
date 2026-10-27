@@ -23,6 +23,13 @@ USAGE (HPCC; see scripts/r48_score_gpu.pbs and scripts/r48_dryrun_cpu.pbs)
     python -m llm_zeroshot.score --table <r46>/occasions_v6_S1024.npz \
         --model /storage/home/jinmiao/ProductGPT/models/Qwen3-8B \
         --out-dir <runs>/r48 --tag qwen3_8b --who out --shard 0 --n-shards 2
+
+R49 (larger models; scripts/r49_score_gpu.pbs) adds:
+    --n-gpus 2     bf16 weights split layer by layer over two GPUs (no quantisation)
+    --selfcheck    before scoring, T3 and T4 of scripts/test_r48_zeroshot.py on a
+                   synthetic customer with the real model on the real device;
+                   stops if either shows a difference above --selfcheck-tol
+The defaults reproduce R48 exactly.
 """
 from __future__ import annotations
 
@@ -81,10 +88,11 @@ def score_ids(model, ids: Sequence[int], tpos: Sequence[int], letter_ids: Sequen
               device: str):
     """(logp9 (K,9), mass (K,)) as float64 numpy, from one causal forward pass."""
     import torch
-    x = torch.tensor([list(ids)], device=device)
-    q = torch.tensor(list(tpos), device=device) - 1          # state just before each answer
+    # with --n-gpus 2 the embedding sits on the first GPU and the head on the last
+    x = torch.tensor([list(ids)], device=model.get_input_embeddings().weight.device)
     with torch.inference_mode():
         h = model.model(input_ids=x, use_cache=False).last_hidden_state[0]
+        q = torch.tensor(list(tpos), device=h.device) - 1      # state just before each answer
         logits = model.get_output_embeddings()(h[q])          # (K, V)
         if logits.dtype in (torch.bfloat16, torch.float16):
             logits = logits.float()
@@ -103,19 +111,58 @@ def cell_codes(tab: Dict[str, np.ndarray]) -> np.ndarray:
     return code
 
 
-def load_model(name: str, device: str, yarn: float):
+def load_model(name: str, device: str, yarn: float, n_gpus: int = 1):
     import torch
+    import transformers
     from transformers import AutoModelForCausalLM, AutoTokenizer
     if device.startswith("cuda") and platform.system() == "Windows":
         raise SystemExit("refusing to use the laptop GPU (19 Oct 2026 crashes); run on HPCC")
     tok = AutoTokenizer.from_pretrained(name)
-    kw = {"torch_dtype": torch.bfloat16 if device.startswith("cuda") else torch.float32,
+    v5 = int(transformers.__version__.split(".")[0]) >= 5      # 5.x renamed torch_dtype
+    kw = {"dtype" if v5 else "torch_dtype":
+          torch.bfloat16 if device.startswith("cuda") else torch.float32,
           "attn_implementation": "sdpa"}
     if yarn:
+        if v5:
+            raise SystemExit("--yarn is wired for transformers 4.x only (R48, R49 arm A)")
         kw["rope_scaling"] = {"rope_type": "yarn", "factor": float(yarn),
                               "original_max_position_embeddings": 32768}
-    model = AutoModelForCausalLM.from_pretrained(name, **kw).to(device).eval()
+    if n_gpus > 1:
+        if not device.startswith("cuda") or torch.cuda.device_count() < n_gpus:
+            raise SystemExit(f"--n-gpus {n_gpus} needs that many visible GPUs")
+        kw["device_map"] = "balanced"               # whole layers, about half on each GPU
+        model = AutoModelForCausalLM.from_pretrained(name, **kw).eval()
+    else:
+        model = AutoModelForCausalLM.from_pretrained(name, **kw).to(device).eval()
     return tok, model
+
+
+def selfcheck(model, tok, system: str, letter_ids: Sequence[int], S: int = 40, t: int = 20
+              ) -> Dict[str, float]:
+    """T3 and T4 of scripts/test_r48_zeroshot.py with the real model on its device.
+
+    t3: max |log p| difference between one pass and per-occasion prefixes
+    t4_before: max change at occasions <= t when decision t and everything after
+               it change (a leak would show here)
+    t4_after: the same at later occasions (must be visibly non-zero)
+    In bf16 the first two are rounding-level, not exactly zero.
+    """
+    from llm_zeroshot.synthetic import perturb_from, synthetic_customer
+    lab, prev, lto, obt, inv = synthetic_customer(S, 2)
+    text, answers = transcript(lab, prev, lto, obt, inv, S, system)
+    ids, tpos = answer_positions(tok, text, answers, letter_ids)
+    lp, mass = score_ids(model, ids, tpos, letter_ids, "")
+    t3 = 0.0
+    for k, p in enumerate(tpos):
+        lpk, _ = score_ids(model, ids[:p + 1], [p], letter_ids, "")
+        t3 = max(t3, float(np.abs(lpk[0] - lp[k]).max()))
+    lab2, obt2 = perturb_from(lab, obt, t)
+    text2, answers2 = transcript(lab2, prev, lto, obt2, inv, S, system)
+    ids2, tpos2 = answer_positions(tok, text2, answers2, letter_ids)
+    lp2, _ = score_ids(model, ids2, tpos2, letter_ids, "")
+    return {"t3": t3, "t4_before": float(np.abs(lp2[: t + 1] - lp[: t + 1]).max()),
+            "t4_after": float(np.abs(lp2[t + 1:] - lp[t + 1:]).max()),
+            "letter_mass": float(np.exp(mass).mean()), "tokens": len(ids)}
 
 
 def main() -> None:
@@ -131,6 +178,12 @@ def main() -> None:
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--yarn", type=float, default=0.0,
                     help="YaRN factor for >32,768-token transcripts (0 = off)")
+    ap.add_argument("--n-gpus", type=int, default=1,
+                    help="split the bf16 weights over this many GPUs (R49)")
+    ap.add_argument("--selfcheck", action="store_true",
+                    help="T3/T4 on a synthetic customer with the real model first (R49)")
+    ap.add_argument("--selfcheck-tol", type=float, default=0.1,
+                    help="largest allowed T3 / T4-before difference, in nats")
     ap.add_argument("--max-customers", type=int, default=0, help="smoke only")
     ap.add_argument("--dry-run", action="store_true",
                     help="tokenise only; report the token-length distribution")
@@ -162,8 +215,21 @@ def main() -> None:
         from transformers import AutoTokenizer
         tok, model = AutoTokenizer.from_pretrained(a.model), None
     else:
-        tok, model = load_model(a.model, a.device, a.yarn)
+        tok, model = load_model(a.model, a.device, a.yarn, a.n_gpus)
     letter_ids = letter_token_ids(tok)
+    # Qwen3's config says 40,960 but its card gives 32,768 as the native context;
+    # Qwen3.5/3.6 are native to their config's 262,144
+    native = None if model is None else (
+        32768 if model.config.model_type == "qwen3"
+        else model.config.get_text_config().max_position_embeddings)
+    check = None
+    if a.selfcheck and model is not None:
+        check = selfcheck(model, tok, system, letter_ids)
+        print(f"[r48] selfcheck {json.dumps(check)}", flush=True)
+        if (check["t3"] > a.selfcheck_tol or check["t4_before"] > a.selfcheck_tol
+                or check["t4_after"] < 1e-3):
+            raise SystemExit("selfcheck FAILED: one pass differs from per-occasion queries, "
+                             "or earlier predictions respond to later occasions")
 
     rows = {k: [] for k in ("uid_hash", "pos", "label", "cell", "nll", "logp9", "mass")}
     lengths, t0 = [], time.time()
@@ -175,8 +241,9 @@ def main() -> None:
         lengths.append(len(ids))
         if a.dry_run:
             continue
-        if len(ids) > 32768 and not a.yarn:
-            raise SystemExit(f"a transcript has {len(ids):,} tokens > 32,768; rerun with --yarn 2")
+        if len(ids) > native and not a.yarn:
+            raise SystemExit(f"a transcript has {len(ids):,} tokens > {native:,}; "
+                             "rerun with --yarn 2")
         logp9, mass = score_ids(model, ids, tpos, letter_ids, a.device)
         lab = tab["label"][i, :L].astype(np.int64)
         rows["uid_hash"].append(np.full(L, tab["uid_hash"][i], np.int64))
@@ -200,6 +267,13 @@ def main() -> None:
                           "p99": int(np.percentile(lens, 99)),
                           "over_32768": int((lens > 32768).sum())},
                "seconds": round(time.time() - t0, 1)}
+    if model is not None:
+        import torch
+        import transformers
+        summary.update({"n_gpus": a.n_gpus, "model_type": model.config.model_type,
+                        "model_class": type(model).__name__,
+                        "transformers": transformers.__version__,
+                        "torch": torch.__version__, "selfcheck": check})
     if not a.dry_run:
         arr = {k: np.concatenate(v) for k, v in rows.items()}
         np.savez_compressed(stem.with_suffix(".npz"), **arr)

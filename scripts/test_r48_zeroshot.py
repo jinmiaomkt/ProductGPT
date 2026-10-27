@@ -5,6 +5,13 @@ randomly initialised Qwen3 model -- no data, no model weights, no GPU.
 
     python scripts/test_r48_zeroshot.py [--tokenizer Qwen/Qwen3-8B]
 
+R49 adds --arch qwen3_5: a tiny randomly initialised Qwen3.5/3.6 text model
+(three Gated DeltaNet linear-attention layers, then one full-attention layer,
+as in Qwen3.6-27B), so T3 and T4 also cover the linear-attention path.  It needs
+transformers >= 5.
+
+    python scripts/test_r48_zeroshot.py --tokenizer Qwen/Qwen3.6-27B --arch qwen3_5
+
   T1  the hand-written chat format equals tokenizer.apply_chat_template
       (non-thinking generation prompt) for a single turn
   T2  every answer letter is one token, at its character, with the letter's id
@@ -31,6 +38,8 @@ import numpy as np  # noqa: E402
 from llm_zeroshot.prompt import (ASSISTANT_PREFIX, IM_END, IM_START, LETTERS,  # noqa: E402
                                  system_prompt, transcript, user_turn)
 from llm_zeroshot.score import answer_positions, letter_token_ids, score_ids  # noqa: E402
+from llm_zeroshot.synthetic import (perturb_from, synthetic_customer,  # noqa: E402
+                                    synthetic_products)
 
 FAILS = []
 
@@ -41,46 +50,28 @@ def check(name, ok, detail=""):
         FAILS.append(name)
 
 
-def synthetic_products():
-    rng = np.random.default_rng(0)
-    p = {k: np.zeros(60, np.int64) for k in ("rarity", "fig", "lto", "female")}
-    p["element"] = np.full(60, -1, np.int64)
-    p["wtype"] = np.full(60, -1, np.int64)
-    for i in range(13, 57):
-        p["rarity"][i] = rng.choice([3, 4, 5])
-        p["fig"][i] = int(i < 40)
-        p["lto"][i] = int(rng.random() < 0.5)
-        p["female"][i] = int(rng.random() < 0.5)
-        p["element"][i] = rng.integers(0, 7) if i < 40 else -1
-        p["wtype"][i] = rng.integers(0, 5)
-    return p
-
-
-def synthetic_customer(S, seed):
-    rng = np.random.default_rng(seed)
-    lab = rng.integers(1, 10, S)
-    prev = np.concatenate([[rng.integers(1, 10)], lab[:-1]])
-    lto = np.zeros((S, 4), np.int64)
-    for start in range(0, S, 15):                       # a new campaign every 15 rows
-        lto[start:start + 15] = [rng.integers(13, 40), rng.choice([0, rng.integers(13, 40)]),
-                                 rng.integers(40, 57), rng.integers(40, 57)]
-    obt = np.zeros((S, 10), np.int64)
-    for t in range(1, S):
-        k = {1: 1, 2: 10, 3: 1, 4: 10, 5: 1, 6: 10, 7: 1, 8: 10, 9: 0}[int(lab[t - 1])]
-        obt[t, :k] = rng.choice(list(range(13, 57)) + [59], size=k)
-    inv = np.zeros(44)
-    inv[[0, 5, 5 - 0]] = [1, 2, 2]
-    return lab, prev, lto, obt, inv
-
-
-def tiny_model(vocab):
+def tiny_model(vocab, arch="qwen3"):
     import torch
-    from transformers import Qwen3Config, Qwen3ForCausalLM
     torch.manual_seed(0)
-    cfg = Qwen3Config(vocab_size=vocab, hidden_size=64, intermediate_size=128,
-                      num_hidden_layers=2, num_attention_heads=4, num_key_value_heads=2,
-                      head_dim=16, max_position_embeddings=65536, tie_word_embeddings=False)
-    m = Qwen3ForCausalLM(cfg).eval()
+    if arch == "qwen3":
+        from transformers import Qwen3Config, Qwen3ForCausalLM
+        cfg = Qwen3Config(vocab_size=vocab, hidden_size=64, intermediate_size=128,
+                          num_hidden_layers=2, num_attention_heads=4, num_key_value_heads=2,
+                          head_dim=16, max_position_embeddings=65536, tie_word_embeddings=False)
+        m = Qwen3ForCausalLM(cfg).eval()
+    else:
+        from transformers.models.qwen3_5 import Qwen3_5ForCausalLM, Qwen3_5TextConfig
+        cfg = Qwen3_5TextConfig(
+            vocab_size=vocab, hidden_size=64, intermediate_size=128, num_hidden_layers=4,
+            layer_types=["linear_attention"] * 3 + ["full_attention"],
+            num_attention_heads=2, num_key_value_heads=1, head_dim=64,
+            linear_conv_kernel_dim=4, linear_key_head_dim=16, linear_value_head_dim=16,
+            linear_num_key_heads=2, linear_num_value_heads=4,
+            rope_parameters={"rope_type": "default", "rope_theta": 1e7,
+                             "partial_rotary_factor": 0.25, "mrope_section": [3, 3, 2],
+                             "mrope_interleaved": True},
+            max_position_embeddings=65536, tie_word_embeddings=False)
+        m = Qwen3_5ForCausalLM(cfg).eval()
     with torch.no_grad():                                   # spread the letter logits so
         m.lm_head.weight.mul_(30.0)                         # differences are visible
     return m
@@ -89,7 +80,10 @@ def tiny_model(vocab):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tokenizer", default="Qwen/Qwen3-8B")
+    ap.add_argument("--arch", choices=("qwen3", "qwen3_5"), default="qwen3",
+                    help="architecture of the tiny random model used by T3-T5")
     a = ap.parse_args()
+    print(f"tokenizer {a.tokenizer}, tiny model {a.arch}")
     from transformers import AutoTokenizer
     tok = AutoTokenizer.from_pretrained(a.tokenizer)
     prod = synthetic_products()
@@ -115,7 +109,7 @@ def main():
           f"{len(ids):,} tokens for {S} occasions ({len(ids) / S:.1f}/occasion)")
 
     # T3 one pass == per-occasion prefixes
-    model = tiny_model(len(tok))
+    model = tiny_model(len(tok), a.arch)
     S3 = 40
     lab, prev, lto, obt, inv = synthetic_customer(S3, 2)
     text, answers = transcript(lab, prev, lto, obt, inv, S3, system)
@@ -133,9 +127,7 @@ def main():
     model = model.double()
     lp, _ = score_ids(model, ids, tpos, letter_ids, "cpu")
     t = 20
-    lab2, obt2 = lab.copy(), obt.copy()
-    lab2[t:] = (lab2[t:] % 9) + 1
-    obt2[t + 1:] = np.where(obt2[t + 1:] > 0, 59, 0)
+    lab2, obt2 = perturb_from(lab, obt, t)
     text2, answers2 = transcript(lab2, prev, lto, obt2, inv, S3, system)
     ids2, tpos2 = answer_positions(tok, text2, answers2, letter_ids)
     lp2, _ = score_ids(model, ids2, tpos2, letter_ids, "cpu")
