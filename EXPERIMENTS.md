@@ -36,7 +36,7 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 44400–44441 | `r47b1_*`, `r47b2_*` (42 runs, from `~/ProductGPT/work_r47` at `010fc89`) | 2026-10-27 | R47 B1–B2: half-life profile, full vs stock-only slots, seeds 1–3 | B1 (even ids) running/queued; B2 (odd ids) FAILED at 44401 on a stock_only bug, the other 20 cancelled; see R47 |
 | 44467–44487 | `r47b2_*` (21 runs, from `~/ProductGPT/work_r47fix` at `a3b2ac0`) | 2026-10-27 | R47 B2 re-run after the stock_only gradient fix | queued (qsub 2026-10-27) |
 | 44443–44446 | `b42_g5_c06_s2`–`s5` (4 runs, from `~/ProductGPT/work_gen6` at `9b3eccd`) | 2026-10-27 | R44 stage 4: gen-5 c06 seeds 2–5 (gen 6 reuses b39_g6w384) | all 4 finished, exit 0; holdout read once: tie (R44 stage 4) |
-| 44465 | `r43_strata` on gen-5 c06 seeds 1–5 (CPU, short queue) | 2026-10-27 | R44 stage 4: length strata for gen 5 | queued (qsub 2026-10-27) |
+| 44465 | `r43_strata` on gen-5 c06 seeds 1–5 (CPU, short queue) | 2026-10-27 | R44 stage 4: length strata for gen 5 | finished exit 0, self-check ok; result in R44 stage 4 |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -4717,8 +4717,22 @@ Headline cell, `outsample_users_holdout_period`:
   - Best epoch: 22.0 for gen 6, 16.4 for gen 5.
   - Peak memory: 5.5 GB for gen 6; gen 5's trainer does not log it.
 - **Selected window:** gen 6 kept 384.
-- **Length strata:** gen 5 c06's are being scored (CPU job 44465). Gen 6's
-  are R43's (`results/r43/strata.json`).
+- **Length strata (headline cell): reading full histories still buys
+  nothing.**
+  - *Sources:* gen-5 c06 was scored by CPU job 44465
+    (`work_gen6/results/r44/strata_g5c06.json`). Gen 6's strata are R43's
+    (`work_r43tools/results/r43/strata.json`). Every run's self-check
+    reproduces its `final.json`.
+
+  | stratum | customers / events | G5 c06 | G6 R43 | G6 − G5 per seed | mean | < 0 |
+  |---|---|---|---|---|---|---|
+  | > 1,024 occasions | 209 / 33,467 | 0.8920 | 0.8892 | +0.0028, −0.0058, +0.0131, +0.0070, −0.0314 | −0.0029 | 2/5 |
+  | ≤ 1,024 occasions | 1,402 / 183,836 | 0.8797 | 0.8762 | +0.0061, −0.0045, +0.0042, +0.0093, −0.0325 | −0.0035 | 2/5 |
+
+  - *Reading:* the 209 long-history customers are the only ones whose early
+    occasions gen 5 cannot see. Their gap is no larger than everyone else's,
+    so gen 6's full-history read adds nothing measurable. This is the same
+    conclusion as R43 step 1, now with both families tuned.
 
 Against the predictions:
 1. *A tie:* holds.
