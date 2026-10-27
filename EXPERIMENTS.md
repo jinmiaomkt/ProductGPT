@@ -31,7 +31,9 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 41643–41692 | `b22_*`, `b23_*` (50 runs) | 2026-09-27 | R33 ladder re-run after the parameterisation and weight-decay fixes | queued (qstat 2026-09-27) |
 | 42880–42897 | `b39_*` (18 runs, from `~/ProductGPT/work_gen6` at `93dcfbf`) | 2026-10-20 | R43 step 1: gen 6 against the rev-2 incumbent | complete, all 18 exit 0; result in R43 |
 | 44211–44258 | `b40_*` (48 runs, from `~/ProductGPT/work_gen6` at `a8ed3f9`) | 2026-10-26 | R44 stage 2: paired search, gen 5 and gen 6 | complete, all 48 exit 0; ranking in R44 |
-| 44320–44337 | `b41_*` (18 runs, from `~/ProductGPT/work_gen6` at `6b96b7d`) | 2026-10-27 | R44 stage 3: 6 candidates × seeds 11–13 | submitted (qsub 2026-10-27) |
+| 44320–44337 | `b41_*` (18 runs, from `~/ProductGPT/work_gen6` at `6b96b7d`) | 2026-10-27 | R44 stage 3: 6 candidates × seeds 11–13 | all 18 finished, exit 0 (qstat 2026-10-27); frozen gen-5 c06, gen-6 R43 |
+| 44361–44399 | `r45a_*` (39 runs, from `~/ProductGPT/work_r45` at `8fae1d7`) | 2026-10-27 | R45 part A: censored training, arms L/T/Z/ZF × k 1/2/4 + count, seeds 1–3 | queued (qstat 2026-10-27) |
+| 44400–44441 | `r47b1_*`, `r47b2_*` (42 runs, from `~/ProductGPT/work_r47` at `010fc89`) | 2026-10-27 | R47 B1–B2: half-life profile, full vs stock-only slots, seeds 1–3 | queued (qstat 2026-10-27) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -4442,7 +4444,7 @@ so that prediction rests on a premise that no longer holds.
 - `results/r36i/r36i_42868_chunk32.*`;
 - log `~/ProductGPT/logs/r36i_42879.log`.
 
-### R44 — PLAN, DRAFT FOR JIN'S REVIEW (26 Oct 2026; nothing submitted): tune gen 6 and the rev-2 incumbent on equal terms
+### R44 — PLAN (approved by Jin 26 Oct 2026; stages 2–3 done and both families frozen 27 Oct, stage 4 next): tune gen 6 and the rev-2 incumbent on equal terms
 
 **Why.** R43 step 1 compared gen 6 at the incumbent's hyperparameters, which
 R30 tuned for the gen-5 stack, on the pre-fix code. Gen 6 has never been
@@ -4579,7 +4581,32 @@ by Jin.
 - **Afterwards, as approved:** write gen 6's frozen configuration to
   `~/ProductGPT/r44_frozen_g6.env`, then launch R45 part A and R47 B1–B2.
 
-### R45 — PLAN, DRAFT FOR JIN'S REVIEW (27 Oct 2026; nothing trained): controlled left-censoring on complete histories
+**Stage 3 — RESULT (27 Oct 2026; validation only): gen 5 freezes at c06, gen 6
+at R43's configuration.** All 18 runs exited 0. The ranking is from
+`scripts/summarize_search.py --prefix b41_ --group`, which opens no test cell:
+
+| family | candidate | val NLL, mean ± sd over seeds 11–13 | s11 | s12 | s13 |
+|---|---|---|---|---|---|
+| gen 5 | **c06 (frozen)** | **0.8777 ± 0.0141** | 0.8672 | 0.8722 | 0.8936 |
+| gen 5 | c07 | 0.8920 ± 0.0066 | 0.8997 | 0.8884 | 0.8880 |
+| gen 5 | c23 | 0.8926 ± 0.0106 | 0.8877 | 0.8854 | 0.9048 |
+| gen 6 | **R43's configuration (frozen)** | **0.8820 ± 0.0138** | 0.8671 | 0.8848 | 0.8942 |
+| gen 6 | c23 | 0.8894 ± 0.0154 | 0.8796 | 0.8815 | 0.9071 |
+| gen 6 | c02 | 0.8896 ± 0.0169 | 0.8724 | 0.8903 | 0.9061 |
+
+- **Stage 2's leaders did not hold up.** Gen-5 c23 and gen-6 c23 both ranked
+  higher on seed 1 than on the fresh seeds. Seed 13 is the hardest seed for
+  five of the six candidates (not gen-5 c07).
+- **The gap between the frozen pair** is +0.004 against gen 6 on validation.
+  That is well inside the seed sd of about 0.014, and stage 4 decides it.
+- **Frozen gen-6 line** written to `~/ProductGPT/r44_frozen_g6.env`:
+  `WINDOW=384,D_MODEL=96,D_FF=288,N_LAYERS=6,LR=2.19e-04,DROPOUT=0.1,WD=0.05,GRAD_ACCUM=2,WARMUP=0.1`.
+- **Stage 4 next:** gen-5 c06 and gen-6 R43 on seeds 1–5, holdout opened
+  once. Batch 39's arm C is the frozen gen-6 configuration on seeds 1–5, so it
+  can be reused as gen 6's stage-4 runs. Gen-5 c06 needs seeds 2–5 (seed 1 is
+  `b40_g5_c06_s1`). This is not submitted yet.
+
+### R45 — PLAN (approved by Jin 26 Oct 2026; part A submitted 27 Oct): controlled left-censoring on complete histories
 
 **Question (Jin's).** What does it cost to learn from histories whose start is
 missing, and how does that cost grow with the depth of the missing start, for
@@ -4698,12 +4725,19 @@ waits for R44's frozen configuration.
 - **Existing suites:** all of them still pass, so the chop options off leave
   gen 6 unchanged.
 
-**Approved by Jin (27 Oct 2026). Queued behind R44.** Part A is
+**Approved by Jin (26 Oct 2026). Queued behind R44.** Part A is
 `scripts/submit_r45a.sh` (branch `r45-censoring`, run from
 `~/ProductGPT/work_r45`). It reads R44's frozen gen-6 configuration from
 `~/ProductGPT/r44_frozen_g6.env`, written when stage 3 freezes it, and refuses
 to submit without it. Part B is `scripts/r45_eval_chopped.pbs` on R44's
 stage-4 gen-6 runs.
+
+**Part A — SUBMITTED (27 Oct 2026): jobs 44361–44399 (39 runs)** from
+`~/ProductGPT/work_r45` at `8fae1d7`, on R44's frozen gen-6 configuration (R43's).
+PBS's variable lists for jobs 44361 (L), 44362 (T), 44364 (ZF) and 44373
+(count, 128) show the frozen line and each arm's chop settings. When they were
+submitted, the two GPUs were held by another session's `r48_score` jobs, so
+the run logs are not yet read.
 
 *Part B pipeline tested* (job 44273, CPU, the 2-epoch smoke checkpoint, so
 the NLLs mean nothing):
@@ -4713,7 +4747,7 @@ the NLLs mean nothing):
   depth, as it should. The log-inventory error is 0.043 at k = 1 and 0.093 at
   k = 2; the pity error is 0.006 and 0.017.
 
-### R47 — PLAN, DRAFT FOR JIN'S REVIEW (28 Oct 2026; nothing run): do players forget their holdings, within and across campaigns?
+### R47 — PLAN (approved by Jin 26 Oct 2026; part A done, B1–B2 submitted 27 Oct): do players forget their holdings, within and across campaigns?
 
 **Why.** Batches 33–34 withdrew the half-life claim: half-lives of 1, 2 and 5
 occasions tie on holdout (0.8805, 0.8837, 0.8809; seed sd about 0.01). That
@@ -4770,13 +4804,13 @@ stock. The count, occasions since and owned flag are replaced by their
 stock-based versions (owned = stock > 10⁻³; total = summed stock). The stock
 is now the only route by which holdings enter, so if players forget, its
 half-life should be identified here. 21 runs.
-*Caveat, added 28 Oct while building it:* the stock is the only computed
+*Caveat, added 26 Oct while building it:* the stock is the only computed
 route. The GRU still sees each occasion's acquisitions (the outcome pool) and
 can learn some memory of holdings itself. So B2 removes the exact
 never-decaying channels, not every possible memory. A flat B2 profile would
 mean "not identified even without them", not "no memory anywhere".
 
-**Part A — RESULT (job 44284, 28 Oct 2026; calibration campaigns ≤ 27,
+**Part A — RESULT (job 44284, 26 Oct 2026; calibration campaigns ≤ 27,
 aggregates only): no forgetting. Holdings keep suppressing purchases, within
 and across campaigns.** There were 9,010,841 featured-offer occasions, and
 1,664,821 owned occasions with a usable stratum baseline.
@@ -4901,6 +4935,13 @@ against ∞. Rollouts are more sensitive to memory than one-step NLL.
 **Budget.** Part A is one CPU job. B1 and B2 are 42 GPU runs and B3 is 12,
 about 15 minutes each, so about 14 GPU-hours. They queue behind R44 and R45
 part A.
+
+**B1–B2 — SUBMITTED (27 Oct 2026): jobs 44400–44441 (42 runs)** from
+`~/ProductGPT/work_r47` at `010fc89`, on R44's frozen gen-6 configuration.
+PBS's variable lists for jobs 44400 (B1, half-life 1), 44401 (B2, half-life 1),
+44412 (B1, ∞ = `DECAY=none`) and 44441 (B2, ∞, seed 3) show the frozen line,
+the kernel, tier and campaign settings, and the slot-state arm. B3 waits for
+B2's best half-life.
 
 **Code to build after approval:** `--slot-state stock_only` and the
 campaign-boundary factor in gen 6's computed state, on a new branch
