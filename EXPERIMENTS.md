@@ -33,7 +33,8 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 44211–44258 | `b40_*` (48 runs, from `~/ProductGPT/work_gen6` at `a8ed3f9`) | 2026-10-26 | R44 stage 2: paired search, gen 5 and gen 6 | complete, all 48 exit 0; ranking in R44 |
 | 44320–44337 | `b41_*` (18 runs, from `~/ProductGPT/work_gen6` at `6b96b7d`) | 2026-10-27 | R44 stage 3: 6 candidates × seeds 11–13 | all 18 finished, exit 0 (qstat 2026-10-27); frozen gen-5 c06, gen-6 R43 |
 | 44361–44399 | `r45a_*` (39 runs, from `~/ProductGPT/work_r45` at `8fae1d7`) | 2026-10-27 | R45 part A: censored training, arms L/T/Z/ZF × k 1/2/4 + count, seeds 1–3 | all 39 finished, exit 0 (qstat 2026-10-27 18:30) |
-| 44400–44441 | `r47b1_*`, `r47b2_*` (42 runs, from `~/ProductGPT/work_r47` at `010fc89`) | 2026-10-27 | R47 B1–B2: half-life profile, full vs stock-only slots, seeds 1–3 | held 16:15 so batch 42 ran first; released 18:30 (queued again) |
+| 44400–44441 | `r47b1_*`, `r47b2_*` (42 runs, from `~/ProductGPT/work_r47` at `010fc89`) | 2026-10-27 | R47 B1–B2: half-life profile, full vs stock-only slots, seeds 1–3 | B1 (even ids) running/queued; B2 (odd ids) FAILED at 44401 on a stock_only bug, the other 20 cancelled; see R47 |
+| 44467–44487 | `r47b2_*` (21 runs, from `~/ProductGPT/work_r47fix` at `a3b2ac0`) | 2026-10-27 | R47 B2 re-run after the stock_only gradient fix | queued (qsub 2026-10-27) |
 | 44443–44446 | `b42_g5_c06_s2`–`s5` (4 runs, from `~/ProductGPT/work_gen6` at `9b3eccd`) | 2026-10-27 | R44 stage 4: gen-5 c06 seeds 2–5 (gen 6 reuses b39_g6w384) | all 4 finished, exit 0; holdout read once: tie (R44 stage 4) |
 | 44465 | `r43_strata` on gen-5 c06 seeds 1–5 (CPU, short queue) | 2026-10-27 | R44 stage 4: length strata for gen 5 | queued (qsub 2026-10-27) |
 
@@ -5082,6 +5083,42 @@ PBS's variable lists for jobs 44400 (B1, half-life 1), 44401 (B2, half-life 1),
 44412 (B1, ∞ = `DECAY=none`) and 44441 (B2, ∞, seed 3) show the frozen line,
 the kernel, tier and campaign settings, and the slot-state arm. B3 waits for
 B2's best half-life.
+
+**B2 failed on a code bug, fixed and re-submitted (27 Oct 2026).**
+- **The failure:** job 44401 (B2, half-life 1, seed 1) exited 1 on its first
+  training step: "Trying to backward through the graph a second time".
+- **Cause:** under `stock_only` the slot count is the thresholded decayed
+  stock, so it carries the stock's graph (tier weights, kernel, half-life).
+  It entered the chunks un-detached, so the first chunk's backward freed the
+  graph the second chunk needed. Every B2 run would fail the same way. B1
+  (`full`) is unaffected: its count carries no gradient.
+- **Why the tests missed it:** F4 checked forward logits only, and no test
+  ran a multi-chunk backward under `stock_only`.
+- **Fix:** `fb95fd2` on `r47-forgetting`. With per-chunk backward, every
+  computed-state tensor that carries a gradient enters the chunks as a
+  detached leaf. After the last chunk, a single `autograd.backward` pushes
+  both leaves' gradients through the shared graph. Without per-chunk
+  backward the graph is now left intact.
+  - Side effect: gen 6's T8 one-chunk check had been comparing against a
+    reference in which the stock parameters had no gradient, so it skipped
+    them. It now covers them.
+  - Forward outputs and `full`-mode training are unchanged.
+- **New test F7:** per-chunk backward over 6 chunks equals one full autograd
+  pass at the same chunk size, for every parameter including the stock's.
+  It covers `full`, and `stock_only` with the half-life frozen and learned
+  and with δ = 0.3. The largest relative difference is 2.9e-07.
+- **Suite:** CPU job 44466 at `fb95fd2` passed every suite (gen 6, R45, R47,
+  the rollout suites), with 101 PASS lines and 0 FAIL.
+- **Re-submitted:**
+  - The 20 queued B2 jobs (44403–44441, odd ids), held at 19:10, were
+    cancelled.
+  - The empty run directory of 44401 was kept as `..._r47b2_hl1_s1_failed44401`.
+  - B2 re-runs in full as jobs 44467–44487 (21 runs,
+    `submit_r47b.sh b2`), from a new worktree `~/ProductGPT/work_r47fix` at
+    `a3b2ac0`.
+  - B1 continues from `work_r47` at `010fc89`. Its code path is unchanged
+    by the fix.
+  - B3 (`stock_only`) must also run from `work_r47fix`.
 
 **Code to build after approval:** `--slot-state stock_only` and the
 campaign-boundary factor in gen 6's computed state, on a new branch
