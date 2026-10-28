@@ -29,6 +29,13 @@ R49 (larger models; scripts/r49_score_gpu.pbs) adds:
     --selfcheck    before scoring, T3, T4 and T4c of scripts/test_r48_zeroshot.py
                    on a synthetic customer with the real model on the real
                    device; stops on a leak or a broken one-pass (see selfcheck())
+R50 (a float32 reference for R48's bf16 Qwen3-8B; scripts/r50_fp32_gpu.pbs) adds:
+    --dtype float32       weights upcast from the bf16 checkpoint; on CUDA, TF32 off
+                          and the memory-efficient attention kernel only (see
+                          float32_reference())
+    --sample N --sample-seed S
+                          a simple random sample of N customers of the --who group,
+                          drawn before sharding (sample_customers())
 The defaults reproduce R48 exactly.
 """
 from __future__ import annotations
@@ -111,8 +118,48 @@ def cell_codes(tab: Dict[str, np.ndarray]) -> np.ndarray:
     return code
 
 
-def load_model(name: str, device: str, yarn: float, n_gpus: int = 1, strict: bool = False):
-    """strict (R49): stop unless every weight the text model needs is in the checkpoint."""
+def sample_customers(sel: Sequence[int], n: int, seed: int) -> List[int]:
+    """R50: n of the table rows in sel, without replacement, kept in table order."""
+    if not 0 < n <= len(sel):
+        raise SystemExit(f"--sample {n} must be between 1 and {len(sel)}")
+    k = np.sort(np.random.default_rng(seed).choice(len(sel), n, replace=False))
+    return [sel[j] for j in k]
+
+
+def float32_reference() -> Dict[str, object]:
+    """R50: make a float32 run on CUDA a float32 reference, not a faster approximation.
+
+    - TF32 off, so matrix products keep float32's 24-bit significand.
+    - Attention may use only SDPA's memory-efficient kernel.  The flash kernel
+      has no float32, and the math kernel's memory grows with the square of the
+      length (about 175 GB for a 37k-token customer), so a fallback to it must
+      fail loudly, not run out of memory hours in.  transformers 4.57.6 always
+      hands SDPA an explicit causal mask and repeated key/value heads here (T7),
+      so the grouped-query kernels, which the memory-efficient kernel lacks, are
+      never asked for.  On sm80+ the memory-efficient kernel multiplies float32
+      with CUTLASS's OpMultiplyAddFastF32 (three TF32 products), close to
+      float32 accuracy; the in-job selfcheck measures what is left.
+    """
+    import torch
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    torch.set_float32_matmul_precision("highest")
+    torch.backends.cuda.enable_flash_sdp(False)
+    torch.backends.cuda.enable_math_sdp(False)
+    torch.backends.cuda.enable_mem_efficient_sdp(True)
+    if hasattr(torch.backends.cuda, "enable_cudnn_sdp"):
+        torch.backends.cuda.enable_cudnn_sdp(False)
+    return {"tf32": torch.backends.cuda.matmul.allow_tf32,
+            "matmul_precision": torch.get_float32_matmul_precision(),
+            "sdpa": {"flash": torch.backends.cuda.flash_sdp_enabled(),
+                     "math": torch.backends.cuda.math_sdp_enabled(),
+                     "mem_efficient": torch.backends.cuda.mem_efficient_sdp_enabled()}}
+
+
+def load_model(name: str, device: str, yarn: float, n_gpus: int = 1, strict: bool = False,
+               dtype: str = "auto"):
+    """strict (R49): stop unless every weight the text model needs is in the checkpoint.
+    dtype (R50): "auto" is bf16 on CUDA and float32 on CPU, as in R48."""
     import torch
     import transformers
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -120,9 +167,11 @@ def load_model(name: str, device: str, yarn: float, n_gpus: int = 1, strict: boo
         raise SystemExit("refusing to use the laptop GPU (19 Oct 2026 crashes); run on HPCC")
     tok = AutoTokenizer.from_pretrained(name)
     v5 = int(transformers.__version__.split(".")[0]) >= 5      # 5.x renamed torch_dtype
-    kw = {"dtype" if v5 else "torch_dtype":
-          torch.bfloat16 if device.startswith("cuda") else torch.float32,
-          "attn_implementation": "sdpa"}
+    if dtype == "auto":
+        dt = torch.bfloat16 if device.startswith("cuda") else torch.float32
+    else:
+        dt = getattr(torch, dtype)
+    kw = {"dtype" if v5 else "torch_dtype": dt, "attn_implementation": "sdpa"}
     if yarn:
         if v5:
             raise SystemExit("--yarn is wired for transformers 4.x only (R48, R49 arm A)")
@@ -240,6 +289,11 @@ def main() -> None:
                          "letter|, in nats")
     ap.add_argument("--strict-load", action="store_true",
                     help="stop if any weight is missing or mis-shaped (R49)")
+    ap.add_argument("--dtype", choices=("auto", "bfloat16", "float32"), default="auto",
+                    help="auto = bf16 on CUDA, float32 on CPU, as R48 (R50)")
+    ap.add_argument("--sample", type=int, default=0,
+                    help="score a random sample of this many customers (R50; 0 = all)")
+    ap.add_argument("--sample-seed", type=int, default=0)
     ap.add_argument("--max-customers", type=int, default=0, help="smoke only")
     ap.add_argument("--dry-run", action="store_true",
                     help="tokenise only; report the token-length distribution")
@@ -258,6 +312,8 @@ def main() -> None:
     n = len(tab["length"])
     sel = [i for i in range(n)
            if a.who == "all" or (tab["is_out"][i] == 1) == (a.who == "out")]
+    if a.sample:
+        sel = sample_customers(sel, a.sample, a.sample_seed)
     sel = [i for i in sel if i % a.n_shards == a.shard]
     if a.max_customers:
         sel = sel[: a.max_customers]
@@ -271,7 +327,11 @@ def main() -> None:
         from transformers import AutoTokenizer
         tok, model = AutoTokenizer.from_pretrained(a.model), None
     else:
-        tok, model = load_model(a.model, a.device, a.yarn, a.n_gpus, a.strict_load)
+        tok, model = load_model(a.model, a.device, a.yarn, a.n_gpus, a.strict_load, a.dtype)
+    numerics = None
+    if model is not None and a.dtype == "float32" and a.device.startswith("cuda"):
+        numerics = float32_reference()
+        print(f"[r48] float32 reference: {json.dumps(numerics)}", flush=True)
     letter_ids = letter_token_ids(tok)
     # Qwen3's config says 40,960 but its card gives 32,768 as the native context;
     # Qwen3.5/3.6 are native to their config's 262,144
@@ -325,7 +385,10 @@ def main() -> None:
     if model is not None:
         import torch
         import transformers
-        summary.update({"n_gpus": a.n_gpus, "model_type": model.config.model_type,
+        summary.update({"dtype": str(model.dtype).replace("torch.", ""),
+                        "sample": a.sample, "sample_seed": a.sample_seed,
+                        "numerics": numerics,
+                        "n_gpus": a.n_gpus, "model_type": model.config.model_type,
                         "model_class": type(model).__name__,
                         "transformers": transformers.__version__,
                         "torch": torch.__version__, "selfcheck": check})

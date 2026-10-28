@@ -22,6 +22,10 @@ transformers >= 5.
       with only later decisions changed, so the transcript keeps its length)
   T5  the nine renormalised probabilities sum to one; the letter mass is <= 1
   T6  the transcript states offers only when they change and counts duplicates
+  T7  (R50, qwen3 only) SDPA receives an explicit causal mask and repeated
+      key/value heads, so the float32 reference's memory-efficient-only attention
+      has a kernel to run
+  T8  (R50) the customer sample is fixed by its seed
 """
 from __future__ import annotations
 
@@ -38,7 +42,8 @@ import numpy as np  # noqa: E402
 
 from llm_zeroshot.prompt import (ASSISTANT_PREFIX, IM_END, IM_START, LETTERS,  # noqa: E402
                                  system_prompt, transcript, user_turn)
-from llm_zeroshot.score import answer_positions, letter_token_ids, score_ids  # noqa: E402
+from llm_zeroshot.score import (answer_positions, letter_token_ids,  # noqa: E402
+                                sample_customers, score_ids)
 from llm_zeroshot.synthetic import (perturb_decisions_from, perturb_from,  # noqa: E402
                                     synthetic_customer, synthetic_products)
 
@@ -159,6 +164,33 @@ def main():
     s = np.exp(lp).sum(1)
     check("T5 renormalised probabilities sum to one", np.allclose(s, 1.0, atol=1e-9))
     check("T5b letter mass <= 1", bool((mass <= 1e-9).all()))
+
+    # T7 (R50) score.float32_reference allows only SDPA's memory-efficient kernel,
+    # which has no grouped-query mode.  It relies on transformers handing SDPA an
+    # explicit causal mask, and so repeated key/value heads, for these passes.
+    if a.arch == "qwen3":
+        import transformers.integrations.sdpa_attention as sdpa
+        orig, masks = sdpa.sdpa_attention_forward, []
+
+        def spy(module, query, key, value, attention_mask, *args, **kwargs):
+            masks.append((attention_mask is not None
+                          and tuple(attention_mask.shape[-2:]) == (query.shape[2], key.shape[2]),
+                          not sdpa.use_gqa_in_sdpa(attention_mask, key)))
+            return orig(module, query, key, value, attention_mask, *args, **kwargs)
+        from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+        ALL_ATTENTION_FUNCTIONS["sdpa"] = spy
+        lp7, _ = score_ids(model, ids, tpos, letter_ids, "cpu")
+        lp7b, _ = score_ids(model, ids[:tpos[0] + 1], [tpos[0]], letter_ids, "cpu")
+        ALL_ATTENTION_FUNCTIONS["sdpa"] = orig
+        check("T7 SDPA gets an explicit causal mask, not the grouped-query path",
+              bool(masks) and all(m for m, _ in masks) and float(np.abs(lp7 - lp).max()) == 0.0,
+              f"{len(masks)} attention calls; mask present in all: {all(m for m, _ in masks)}")
+        check("T7b SDPA gets the key/value heads repeated", bool(masks) and all(r for _, r in masks))
+    # T8 (R50) the customer sample: fixed by its seed, distinct, in table order
+    pool = list(range(5, 2507))
+    s1, s2 = sample_customers(pool, 250, 50), sample_customers(pool, 250, 50)
+    check("T8 customer sample", s1 == s2 and len(set(s1)) == 250 and s1 == sorted(s1)
+          and set(s1) <= set(pool) and s1 != sample_customers(pool, 250, 51))
 
     # T6 transcript content
     lab, prev, lto, obt, inv = synthetic_customer(30, 3)

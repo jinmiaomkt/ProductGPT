@@ -5557,3 +5557,123 @@ values are bf16.
     customers. The paired H2 contrast compares two bf16 pipelines.
 - **Resubmitted 28 Oct, 01:12 at dc28ac8:** jobs 44511–44518, in the order B0,
   A0, B1, A1, B2, A2, B3, A3.
+
+### R50 — PLAN (28 Oct 2026, at Jin's request; nothing run): a float32 reference for R48's bf16 Qwen3-8B
+
+**Why.** R49's diagnostic showed that bf16 rounding moves every occasion's
+log-probabilities. Per synthetic customer, the mean NLL moved by up to ±0.023
+between two equally valid bf16 evaluations. Of the three models, Qwen3-8B
+rounds the most (t3 true-letter mean 0.18, against 0.082 for Qwen3-32B and
+0.050 for Qwen3.6-27B). Noise like this averages out over R48's 217,303
+occasions only if it has no direction, and nothing so far says whether it
+does. R50 measures the direction by scoring a random sample of R48's customers
+with the same model in float32.
+
+It matters beyond R48. R49's H2 compares two bf16 pipelines. If rounding raises
+the NLL, and the 8B rounds the most, then part of a measured H2 gain could be
+rounding rather than the larger model.
+
+**Expectation, written before the run (not a hypothesis):** B ≥ 0, i.e. bf16's
+NLL is above float32's. If rounding acts like zero-mean noise on the logits, it
+raises the expected NLL, because log-sum-exp is convex (Jensen). I expect |B|
+below 0.01.
+
+**Design.** The model, prompt, transcripts, YaRN factor 2 and scoring are R48's.
+Only the arithmetic changes.
+- *Customers:* a simple random sample of 250 of the 2,502 out-of-sample
+  customers (10%), drawn without replacement by `numpy.random.default_rng(50)`
+  from the out-of-sample customers in table order (`llm_zeroshot.score --sample
+  250 --sample-seed 50`). That is about 4.6M tokens. The seed fixes the draw,
+  and nothing about the customers is looked at before it.
+- *Pass 1, float32 (the reference):*
+  - Qwen3-8B's bf16 checkpoint is upcast to float32. This is exact arithmetic
+    on the released weights, not a different model.
+  - The weights (33 GB) are split over the job's two L40S, with TF32 off.
+  - Attention may use only SDPA's memory-efficient kernel. It multiplies
+    float32 values with three TF32 products (CUTLASS `OpMultiplyAddFastF32`),
+    close to float32 accuracy. The flash kernel has no float32, and a fallback
+    to the math kernel would need about 175 GB at 37k tokens, so the job fails
+    loudly instead.
+  - In transformers 4.57.6, SDPA always receives an explicit causal mask and
+    repeated key/value heads for these passes (new test T7). So R48's bf16 run
+    could not have used the flash kernel either.
+- *Pass 2, bf16 rerun:* R48's configuration exactly (bf16, one GPU, YaRN 2), on
+  the same 250 customers, in the same job.
+- *Comparison:* `scripts/r50_fp32_compare.py`, on CPU in the same job.
+
+**Gates (each stops the job).**
+1. The unit tests with the Qwen3-8B tokenizer, now including:
+   - T7: SDPA receives an explicit causal mask and repeated key/value heads, so
+     the memory-efficient kernel can run;
+   - T8: the customer sample is fixed by its seed.
+2. `--strict-load`: no weight is missing or mis-shaped.
+3. *Reference quality.* The float32 pass's self-check on the synthetic customer
+   must show no leak (t4c ≤ repeat + 1e-6). Its t3 true-letter mean must be
+   ≤ 1e-3, 50× below the smallest bf16 level in R49 (0.050). On the laptop, a
+   tiny float32 model gives 1.3e-6.
+4. *Rows.* Both passes must hold exactly R48's rows for the sampled customers:
+   the same customers, positions, labels and cells.
+
+**Statistic (pre-registered).** B = NLL(R48, bf16) − NLL(float32) over the
+sample's out-of-sample × holdout occasions.
+- It is weighted by occasion, as R48's headline is, with a 95% customer-bootstrap
+  interval (2,000 draws, seed 0).
+- B > 0 means bf16 makes the 8B look worse than its exact arithmetic would.
+- B uses R48's stored rows, because the headline used them.
+
+Also reported:
+- B for the calibration cell;
+- per occasion, the |difference in log p of the true letter| (mean, median,
+  99th percentile, max) and the total-variation distance;
+- the spread of the per-customer mean differences;
+- the bf16 rerun against R48 (expected identical, since R49 found repeat runs
+  bit-for-bit identical) and against float32.
+
+Exploratory: B by position in the 1,024-occasion window.
+
+**Decision rules.**
+1. If the reference gate fails, there is no verdict, and the result goes to Jin.
+2. If the rerun does not reproduce R48 exactly, the size of the difference is
+   reported, B is also given against the rerun, and R48's stored rows stay the
+   basis.
+3. Verdict on R48 (bands fixed now):
+   - **(a)** B's interval lies inside ±0.01. R48's headline (1.275) and its
+     paired d against the GRU (0.389) stand as reported: bf16 adds no bias that
+     matters at the precision we report.
+   - **(b)** Otherwise, if |B| < 0.02, R48's NLL and d are reported with the
+     float32 correction (minus B) alongside. Neither of R48's conclusions can
+     move that far: 0.39 nats from the GRU, and 0.39 from the constant.
+   - **(c)** |B| ≥ 0.02, the adoption margin. bf16 materially shifts R48. The
+     float32 sample estimate becomes the number reported for R48. Whether to
+     score all 2,502 customers in float32 (about 10× this job) is Jin's call.
+4. **R49's H2, in every case.** R49's H2 contrast d = NLL(arm) − NLL(8B) uses
+   two bf16 pipelines.
+   - *Assumption:* the larger models' bias has the 8B's sign and is no larger,
+     because they round less (R49 diagnostic).
+   - Under it, the exact-arithmetic contrast lies between d and d + B.
+   - So H2 is called robust to rounding only if d + max(0, upper end of B's
+     interval) < −0.02. If H2 holds in bf16 but not under that shift, it is
+     reported as "holds in bf16; not robust to rounding".
+   - The assumption cannot be checked on our GPUs: in float32, Qwen3-32B needs
+     131 GB and Qwen3.6-27B about 108 GB, against 2 × 44.5 GB.
+
+**Compute.**
+- One job on both GPUs, run after R49 finishes (`-W depend=afterany` on R49's
+  remaining jobs, so a failed shard does not cancel it).
+- The bf16 rerun takes about 25 min at R48's rate. The float32 rate is unknown:
+  float32 has no tensor-core path outside attention, so I expect it 2–5× slower
+  than bf16, about 1–2 h. The job is given 12 h.
+- It runs from its own HPCC checkout (`~/ProductGPT/work_r50`), so queued R49
+  jobs keep running the code they were submitted with.
+
+**Code.** On `r48-zeroshot`; R48's and R49's defaults are unchanged.
+- `llm_zeroshot/score.py`: `--dtype`, `--sample`, `--sample-seed`, and
+  `float32_reference()`.
+- `scripts/test_r48_zeroshot.py`: T7 and T8.
+- New: `scripts/r50_fp32_compare.py` and `scripts/r50_fp32_gpu.pbs`.
+- Laptop CPU checks, 28 Oct:
+  - The tests pass for Qwen3 and for the hybrid (T7 runs for Qwen3 only).
+  - A tiny float32 Qwen3 passes the reference gate (t3 true 1.3e-6, t4c 0.0).
+  - The comparison script recovers planted values of B (+0.004, +0.015, +0.030,
+    −0.004) exactly, in bands a, b, c and a. It stops on a missing row, on a
+    noisy or leaking reference, and on a wrong dtype.

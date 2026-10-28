@@ -1,0 +1,76 @@
+#!/bin/bash
+#PBS -N r50_fp32
+#PBS -l select=1:ncpus=8:ngpus=2:mem=64GB
+#PBS -q GPU
+#PBS -l walltime=12:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+# ============================================================================
+# R50: a float32 reference for R48's bf16 Qwen3-8B, on a random sample of 250
+# of the 2,502 out-of-sample customers (EXPERIMENTS.md, R50).  One job on both
+# GPUs; it stops at the first failure:
+#   1. the unit tests with the Qwen3-8B tokenizer (CPU)
+#   2. float32 pass: the bf16 checkpoint upcast to float32, split over both
+#      GPUs, YaRN 2 as R48, TF32 off, memory-efficient attention only;
+#      --strict-load, and --selfcheck with the reference bound 1e-3
+#   3. bf16 rerun: R48's configuration exactly (bf16, one GPU, YaRN 2) on the
+#      same customers, to check that R48's stored rows reproduce
+#   4. scripts/r50_fp32_compare.py (CPU): the row gate and the statistics
+#
+# Runs from its own checkout so that queued R49 jobs keep their code:
+#     cd ~/ProductGPT/work_r50
+#     qsub -W depend=afterany:<R49 jobs> scripts/r50_fp32_gpu.pbs
+# Writes $ROOT/runs/r50/
+# ============================================================================
+set -eo pipefail
+module purge
+module load python/3.11.4
+cd "$PBS_O_WORKDIR"
+export PYTHONUNBUFFERED=1 OMP_NUM_THREADS=8 HF_HUB_OFFLINE=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+ROOT=/storage/home/jinmiao/ProductGPT
+M=Qwen3-8B
+YARN=2
+N=250
+SEED=50
+source "$ROOT/venvs/productgpt-llm/bin/activate"
+R46=$ROOT/runs/r46
+R48=$ROOT/runs/r48
+R50=$ROOT/runs/r50
+mkdir -p "$R50"
+LOG=$ROOT/logs/r50_fp32_${PBS_JOBID%%.*}.log
+exec > >(tee -a "$LOG") 2>&1
+echo "R50 float32 reference, $M, sample $N (seed $SEED), YARN=$YARN on $(hostname) at $(date), commit $(git rev-parse --short HEAD)"
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+COMMON=(--table "$R46/occasions_v6_S1024.npz" --model "$ROOT/models/$M" --out-dir "$R50"
+        --who out --yarn "$YARN" --sample "$N" --sample-seed "$SEED" --device cuda)
+
+set +e
+python scripts/test_r48_zeroshot.py --tokenizer "$ROOT/models/$M" --arch qwen3
+rc=$?
+if [ $rc -eq 0 ]; then
+    python -m llm_zeroshot.score "${COMMON[@]}" --tag qwen3_8b_fp32_out --dtype float32 \
+        --n-gpus 2 --strict-load --selfcheck --selfcheck-tol 1e-3
+    rc=$?
+fi
+if [ $rc -eq 0 ]; then
+    python -m llm_zeroshot.score "${COMMON[@]}" --tag qwen3_8b_bf16_out
+    rc=$?
+fi
+if [ $rc -eq 0 ]; then
+    python scripts/r50_fp32_compare.py --r48 "qwen3_8b_out:$R48:2" \
+        --fp32 "qwen3_8b_fp32_out:$R50:1" --rerun "qwen3_8b_bf16_out:$R50:1" \
+        --out "$R50/r50_fp32_vs_r48.json"
+    rc=$?
+fi
+set -e
+if [ $rc -eq 0 ]; then
+    bash "$PBS_O_WORKDIR/scripts/notify.sh" "OK  R50 float32 reference (job ${PBS_JOBID%%.*})" || true
+else
+    bash "$PBS_O_WORKDIR/scripts/notify.sh" "FAIL R50 float32 reference exit=${rc} (job ${PBS_JOBID%%.*})" || true
+fi
+exit $rc
