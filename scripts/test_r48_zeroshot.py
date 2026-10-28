@@ -121,6 +121,14 @@ def main():
     # changes) and the bound is 1e-6.  A leak moves predictions by ~T4b (> 1e-3).
     # (T3 ran in float32 with a 1e-4 bound until 28 Oct, when CPU rounding on an
     # HPCC GPU node reached 1.66e-4 for the qwen3 tiny model: jobs 44503/5/7.)
+    # One CPU thread: on HPCC (torch 2.6.0) the FIRST forward pass of a process is
+    # sometimes off by 1e-4 to 3e-4 with 8 threads, in float64, SDPA or eager
+    # attention alike; later passes agree to the last bit.  With 1 thread, 0 of 24
+    # fresh processes (a-11 and the login node), against 7 of 48 with 8.  That,
+    # not rounding, is what failed T3 in jobs 44503/5/7 and T3/T4/T4c in 44516/8
+    # (EXPERIMENTS.md, R49 amendment 3).  The GPU scoring path is not affected.
+    import torch
+    torch.set_num_threads(1)
     tol = 1e-10 if a.arch == "qwen3" else 1e-6
     model = tiny_model(len(tok), a.arch).double()
 

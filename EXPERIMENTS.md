@@ -5558,6 +5558,56 @@ values are bf16.
 - **Resubmitted 28 Oct, 01:12 at dc28ac8:** jobs 44511–44518, in the order B0,
   A0, B1, A1, B2, A2, B3, A3.
 
+**Amendment 3 (28 Oct 2026, 16:45): two arm-A shards stopped at the CPU unit
+test. The cause is a first-call fault in multi-threaded CPU torch, not
+rounding.**
+
+*What happened.* By 16:10, six of the eight shards had finished: arm B shards
+0–3 and arm A shards 0–1. Arm A shards 2 and 3 (jobs 44516 and 44518) stopped
+within 11 seconds at the CPU unit test, before the model was loaded:
+- 44516: T3, T4 and T4c all at 2.0e-4;
+- 44518: T3 at 2.8e-4.
+
+The float64 bound is 1e-10. Other jobs on the same node (a-11) passed the same
+test at 7.1e-15.
+
+*Diagnosis.* Synthetic customer, the tests' tiny model, float64; jobs 44524 and
+44525 on a-11, plus the login node; `scripts/r49_first_call.py` and `.pbs`.
+- Within one process, 60 repeated forward passes agree to the last bit, and T3
+  is 7.1e-15.
+- Across fresh processes, the *first* forward pass is sometimes off by 1e-4 to
+  3e-4, while the second and third agree exactly:
+  - with 8 threads, 5 of 24 processes on a-11 and 2 of 24 on the login node,
+    with SDPA and eager attention alike;
+  - with 1 thread, 0 of 12 on each.
+- The unit test, run five times on a-11, failed twice. Each time T3, T4 and T4c
+  showed one shared value (2.9e-4, then 1.0e-4), because every comparison is
+  made against that first pass.
+- So the failures come from a multi-threaded first-call fault in CPU torch 2.6.0,
+  on both a-11 (Xeon Gold 6418H) and the login node (Gold 5217). They are not
+  rounding.
+- My reading of jobs 44503/5/7 (27 Oct: "float32 rounding that varies by node")
+  was wrong. Those failures were this fault, at the same size (1.66e-4), and
+  moving T3 to float64 could not fix it. The laptop (torch 2.11) has never
+  shown it.
+
+*Scope.*
+- The scoring runs on the GPU. In all six finished shards, the GPU self-check
+  found the repeat run bit-for-bit identical to the first pass (repeat 0.0, t4c
+  0.0), so no scored row is affected.
+- CPU work elsewhere in the project may carry the fault on the first forward
+  pass of a process, at about 1e-4 relative, far below any precision we report.
+  R48's GRU per-occasion scoring is one example.
+
+*Fix, before any rescoring.* The unit test runs its forward passes on one CPU
+thread (`torch.set_num_threads(1)`). The bounds are unchanged. On the laptop,
+the tests pass for both architectures.
+
+*Resubmission.* `~/ProductGPT/work_r48` on HPCC moves to the commit with this
+fix, which also carries R50's code. With R50's options off (the default), the
+scoring is R49's, and the tests pass. Arm A shards 2 and 3 are resubmitted.
+Shards A0–A1 and B0–B3 stand. R50 waits behind them.
+
 ### R50 — PLAN (28 Oct 2026, at Jin's request; nothing run): a float32 reference for R48's bf16 Qwen3-8B
 
 **Why.** R49's diagnostic showed that bf16 rounding moves every occasion's
@@ -5663,8 +5713,8 @@ Exploratory: B by position in the 1,024-occasion window.
 - The bf16 rerun takes about 25 min at R48's rate. The float32 rate is unknown:
   float32 has no tensor-core path outside attention, so I expect it 2–5× slower
   than bf16, about 1–2 h. The job is given 12 h.
-- It runs from its own HPCC checkout (`~/ProductGPT/work_r50`), so queued R49
-  jobs keep running the code they were submitted with.
+- It runs from `~/ProductGPT/work_r48` at the same commit as R49's resubmitted
+  shards (amendment 3), so no queued job's code changes under it.
 
 **Code.** On `r48-zeroshot`; R48's and R49's defaults are unchanged.
 - `llm_zeroshot/score.py`: `--dtype`, `--sample`, `--sample-seed`, and

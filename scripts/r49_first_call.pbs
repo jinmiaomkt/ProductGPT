@@ -1,0 +1,25 @@
+#!/bin/bash -l
+# R49 amendment 3: is the first CPU forward pass of a process wrong?  12 fresh
+# processes per setting (scripts/r49_first_call.py): SDPA and eager attention
+# with 8 threads, SDPA with 1.  Run 28 Oct as job 44525 (a-11) and, with
+# `bash -l scripts/r49_first_call.pbs`, on the login node.
+#PBS -N r49_first
+#PBS -l select=1:ncpus=8:ngpus=1:mem=32GB
+#PBS -q GPU
+#PBS -l walltime=00:40:00
+#PBS -j oe
+module purge
+module load python/3.11.4
+source ~/ProductGPT/venvs/productgpt-llm/bin/activate
+export HF_HUB_OFFLINE=1 PYTHONUNBUFFERED=1
+LOG=~/ProductGPT/logs/r49_first_call_$(hostname)_${PBS_JOBID%%.*}.log
+exec > >(tee -a "$LOG") 2>&1
+echo "on $(hostname) at $(date)"
+P=~/ProductGPT/work_r48/scripts/r49_first_call.py
+for setting in "sdpa 8" "eager 8" "sdpa 1"; do
+  set -- $setting
+  for k in $(seq 1 12); do
+    OMP_NUM_THREADS=$2 python $P ~/ProductGPT/work_r48 ~/ProductGPT/models/Qwen3-32B $1 2>&1 | grep first-vs
+  done
+done | sort | uniq -c
+echo "done at $(date)"

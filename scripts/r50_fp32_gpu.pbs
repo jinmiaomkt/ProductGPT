@@ -18,8 +18,8 @@
 #      same customers, to check that R48's stored rows reproduce
 #   4. scripts/r50_fp32_compare.py (CPU): the row gate and the statistics
 #
-# Runs from its own checkout so that queued R49 jobs keep their code:
-#     cd ~/ProductGPT/work_r50
+# Runs after R49's last shards, from the same checkout and commit:
+#     cd ~/ProductGPT/work_r48
 #     qsub -W depend=afterany:<R49 jobs> scripts/r50_fp32_gpu.pbs
 # Writes $ROOT/runs/r50/
 # ============================================================================
