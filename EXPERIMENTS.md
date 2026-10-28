@@ -5133,6 +5133,10 @@ B2's best half-life.
   - B1 continues from `work_r47` at `010fc89`. Its code path is unchanged
     by the fix.
   - B3 (`stock_only`) must also run from `work_r47fix`.
+- **The fix holds in training:** the first re-run, job 44467 (half-life 1,
+  seed 1, git `a3b2ac0`, `slot_state` stock_only), trained through every
+  chunk. Its best epoch was 19, it exited 0 at 21:51 on 27 Oct, and its log
+  has no errors.
 
 **Code to build after approval:** `--slot-state stock_only` and the
 campaign-boundary factor in gen 6's computed state, on a new branch
@@ -5143,3 +5147,150 @@ campaign-boundary factor in gen 6's computed state, on a new branch
 - generation stays equal to the full pass;
 
 and a part-A script reading the HPCC data, aggregates only.
+
+### R43 step 2 — PLAN (drafted 27 Oct 2026, approved by Jin 28 Oct): generation, gen 6 against tuned gen 5, with untuned gen 5 as a labelled extra arm
+
+**Question.** R43 step 1 and R44 found the two families tied on one-step
+NLL. Do they also tie as generators? This is the step that decides whether
+gen 6 is adopted as the generator for later generative work (R43's
+adoption rule). It runs on the frozen configurations, as R44's consequence
+requires. Jin asked on 27 Oct to add untuned gen 5 as an extra arm, because
+it did as well as tuned c06 on the holdout with half the seed variance.
+
+**Arms.** Every model arm runs on 5 training seeds, paired by seed number.
+
+| arm | checkpoints | role | rollout |
+|---|---|---|---|
+| G5 c06, free running | `b40_g5_c06` s1, `b42_g5_c06` s2–5 | frozen gen 5: the decision arm | context 384, pre-window inventory carried |
+| G6, free running | `b39_g6w384` s1–5 | frozen gen 6: the decision arm | full history, streaming |
+| A, free running | `b39_g5rev2` s1–5 | **extra arm, labelled, no decision attached**: untuned gen 5 (R43 arm A) | as G5 c06 |
+| G5 c06, teacher forced | as above | control | as above |
+| G6, teacher forced | as above | control | as above |
+| Markov, i.i.d., arm C | none | yardsticks, R36i's draw seeds | CPU |
+
+That makes 25 model rollouts (15 free running, 10 teacher forced). Arm A gets
+no teacher-forced control: it is there to show whether tuning moves the
+generator, which free running alone answers.
+
+**Protocol: R36i's, unchanged.**
+- The `outsample_users_holdout_period` cell, 300 customers drawn with
+  `default_rng(0)`, 8 replicates, chunks of 6.
+- The environment and baselines are fitted on 600 training customers'
+  calibration rows; the scaler is fitted on the real set.
+- The split-half band (120 splits, seed 3), energy, C2ST (5 folds, seed 0),
+  the top functionals and the pooled decision shares.
+- Rollout seed 1000 + training seed, the same for every arm and both
+  controls.
+
+**The context each family generates with.** Neither family's attention sees
+more than 384 occasions during generation:
+- **Gen 5** cannot roll out at its trained 1,024: the satiation
+  cross-attention does not fit (R36c method note). It runs at 384 with the
+  inventory carried, as in R36c/i. That changes its function slightly. The
+  job prices it for c06 s1, as R36i stage 2 did for b33: teacher-forced NLL
+  at 384 and 1,024 on the same 300 customers. Expectation: within 0.002 nats
+  (b33 +0.0007, b29_hl2 +0.0011).
+- **Gen 6** generates with exactly the function it was trained with, because
+  its attention window is already 384. Its GRU and computed state run over
+  the whole history.
+
+So the comparison isolates what gen 6 actually adds: a recurrent state that
+starts at the customer's first occasion instead of 384 occasions back.
+
+**One design change from R36i: two GPU jobs instead of one.**
+`r36c_generate.py` refuses to mix families, because gen 5 and gen 6 need
+different dataset builds (a 384 window against full histories). So
+`scripts/r43_generate.py --family g5|g6` builds its own dataset and runs its
+own arms:
+- the g5 job runs G5 c06 (free running and teacher forced), A, and the
+  yardsticks;
+- the g6 job runs G6 (free running and teacher forced).
+
+Both jobs save their raw functionals. A CPU reader,
+`scripts/r43_step2_read.py`, scores every arm against one band and one
+scaler, and prints the verdicts by the rule below. The two jobs can run on
+the two GPUs at once.
+
+**Gates.** Each one is checked by the job or the reader, and logged.
+- **Before any GPU time.** `test_rollout_fixes.py`, `test_seq_metrics.py` and
+  `test_gen6_streaming.py` on the CPU queue. Then both jobs on 12 customers
+  (`--smoke`), and a gen-6 timing probe, one chunk at chunk 6.
+- **Same customers, hard.** Both dataset builds must give the same 300
+  customer ids (the same sha256), the same 22,490 holdout rows, and the same
+  real functionals, to the bit. Otherwise the reader refuses: the two
+  families would not be judged against the same real customers.
+- **The checkpoints, hard.** All 15 are model_rev 2, with campaign control
+  on and scheduled sampling 0. They agree on every key that decides
+  customers, rows and inputs, except `gen` and `max_events`.
+- **Every arm run, hard.** A decision on exactly 8 × 22,490 = 179,920 live
+  rows and on no other row. The real acquisitions stay unaltered up to each
+  customer's own holdout start, or on every row when teacher forced.
+- **Continuity with R36i, soft.** The band should reproduce q95 0.0781258,
+  and Markov, i.i.d. and arm C should reproduce R36i at the same draw seeds.
+  If they do not, the comparison between the two families still stands,
+  because both share the band. But R36i's numbers (b33 3.169, Markov 0.784)
+  cannot then be quoted alongside, and the log says so.
+- **The code, hard.** HEAD contains `7aca2a3` and the code that runs is
+  committed. The run uses `~/ProductGPT/work_gen6`, which no other job is
+  queued from.
+
+**Predictions** (written before any step-2 rollout is scored).
+1. **Free running: both families are outside the band on every seed**, in
+   the region of b33's 3.2 (2.7 to 3.5). R42 and R36i traced the drift to the
+   model feeding on its own output (exposure bias), and neither architecture
+   changes that.
+2. **G6 − G5 c06 free-running energy: no difference** under the rule below.
+3. **Teacher forced: both outside the band**, near b33's 0.417 (about 5× the
+   band), with no difference between them.
+   - This replaces the original prediction "teacher-forced C sits inside the
+     band". R36i showed its premise was false: the gen-5 counterpart is
+     outside on the fixed engine. No step-2 number had been read when this
+     was changed.
+4. **Markov stays ahead of both free-running families** (R36i: 0.784
+   against 3.169).
+5. **A − G5 c06: no difference.** It is the same architecture, and their NLLs
+   tie.
+
+**Decision rule: R43's, unchanged.** G6 − G5 c06 free-running energy is paired
+by seed. It counts as a difference only if it has the same sign on at least 4
+of 5 seeds and |mean| > the band's q95. Then:
+- *gen 6 better*: a counted difference with gen 6 lower. Gen 6 is adopted
+  as the generator, and the gain is reported.
+- *gen 6 worse*: a counted difference with gen 6 higher. Gen 6 is not
+  adopted, and gen 5 stays the generator. The teacher-forced pair then says
+  whether the per-step law or the loop is to blame.
+- *otherwise, no difference*. Gen 6 is adopted for what it can do (any
+  history length, a fixed cost per generated occasion), not for generation
+  quality. This is the expected outcome.
+
+**Reported with no decision attached:**
+- A − G5 c06 and A − G6, by the same rule;
+- the teacher-forced pair, and the share of the free-running distance that
+  teacher forcing removes, per seed and family;
+- each arm's C2ST AUC and top functionals;
+- the decision shares (NotBuy above all: free-running b33 generated 15.6%
+  against 42.5% observed);
+- c06's price for the 384 window;
+- the time per rollout for each family.
+
+**Budget.**
+- CPU: the three test suites, two smokes and the gen-6 probe, on the free
+  `short` queue.
+- **g5 job:** 15 rollouts at about 13 minutes each (R36i's rate on an L40S),
+  plus the CPU arms and the classifiers: about 4 hours, walltime 8.
+- **g6 job:** 10 rollouts. The probe sets the walltime. R43 step 0 measured
+  441 ms per step for 256 sequences on 4 CPU threads, and the GPU is
+  expected to be much faster, but that is unmeasured.
+- **Queue:** both jobs sit behind R47 B1–B2 (about 40 runs still queued or
+  running) at the two-GPU cap. That is about 6 hours, unless R47 is held. No
+  hold is proposed.
+
+**After approval.**
+1. Write the two scripts and the PBS wrapper on `gen6-streaming`, and commit
+   them.
+2. Pull `work_gen6`, which has nothing queued.
+3. Run the CPU gates.
+4. If every gate passes and the probe puts the g6 job under 12 hours, submit
+   both GPU jobs and report the gate results with the job ids. If any gate
+   fails, stop and report.
+5. Read both logs in full, then run the reader once.
