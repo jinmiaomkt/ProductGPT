@@ -45,10 +45,10 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 44359[] (19 elements) | `runs/r46/partB/{ref,fr_*,tf_*}` (CPU short, 4 CPUs, 64 GB, `19c1062`) | 2026-10-27 | R46 part B: the ladder as generators on the R36i yardstick | done, all 19 exit 0, every gate passed |
 | 44360 | `runs/r46/partB/compare.json` | 2026-10-27 | R46 part B read-out | done 12:41; result in R46 part B |
 | 44452 | R46 part C unit tests (CPU short, `d119f99`) | 2026-10-27 | R46 part C | done, exit 0: 9 of 9 part C tests, 13 of 13 part B, 5 of 5 part A |
-| 44453[], 44454[], 44455 | `runs/r46/partC_smoke` (150 customers, 2 rounds) | 2026-10-27 | R46 part C smoke: every job kind, then the read-out | done, exit 0 throughout: C-G1–C-G5 pass on real data (C-G2 block 0, probs ≤ 5.6e-16); elements 4–17 min; numbers not read (1 replicate, 2 rounds). Caveat for the result: the env's published regular-banner rates give 0.015 5★ per item against the data's 0.031 (figure and weapon banners match) |
-| 44457 | `runs/r46/partC_smoke` read-out, re-run on `1934d57` | 2026-10-27 | R46 part C: the edited read-out on the smoke files | submitted |
-| 44458[], 44459[], 44460[] | `runs/r46/partC/{pboot,cboot,h6}` (`1934d57`) | 2026-10-27 | R46 part C: C1 40 elements (R6 0–19, R4 20–39), C2 50, H6 5 starts | submitted; H6 moved ahead of C2 (`qorder`), order only, so C3 starts sooner. First full element (C1_R6_r00) done in 2 h 44 min, all gates pass, peak 4.3 GB; the queued elements were `qalter`ed from 96 to 24 GB (part A fits peaked at 5.6 GB), so nine share a node instead of five |
-| 44461[], 44462 | `runs/r46/partC/keane`, `partC/compare.json` | 2026-10-27 | R46 part C: C3 80 elements after the H6 fits (afterok), then the read-out (afterany) | submitted |
+| 44453[], 44454[], 44455 | `runs/r46/partC_smoke` (150 customers, 2 rounds) | 2026-10-27 | R46 part C smoke: every job kind, then the read-out | done, exit 0 throughout: C-G1–C-G5 pass on real data (C-G2 block 0, probs ≤ 5.6e-16); elements 4–17 min; numbers not read (1 replicate, 2 rounds). Caveat for the result: the env's published regular-banner rates give 0.015 5★ per item against the data's 0.031 on these 150 customers (the full run's numbers are in the part C result's caveat) |
+| 44457 | `runs/r46/partC_smoke` read-out, re-run on `1934d57` | 2026-10-27 | R46 part C: the edited read-out on the smoke files | done, exit 0 |
+| 44458[], 44459[], 44460[] | `runs/r46/partC/{pboot,cboot,h6}` (`1934d57`) | 2026-10-27 | R46 part C: C1 40 elements (R6 0–19, R4 20–39), C2 50, H6 5 starts | done 28 Oct, all exit 0, every gate passed; H6 moved ahead of C2 (`qorder`), order only, so C3 starts sooner. First full element (C1_R6_r00) done in 2 h 44 min, all gates pass, peak 4.3 GB; the queued elements were `qalter`ed from 96 to 24 GB (part A fits peaked at 5.6 GB), so nine share a node instead of five |
+| 44461[], 44462 | `runs/r46/partC/keane`, `partC/compare.json` | 2026-10-27 | R46 part C: C3 80 elements after the H6 fits (afterok), then the read-out (afterany) | done 12:14 on 28 Oct, all exit 0, every gate passed; result in R46 part C (C3 moved ahead of C2, order only) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -5837,3 +5837,189 @@ element.**
   gives the intervals.
 - Identification of the unselected rungs.
 - The generation evaluation (Jin, 27 Oct: to be discussed later).
+
+### R46 — RESULT, part C (T3, identification), 28 Oct 2026: the real calendar identifies the model and the sandwich is calibrated; the repeat premium survives both Keane nulls, banner loyalty only the discrete one
+
+**Runs.**
+- Smoke `44453[]`–`44455` (150 customers, 2 rounds), then its read-out re-run
+  `44457` on `1934d57`.
+- Full chain on `1934d57`:
+  - C1 `44458[]` (40 elements), C2 `44459[]` (50), H6 `44460[]` (5), C3
+    `44461[]` (80), read-out `44462`;
+  - all 175 elements and the read-out exit 0;
+  - every element log and the whole read-out were read.
+- Scheduling only:
+  - H6 and C3 moved ahead of C2 (`qorder`);
+  - the queued elements' memory request lowered from 96 to 24 GB (peak use
+    4–6 GB).
+- Element times: mean 1.2–3.5 h by kind, longest 5.7 h.
+
+**Gates: all passed, in every element.**
+- **C-G1.** 120 of 120 simulated tables have the real design: 2,416
+  customers, 1,064,818 training rows, and the real offers, campaigns, clock,
+  lengths and pre-window inventory.
+- **C-G2.** 120 of 120. Worst block error 0, worst probability error 5.6e-16.
+- **C-G3.** 60 of 60 (C1, and R6 on null (a)): the estimate's penalised
+  objective is no worse than the truth's in every refit.
+- **C-G4.** All 50 weight vectors sum to 2,416.
+- **C-G5.** R4 and R6 read the same simulated table in all 40 C3 pairs.
+
+**C1, parametric bootstrap** (20 replicates per rung).
+
+| | R6 | R4 |
+|---|---|---|
+| shared coefficients tested (identified, non-rare) | 128 | 128 |
+| recovered, \|bias z\| < 3 | 99.2% | 98.4% |
+| pooled 95% coverage | 0.919 | 0.945 |
+| largest \|bias z\| among the SD quantities | 1.73 (`loy`) | 1.61 (decision half-life) |
+| SD or HG quantities with \|bias z\| ≥ 3 | `pity2[0]`, −3.34 | `owned`, −3.99 |
+| sandwich SE / replicate sd, range over SD and HG | 0.74–1.35 | 0.82–1.38 |
+
+- **The two failures are small, precisely measured biases.**
+  - R6 `pity2[0]` (5★ pity depth, figure-B banner): truth 0.221, mean 0.208.
+    The bias is 5.8% of the coefficient and 0.75 replicate sd; coverage 0.95.
+  - R4 `owned` (limited 5★ owned): truth −0.163, mean −0.166. The bias is
+    1.7% of the coefficient and 0.87 replicate sd; coverage 0.95.
+- **The decision half-life is calibrated on the real design.** R6's ratio is
+  0.99 and its coverage 0.95, where G3's synthetic panels gave 0.55.
+
+**C2, customer bootstrap: the intervals to quote** (R6, 50 replicates;
+estimate ± 1.96 bootstrap sd; half-lives in occasions).
+
+| quantity | estimate | 95% interval | bootstrap sd / sandwich |
+|---|---|---|---|
+| banner loyalty `loy` | 2.064 | [2.024, 2.105] | 1.07 |
+| buy loyalty `inc` | 0.377 | [0.309, 0.444] | 0.96 |
+| ten-pull loyalty `tenl` | 1.915 | [1.809, 2.022] | 0.95 |
+| repeat premium | 1.598 | [1.494, 1.702] | 1.22 |
+| decision half-life | 1.762 | [1.570, 1.983] | 1.14 |
+| outcome half-life | 3.488 | [3.116, 3.908] | 1.15 |
+
+- **Holdings and gacha.** Ratios are 0.85–1.18 across all 18 HG quantities.
+  Fourteen intervals exclude zero. The four that include it are weapon copies
+  1 and 2+, the guarantee, and `pity3[1]` (the weapon soft-pity hinge).
+- **Rare states.** The nine rare-state coefficients have bootstrap intervals
+  in `compare.json`. `fig[5]` sits at 0 in every replicate.
+
+**H6, the heterogeneity-only null.**
+- Five starts: three reach the same optimum (training NLL 1.46617), and two
+  are worse by at most 0.0011.
+- Campaign-27 NLL, on the same 189,121 rows: H6 1.3203, R6 0.9690, R4 0.9804.
+  Dropping state dependence costs 0.351 nats per row, even with six classes.
+
+**C3, Keane stress test** (20 replicates per null; mean ± replicate sd. p is
+the one-sided Monte Carlo p-value of the real R6 estimate; its minimum is
+1/21 = 0.048).
+
+| quantity | real R6 | null (a), R6 | p | null (b), R6 | p | real R4 | null (a), R4 | null (b), R4 |
+|---|---|---|---|---|---|---|---|---|
+| banner loyalty | 2.064 | −0.046 ± 0.210 | 0.048 | **2.263 ± 0.066** | **1.000** | 1.997 | 2.207 ± 0.028 | 2.294 ± 0.044 |
+| buy loyalty | 0.377 | −0.047 ± 0.205 | 0.048 | −0.579 ± 0.048 | 0.048 | 0.608 | 0.074 ± 0.040 | 0.328 ± 0.032 |
+| ten-pull loyalty | 1.915 | 0.049 ± 0.270 | 0.048 | 1.058 ± 0.117 | 0.048 | 2.837 | 5.961 ± 0.037 | 6.010 ± 0.091 |
+| repeat premium | 1.598 | 0.024 ± 0.128 | 0.048 | 0.007 ± 0.012 | 0.048 | 1.957 | 0.009 ± 0.014 | 0.042 ± 0.018 |
+| decision half-life (not tested) | 1.762 | median 1.49 [0.15, 21.8] | | median 90.9 [85.1, 99.3] | | 2.877 | median 44.3 [42.5, 46.3] | median 44.1 [41.8, 46.6] |
+
+The run terms behave like the repeat premium: `runs[0]` is −0.611 on the real
+data, against 0.001 (null a) and −0.039 (null b).
+
+**Verdicts, by the pre-registered rules.**
+
+| verdict | result |
+|---|---|
+| I1 identified on the real design | **fails, by one HG quantity per rung**: R6 `pity2[0]` (bias z −3.34) and R4 `owned` (−3.99). Every SD quantity passes in both rungs, and 99.2% and 98.4% of the tested shared coefficients pass (the threshold is 90%) |
+| I2 the sandwich is usable | **holds** for both rungs: pooled coverage 0.919 and 0.945, and every SD and HG ratio lies in 0.74–1.38 |
+| I3 the state dependence is not heterogeneity | **holds under null (a)**: all four p = 0.048. **Fails under null (b) for banner loyalty only** (p = 1.000). Buy loyalty, ten-pull loyalty and the repeat premium pass |
+| I4 Keane's pooled bias on this structure | **fails by its letter**: R4 on null (a) reports banner loyalty of 2.21 (bias z +348, 110% of real R4's), but its repeat premium is 0.009 (bias z +2.76, under 3) |
+
+**Predictions, scored: three of eight hold.**
+1. **I1 for R4 and R6: FAILED**, by the two quantities above.
+2. **I2 except the decision half-life: FAILED, in the good direction.** I2
+   holds, and so does the decision half-life (ratio 0.99, coverage 0.95).
+   G3's undercoverage does not recur on the real design.
+3. **C2's decision half-life interval lies within 1–3: HOLDS**, [1.57, 1.98].
+4. **H6 is worse than R6 by more than 0.1 nats: HOLDS**, by 0.351.
+5. **I4: FAILED**, by its letter (above).
+6. **R6 on null (a) finds no state dependence: HOLDS.** Every Q is within
+   1.02 Monte Carlo SE of zero.
+7. **R6 on null (b) finds some, under a quarter of real: FAILED.**
+   - Banner loyalty is 110% of the real estimate, and ten-pull loyalty 55%.
+   - Buy loyalty is negative (−0.58).
+   - The repeat premium is 0.5% of real (bias z 2.80).
+8. **I3: FAILED**, under null (b), for banner loyalty.
+
+**What the numbers show.**
+1. **The real calendar identifies the model.**
+   - With 1.06 million training rows, both rungs recover their truth: no SD
+     quantity is biased, 98–99% of the coefficients are recovered, and the
+     sandwich is calibrated.
+   - By the registered licence, R6's `pity2[0]` and R4's `owned` are
+     reported as not identified by the calendar. In size they are small
+     biases (5.8% and 1.7% of the coefficient, under one replicate sd,
+     coverage 0.95), which twenty replicates are precise enough to detect.
+   - R34's open item is closed for every other quantity.
+2. **Part A's standard errors stand.** The customer bootstrap and the
+   sandwich agree within 0.85–1.22 on every quantity. The decision half-life
+   is 1.76 occasions [1.57, 1.98].
+3. **Heterogeneity alone produces all of a pooled model's loyalty.** On data
+   with no state dependence (null a), R4 reports banner loyalty of 2.21,
+   more than it reports on the real data (2.00), and ten-pull loyalty of 5.96
+   (real 2.84). This is Keane's pooled bias on the Genshin structure. It
+   does not reach the lag matrix: R4's repeat premium stays at 0.009, which is
+   why I4 fails by its letter.
+4. **Six classes remove discrete heterogeneity completely.** On null (a), R6
+   finds nothing: every quantity is within 1.02 Monte Carlo SE of zero. This
+   is the mixture recovery of the `02_keane_1997_stress` replication.
+5. **Continuous heterogeneity leaks into banner loyalty.**
+   - On null (b), R6 reports banner loyalty of 2.26, above the real estimate.
+     As registered, the banner-loyalty evidence leans on the six-class
+     approximation, and the paper says so.
+   - The repeat premium (0.007 against 1.598), ten-pull loyalty (1.06 against
+     1.92) and buy loyalty (negative against +0.38) are not reproduced.
+6. **Post hoc, not registered: the leak has a different time profile.**
+   - R6's three loyalty stocks share one decay.
+   - Fitted to null (b), R6 sets that decay's half-life to 85–99 occasions
+     in every replicate. Spurious loyalty from persistent taste is a
+     near-permanent stock.
+   - On the real data the half-life is 1.76 [1.57, 1.98].
+   - A test on the half-life, or on loyalty and half-life jointly, would
+     separate the two. It was not registered, so it is a lead, not a result.
+7. **The robust state dependence is the last decision and the runs.** The
+   repeat premium and the run terms survive both nulls by two orders of
+   magnitude, in both rungs. With part B (the last decision and the run
+   structure carry the generative gain), the parametric evidence for state
+   dependence rests on the lag matrix and the runs.
+
+**What this licenses.**
+- The paper can quote part A's coefficients with the C2 intervals as
+  identified on the real calendar. The two exceptions are named: R6
+  `pity2[0]` and R4 `owned`.
+- It can say that the repeat premium, ten-pull loyalty and buy loyalty are
+  not heterogeneity, discrete or continuous, on the nulls specified (H6, and
+  H6 with normal class constants).
+- It can say that heterogeneity alone produces all of a pooled model's
+  banner loyalty, and that six classes remove it when the heterogeneity is
+  discrete.
+- It cannot say that banner loyalty survives continuous heterogeneity. The
+  half-life contrast is a lead.
+
+**Caveat: the simulated world.**
+- Decision shares in the simulated tables sit close to the real ones. The
+  largest gaps are Buy1-Weapon (0.026 against 0.044) and NotBuy (0.361
+  against 0.346).
+- The env draws rarity from the published rates, which the data does not
+  follow on every banner. 5★ per item, simulated against real: regular
+  0.014 against 0.023, figure A 0.015 against 0.011, weapon 0.015 against
+  0.018.
+- Featured shares match: 0.33, 0.17 and 0.35 against 0.33, 0.17 and 0.36.
+- The identification results hold for this data-generating process. A
+  design with the data's own rarity rates was not run.
+
+**Artifacts** (HPCC, gitignored):
+- `runs/r46/partC/{pboot,cboot,keane}/*.json`, `partC/h6/H6_K6_s*/`,
+  `partC/compare.json`;
+- logs `~/ProductGPT/logs/r46c_*_44458_*` to `r46c_*_44462_*`.
+
+**Open, Jin's call.**
+- The generation evaluation (deferred, 27 Oct).
+- Whether to register a follow-up on banner loyalty: the half-life test, or
+  more classes under null (b).
