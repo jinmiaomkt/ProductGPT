@@ -34,9 +34,13 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 44320–44337 | `b41_*` (18 runs, from `~/ProductGPT/work_gen6` at `6b96b7d`) | 2026-10-27 | R44 stage 3: 6 candidates × seeds 11–13 | all 18 finished, exit 0 (qstat 2026-10-27); frozen gen-5 c06, gen-6 R43 |
 | 44361–44399 | `r45a_*` (39 runs, from `~/ProductGPT/work_r45` at `8fae1d7`) | 2026-10-27 | R45 part A: censored training, arms L/T/Z/ZF × k 1/2/4 + count, seeds 1–3 | all 39 finished, exit 0 (qstat 2026-10-27 18:30) |
 | 44400–44441 | `r47b1_*`, `r47b2_*` (42 runs, from `~/ProductGPT/work_r47` at `010fc89`) | 2026-10-27 | R47 B1–B2: half-life profile, full vs stock-only slots, seeds 1–3 | B1 (even ids) running/queued; B2 (odd ids) FAILED at 44401 on a stock_only bug, the other 20 cancelled; see R47 |
-| 44467–44487 | `r47b2_*` (21 runs, from `~/ProductGPT/work_r47fix` at `a3b2ac0`) | 2026-10-27 | R47 B2 re-run after the stock_only gradient fix | queued (qsub 2026-10-27) |
+| 44467–44487 | `r47b2_*` (21 runs, from `~/ProductGPT/work_r47fix` at `a3b2ac0`) | 2026-10-27 | R47 B2 re-run after the stock_only gradient fix | all 21 finished, exit 0, as did B1's 21 (44400–44440 even) (qstat 2026-10-28); unanalysed |
 | 44443–44446 | `b42_g5_c06_s2`–`s5` (4 runs, from `~/ProductGPT/work_gen6` at `9b3eccd`) | 2026-10-27 | R44 stage 4: gen-5 c06 seeds 2–5 (gen 6 reuses b39_g6w384) | all 4 finished, exit 0; holdout read once: tie (R44 stage 4) |
 | 44465 | `r43_strata` on gen-5 c06 seeds 1–5 (CPU, short queue) | 2026-10-27 | R44 stage 4: length strata for gen 5 | finished exit 0, self-check ok; result in R44 stage 4 |
+| 44522, 44523 | `r43_generate` gates, g5 / g6 (CPU, short queue, from `~/ProductGPT/work_gen6` at `ef7efba`) | 2026-10-28 | R43 step 2: test suites and 12-customer smokes | both exit 0; every gate passed |
+| 44530 | `r43_generate` g6 timing probe (GPU, 1 h) | 2026-10-28 | R43 step 2: price the g6 job | exit 0; 0.6 h for 10 rollouts |
+| 44529 | `r43_generate` FAMILY=g5 (GPU, 8 h) | 2026-10-28 | R43 step 2: G5 c06, A, yardsticks; c06's 384-window price | finished exit 0, 29 Oct 03:24 (qstat 2026-10-29); unread |
+| 44537 | `r43_generate` FAMILY=g6 (GPU, 4 h) | 2026-10-29 | R43 step 2: G6 free running and teacher forced | running (qstat 2026-10-29 08:10) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -5294,3 +5298,50 @@ of 5 seeds and |mean| > the band's q95. Then:
    both GPU jobs and report the gate results with the job ids. If any gate
    fails, stop and report.
 5. Read both logs in full, then run the reader once.
+
+### R43 step 2 — LAUNCH (28–29 Oct 2026): every gate passed, both jobs submitted
+
+Code: `ef7efba` on `gen6-streaming` (scripts `r43_generate.py`,
+`r43_generate.pbs`, `r43_step2_read.py`), run from `~/ProductGPT/work_gen6`.
+No step-2 number has been read yet.
+
+**How the two families share one frame.** The satiation functionals count
+holdings from row 0 of whatever arrays they are given, so a full-history real
+set and a 384-row real set would give different real functionals. Both jobs
+therefore build R36i's frame: the dataset at `max_events` 384 from c06 s1's
+cfg. The g6 job also builds the full-history dataset and aligns each customer
+to the frame. The offset is the full length minus the frame length, with tail
+truncation. The job checks that label, lto and campaign agree on the overlap,
+and that obtained agrees from row 1 on (row 0's obtained is padding). It then
+crops every gen-6 rollout to the frame before scoring. It refuses to score
+unless the cropped real sequences give the frame's real functionals exactly.
+
+**One asymmetry, by design.** The environment's pity counter is warmed on
+the rows each model sees: 384 for gen 5 and the full history for gen 6.
+This is the same information each family conditions on.
+
+**Gates.**
+| Gate | Job | Result |
+|---|---|---|
+| Test suites (CPU `short`) | 44522 (g5), 44523 (g6) | `test_rollout_fixes` all checks passed; `test_seq_metrics` 35 passed, 0 failed; `test_gen6_streaming` all checks passed. Both exit 0 |
+| Code | all | HEAD `ef7efba` contains `7aca2a3`; worktree clean |
+| Checkpoints | all | all 15 rev 2, camp_fe on, sched_sampling 0. c06 lr 3.24e-4; A and G6 lr 2.19e-4; G6 window 384 with max_events None |
+| Smoke, 12 customers × 2 | 44522, 44523 | both families draw sha `78c662b264ef1f96`, 547 holdout rows. g6: 9 of 12 customers have rows before the frame, and the cropped real functionals are IDENTICAL. Every arm: mismatch 0, altered 0, rows outside the frame 0 |
+| g6 timing probe (GPU, 1 h) | 44530 | 3.6–4.3 ms per row: about 4 min per rollout, 0.6 h for the 10 g6 rollouts, peak 4.5 GB. 226 of the 300 customers have rows before the frame (up to 1,045); cropped real functionals IDENTICAL. Exit 0 |
+| Same customers, full cell | 44530, 44529 | sha `be33f73d819b13eb`, 300 customers, 22,490 holdout rows, in both builds |
+| Band (soft) | 44529, 44530 | 120 splits, q95 0.0781258: R36i's band REPRODUCED exactly |
+
+The probe ran on the GPU queue rather than the CPU queue as budgeted,
+because only a GPU run can measure the GPU rate. It used 45 seconds.
+
+**Jobs.**
+- **g5, 44529** (GPU, walltime 8 h): started 23:58 on 28 Oct and finished
+  03:24 on 29 Oct (3 h 26 min). The gates, stage 1 and stage 2 (c06's
+  teacher-forced NLL at 384 and 1,024) all exited 0. The job exits 1 if any
+  arm logs a problem, so none did.
+- **g6, 44537** (GPU, walltime 4 h, set from the probe): submitted and
+  running at 08:10 on 29 Oct.
+
+Next: read both logs in full, then run
+`python3 scripts/r43_step2_read.py --r36i ~/ProductGPT/work_r36i/results/r36i/r36i.json`
+once.
