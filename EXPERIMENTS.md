@@ -5608,6 +5608,125 @@ fix, which also carries R50's code. With R50's options off (the default), the
 scoring is R49's, and the tests pass. Arm A shards 2 and 3 are resubmitted.
 Shards A0–A1 and B0–B3 stand. R50 waits behind them.
 
+**Step 4 — RESULT (29 Oct 2026): both larger models come within 0.07 nats of
+the GRU. H1 fails for both arms; H2 holds by 0.32 nats.**
+- *Jobs:* arm B 44511, 44513, 44515, 44517 (commit dc28ac8); arm A 44512, 44514
+  (dc28ac8), 44526, 44527 (db79591). All exited 0.
+  - Arm A took 2.9–3.2 h per shard (about 1,070 tokens/s); arm B 1.7–1.8 h
+    (about 1,870 tokens/s).
+  - That is 19 h of 2-GPU time in all, against the 25 h estimate.
+- *Gates pass for both arms.*
+  - Rows: R48's row gate (`r48_summarise.py --n-shards 4`) passes. The 2,502
+    customers' cells hold 1,259,900 + 217,303 rows, with labels and cells
+    matching the table and no duplicates.
+  - Arm A's tokens equal R48's exactly: 46,441,473, maximum 37,088, 44 over
+    32,768. Arm B has its own tokenizer: 46,451,481, maximum 37,092.
+  - Self-check in every shard: repeat 0.0 and t4c before t 0.0, with t4_after
+    5.55 (A) and 3.37 (B). The values are identical across each arm's four
+    shards.
+  - The GRU pairing gate (all five seeds) and `r49_pair_llms.py`'s gate pass:
+    the same occasions, labels and cells as R48.
+- *Rounding level (amendment 2, rule 3)*, on the in-job synthetic customer:
+  - t3 true-letter mean: 0.067 (A) and 0.050 (B), against 0.095 for the 8B;
+  - one pass minus per-occasion NLL: +0.021 (A) and −0.0007 (B).
+  R50 (below) measures the 8B's bias against float32: +0.004.
+- *Format:* letter mass 0.9999 (A) and 0.9997 (B).
+
+Out-of-sample customers, holdout period (217,303 rows). d is paired per
+occasion with a 2,000-draw cluster bootstrap over all 2,502 customers.
+
+| | NLL | hit rate | d vs GRU (5-seed mean) | d vs Qwen3-8B |
+|---|---|---|---|---|
+| Qwen3-8B (R48) | 1.2750 [1.2552, 1.2944] | 0.668 | +0.389 [+0.378, +0.403] | — |
+| **Qwen3-32B (A)** | **0.9483** [0.9356, 0.9600] | 0.670 | **+0.063** [+0.059, +0.066] | **−0.327** [−0.337, −0.316] |
+| **Qwen3.6-27B (B)** | **0.9521** [0.9398, 0.9636] | 0.669 | **+0.067** [+0.063, +0.070] | **−0.323** [−0.334, −0.312] |
+| plain GRU (b17, 5 seeds) | 0.8856 | | | |
+| constant (train shares) | 1.6638 | | | |
+
+In the calibration period the NLLs are 1.774 (8B), 1.116 (A) and 1.127 (B),
+against the constant's 1.712.
+
+- **H1 fails for both arms.** 0.948 and 0.952 are below 0.9856, so neither
+  model is more than 0.10 nats worse than the GRU.
+  - The GRU still wins the paired test against every seed: d runs from 0.053
+    to 0.070 (A) and from 0.056 to 0.074 (B).
+  - But the margin is 0.06–0.07, not the pre-registered 0.10.
+- **H2 holds for both arms, and is robust to rounding.** d = −0.327 (A) and
+  −0.323 (B), with intervals far from zero. By R50's rule 4, d + 0.0049 is
+  −0.322 and −0.318, both below −0.02.
+- **My prediction was wrong on both counts.** I expected a gain of 0.05–0.2 nats
+  over the 8B, with both arms still more than 0.10 behind the GRU. The gain is
+  0.32–0.33, and the gap is 0.06–0.07.
+- *Descriptive, B − A:* +0.004 [+0.002, +0.006]. The two models tie overall,
+  though they differ by decision (below).
+- *Rounding cannot rescue H1.* Exact arithmetic could only narrow the gap to
+  the GRU, which was scored in float32: bf16 raises the 8B's NLL by 0.004
+  (R50), and the larger models round less. Under R50's assumption the gap
+  shrinks by at most about 0.005.
+
+**Per decision, headline cell.** d is LLM − GRU (positive = the GRU is better)
+and arm − 8B.
+
+| decision | rows | d vs GRU, A | d vs GRU, B | A − 8B | B − 8B |
+|---|---|---|---|---|---|
+| no draw | 88,367 | −0.036 | +0.130 | −0.113 | +0.053 |
+| 1 draw, banner A | 47,990 | +0.054 | −0.006 | −0.247 | −0.307 |
+| 1 draw, Regular | 34,924 | −0.078 | −0.078 | −0.603 | −0.603 |
+| 10 draws, banner A | 15,732 | +0.461 | +0.106 | −0.570 | −0.925 |
+| 1 draw, banner B | 13,739 | +0.216 | −0.068 | −0.419 | −0.703 |
+| 1 draw, Weapon | 9,231 | +0.539 | +0.383 | −0.339 | −0.495 |
+| 10 draws, banner B | 3,475 | −0.282 | −0.485 | −1.445 | −1.647 |
+| 10 draws, Weapon | 3,200 | +0.614 | +0.650 | −0.888 | −0.852 |
+| 10 draws, Regular | 645 | +1.258 | +2.090 | −3.639 | −2.808 |
+
+Intervals are about ±0.01 for the three largest rows, ±0.02–0.04 for the middle
+rows and ±0.07–0.19 for the three smallest.
+- Each arm beats the GRU on some decisions. Arm A beats it on no draw, 1 draw
+  on the Regular banner and 10 draws on banner B. Arm B beats it on 1 draw on
+  banner B or the Regular banner and on 10 draws on banner B, and ties on
+  1 draw on banner A (−0.006 [−0.013, +0.003]).
+- Both arms lose most on 10 draws on the Regular banner and on the Weapon
+  banner.
+- The two models reach the same overall NLL by different routes. Arm A is 0.17
+  better on no draw (B − A +0.166); arm B is 0.28–0.36 better on banner A's
+  10 draws and banner B's single draws.
+
+**By position in the window (exploratory).** "Share" is (constant − LLM) /
+(constant − GRU), as in R48.
+
+| position | cell | 8B | A | B | GRU | d vs GRU, A | share, A | share, B |
+|---|---|---|---|---|---|---|---|---|
+| 0–63 | calib | 2.81 | 1.34 | 1.38 | 0.99 | +0.352 | 52% | 47% |
+| 64–255 | calib | 1.94 | 1.14 | 1.15 | 0.98 | +0.158 | 78% | 77% |
+| 256–511 | calib | 1.49 | 1.07 | 1.08 | 0.95 | +0.119 | 85% | 83% |
+| 512–767 | calib | 1.28 | 1.02 | 1.02 | 0.92 | +0.097 | 88% | 87% |
+| 768–1023 | calib | 1.15 | 0.93 | 0.95 | 0.88 | +0.051 | 94% | 92% |
+| 0–63 | holdout | 3.29 | 1.57 | 1.64 | 1.15 | +0.421 (841 rows) | 38% | 28% |
+| 64–255 | holdout | 1.85 | 1.10 | 1.09 | 0.98 | +0.120 | 84% | 85% |
+| 256–511 | holdout | 1.32 | 0.95 | 0.96 | 0.89 | +0.060 | 92% | 91% |
+| 512–767 | holdout | 1.16 | 0.92 | 0.92 | 0.86 | +0.058 | 93% | 92% |
+| 768–1023 | holdout | 1.13 | 0.92 | 0.92 | 0.87 | +0.047 | 94% | 94% |
+
+- Most of the gain over the 8B comes early in the window. At 0–63 occasions the
+  8B was worse than uniform (2.81); the larger models are better than the
+  constant from the start (1.34). After 768 occasions the gain is 0.22.
+- The gap to the GRU still shrinks with history, from 0.35 to 0.05 nats
+  (calibration, A: change −0.300 [−0.309, −0.292]). With 768+ earlier occasions
+  the larger models recover 92–94% of the GRU's gain over the constant, against
+  the 8B's 66–67%.
+- The hit rate barely moves (0.668 → 0.670). The larger models do not choose
+  the right letter more often. They put better-judged probability on it.
+
+**Decision (as pre-registered).** H1 fails for both arms. So the claim
+"off-the-shelf loses on prediction" is narrowed to the small model (8B). A 27–32B
+open model used zero-shot, with the same information, comes within 0.06–0.07
+nats of the trained GRU, though it still loses. By R48's rule the comparison
+with off-the-shelf tools now rests on generation. The next rung (a behavioural
+model such as Centaur, a prompt with the game's rules, or an LLM as the policy
+in the simulator) is Jin's call.
+- *Outputs:* `runs/r49/<tag>_summary.json`, `runs/r49/<tag>_vs_gru.json` and
+  `runs/r49/r49_vs_r48.json`, for tags `qwen3_32b_out` and `qwen36_27b_out`.
+
 ### R50 — PLAN (28 Oct 2026, at Jin's request; nothing run): a float32 reference for R48's bf16 Qwen3-8B
 
 **Why.** R49's diagnostic showed that bf16 rounding moves every occasion's
@@ -5727,3 +5846,73 @@ Exploratory: B by position in the 1,024-occasion window.
   - The comparison script recovers planted values of B (+0.004, +0.015, +0.030,
     −0.004) exactly, in bands a, b, c and a. It stops on a missing row, on a
     noisy or leaking reference, and on a wrong dtype.
+
+**RESULT (29 Oct 2026): band (a). bf16 makes the 8B's headline NLL 0.004 too
+high, so R48 stands. R49's H2 is robust to rounding.**
+- *Job 44528* on a-11, commit db79591. It started at 22:27 on 28 Oct, once
+  R49's last shard finished, took 1 h 31 min and exited 0.
+- *Gates pass.*
+  1. Unit tests T1–T8: all pass.
+  2. `--strict-load`: 0 missing and 0 mis-shaped weights. The float32 settings
+     were in force: TF32 off, matmul precision "highest", and SDPA's
+     memory-efficient kernel only.
+  3. Reference quality, on the synthetic customer:
+     - t3 true-letter mean 3.2e-5, against the 1e-3 bound. The bf16 8B on the
+       same customer gave 0.095, about 3,000× more.
+     - t3 largest 2.9e-4, t4 before t 8.0e-5, t4c before t 0.0, repeat 0.0;
+       t4_after 19.3 and t4c_after 9.6.
+     - One pass minus per-occasion NLL: 1e-6.
+  4. Rows: both passes hold exactly R48's 148,288 rows for the 250 customers,
+     with no duplicates.
+- *The bf16 rerun reproduces R48 bit for bit:* 0 of 148,288 rows differ
+  (largest |Δ log p| 0.0). Rule 2 does not apply.
+- *Speed:*
+  - float32: 4.67M tokens in 4,173 s, about 1,120 tokens/s on two GPUs (peak
+    29 and 32 GB);
+  - bf16 rerun: 1,183 s, about 3,950 tokens/s on one GPU.
+  So float32 is 3.5× slower, within the 2–5× expected.
+
+| out-of-sample cell | rows | customers | NLL, bf16 (R48) | NLL, float32 | B = bf16 − float32 |
+|---|---|---|---|---|---|
+| **holdout (pre-registered)** | 22,975 | 169 | 1.3158 | 1.3122 | **+0.0037** [+0.0024, +0.0049] |
+| calibration | 125,313 | 250 | 1.7870 | 1.7752 | +0.0118 [+0.0108, +0.0129] |
+
+- **Verdict (rule 3): band (a).** B's interval, [+0.0024, +0.0049], lies inside
+  ±0.01. R48's headline (1.275) and its paired d against the GRU (0.389) stand
+  as reported. In float32 both would be about 0.004 lower; the GRU was scored
+  in float32, so d would be about 0.385.
+- **The expectation held on the headline cell.** B > 0, as Jensen predicts:
+  bf16 makes the model look slightly worse, not better. It is also below 0.01.
+  In the calibration cell B is 0.012, just above 0.01. That cell is not the
+  pre-registered statistic, and it is reported here as planned.
+- **Rule 4, R49's H2: robust to rounding for both arms.** The shift is
+  max(0, 0.0049) = 0.0049. d + 0.0049 is −0.322 (Qwen3-32B) and −0.318
+  (Qwen3.6-27B), both below −0.02.
+- *Per occasion, holdout cell:*
+  - |Δ log p(true letter)|: mean 0.035, median 0.010, 99th percentile 0.25,
+    max 1.39;
+  - total variation: mean 0.010.
+  - Per customer, the mean difference has sd 0.009, 5–95% range −0.007 to
+    +0.021, and full range −0.016 to +0.046.
+  So single occasions and customers move far more than the mean does. The
+  bias is a small positive shift underneath that noise.
+- *Exploratory, by position:* B is concentrated early in the window.
+
+| position | calibration B | holdout B |
+|---|---|---|
+| 0–63 | +0.038 [+0.035, +0.040] | (no rows in the sample) |
+| 64–255 | +0.017 [+0.015, +0.018] | +0.013 [+0.007, +0.019] |
+| 256–511 | +0.003 [+0.002, +0.004] | +0.005 [+0.003, +0.006] |
+| 512–767 | +0.000 [−0.000, +0.001] | +0.002 [+0.000, +0.004] |
+| 768–1023 | +0.001 [−0.000, +0.003] | +0.000 [−0.001, +0.002] |
+
+  - The calibration cell's larger B comes from its early positions. At the
+    same position the two cells agree.
+  - Against R48's position table these shifts are small: 0.04 of the 8B's 2.81
+    at 0–63.
+- *Not tested:* whether the larger models' bias resembles the 8B's. In float32
+  they need 108–131 GB, more than our two GPUs hold. Rule 4's assumption
+  (same sign, no larger) stays an assumption.
+- *Not needed:* a float32 run of all 2,502 customers. Under band (a) it is not
+  called for; at the measured rate it would take about 11.5 h on two GPUs.
+- *Output:* `runs/r50/r50_fp32_vs_r48.json`.
