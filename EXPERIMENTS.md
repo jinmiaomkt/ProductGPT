@@ -39,8 +39,8 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 44465 | `r43_strata` on gen-5 c06 seeds 1–5 (CPU, short queue) | 2026-10-27 | R44 stage 4: length strata for gen 5 | finished exit 0, self-check ok; result in R44 stage 4 |
 | 44522, 44523 | `r43_generate` gates, g5 / g6 (CPU, short queue, from `~/ProductGPT/work_gen6` at `ef7efba`) | 2026-10-28 | R43 step 2: test suites and 12-customer smokes | both exit 0; every gate passed |
 | 44530 | `r43_generate` g6 timing probe (GPU, 1 h) | 2026-10-28 | R43 step 2: price the g6 job | exit 0; 0.6 h for 10 rollouts |
-| 44529 | `r43_generate` FAMILY=g5 (GPU, 8 h) | 2026-10-28 | R43 step 2: G5 c06, A, yardsticks; c06's 384-window price | finished exit 0, 29 Oct 03:24 (qstat 2026-10-29); unread |
-| 44537 | `r43_generate` FAMILY=g6 (GPU, 4 h) | 2026-10-29 | R43 step 2: G6 free running and teacher forced | running (qstat 2026-10-29 08:10) |
+| 44529 | `r43_generate` FAMILY=g5 (GPU, 8 h) | 2026-10-28 | R43 step 2: G5 c06, A, yardsticks; c06's 384-window price | finished exit 0, 29 Oct 03:24 (qstat 2026-10-29); result in R43 step 2 |
+| 44537 | `r43_generate` FAMILY=g6 (GPU, 4 h) | 2026-10-29 | R43 step 2: G6 free running and teacher forced | finished exit 0, 29 Oct 08:43 (qstat 2026-10-29); reader run once: no difference (R43 step 2 RESULT) |
 
 Batch 7 (R22) is closed at two seeds per arm; batch 8 (R23) is complete.
 Batches 10-12 are complete (R25, R27, R28). Batch 13 (R29) was submitted
@@ -5345,3 +5345,95 @@ because only a GPU run can measure the GPU rate. It used 45 seconds.
 Next: read both logs in full, then run
 `python3 scripts/r43_step2_read.py --r36i ~/ProductGPT/work_r36i/results/r36i/r36i.json`
 once.
+
+### R43 step 2 — RESULT (29 Oct 2026): no difference; gen 6 is adopted for its capability, not for generation quality
+
+**Read.** Both logs were read in full. g6 job 44537 ran 08:09–08:43 on 29
+Oct and exited 0. The reader was run once, from `work_gen6` at `ef7efba`,
+and exited 0. Its output is saved on HPCC as
+`~/ProductGPT/work_gen6/results/r43/step2_read.txt`.
+
+**Every hard gate held.**
+- Both jobs: the three test suites passed, the smoke passed, HEAD
+  `ef7efba` was clean, and all 15 checkpoints were as specified.
+- Same customers: sha `be33f73d819b13eb`, 300 customers × 8 replicates,
+  22,490 holdout rows. The real functionals are bit-identical across the two
+  jobs (the reader refuses otherwise).
+- Every one of the 34 arm runs: mismatch 0, altered 0, rows outside the frame
+  0. No problems were logged.
+
+**Continuity with R36i held exactly.** The band reproduces q95 0.0781258.
+Arm C, i.i.d. and Markov reproduce R36i's energies to the fourth decimal at
+the same draw seeds, so R36i's numbers can be quoted alongside.
+
+**Energies** (300 customers × 8 replicates; band q95 0.0781):
+| Arm | Seeds | Mean | sd | Min | Max | × band | AUC | Min per run |
+|---|---|---|---|---|---|---|---|---|
+| arm C (real decisions) | 11–13 | −0.000 | 0.002 | −0.002 | +0.001 | 0 (3/3 inside) | 0.552 | 0.3 |
+| Markov-1 | 17–19 | +0.784 | 0.006 | +0.781 | +0.791 | 10 | 0.885 | 0.2 |
+| i.i.d. | 17–19 | +2.468 | 0.008 | +2.461 | +2.476 | 32 | 0.913 | 0.2 |
+| **G5 c06, free running** | 1–5 | **+2.563** | 0.666 | +1.641 | +3.244 | 33 | 0.862 | 13.6 |
+| **G6, free running** | 1–5 | **+2.617** | 0.686 | +1.643 | +3.422 | 34 | 0.860 | 3.5 |
+| A (untuned gen 5), free running | 1–5 | +2.794 | 0.468 | +2.306 | +3.333 | 36 | 0.867 | 13.6 |
+| G5 c06, teacher forced | 1–5 | +0.345 | 0.044 | +0.311 | +0.422 | 4.4 | 0.843 | 13.2 |
+| G6, teacher forced | 1–5 | +0.361 | 0.037 | +0.300 | +0.397 | 4.6 | 0.835 | 3.0 |
+
+**Decision (pre-registered rule).** G6 − G5 c06, free running, paired by
+seed: +0.984, −0.681, +0.475, +0.002, −0.512. Mean +0.054, 3 positive and
+2 negative. That is short of 4 of 5 with the same sign, and |mean| is below
+q95. **No difference.** Gen 6 is adopted as the generator for what it can do
+(any history length, a fixed cost per generated occasion), not for
+generation quality.
+
+**Reported with no decision attached.** All are paired by seed under the
+same rule.
+- A − G5 c06 (free): mean +0.231, +3/−2. No difference: tuning did not
+  improve generation, just as it did not improve prediction (R44 stage 4).
+- A − G6 (free): mean +0.177, +3/−2. No difference.
+- G6 − G5 c06 (teacher forced): +0.040, −0.021, +0.035, +0.086, −0.058;
+  mean +0.016, +3/−2. No difference.
+- Teacher forcing removes 81–90% of the free-running distance for G5 c06 and
+  76–89% for G6. Most of the gap is the loop feeding on its own output, in
+  both families.
+- Markov is ahead of every free-running seed of every family. The best model
+  seed is 1.641 (G5 c06 s4), against Markov's 0.784.
+- Free-running seed spread (sd 0.67–0.69) is about 8.5× the band. Seed 4 is
+  the closest seed in all three free-running families, with NotBuy about
+  0.31. The pairing shares the rollout seed (1000 + seed), so this run cannot
+  tell whether that comes from training or from the rollout draw.
+- **NotBuy share:** real 0.425; free running 0.216 (G5 c06), 0.214 (G6) and
+  0.204 (A); teacher forced 0.369 and 0.367. Free-running models
+  under-generate NotBuy by half and over-generate multi-pulls. Buy10Wep is
+  0.15–0.16 against a real 0.010.
+- **The classifier's main cues:** for free running, `longest_notbuy_run`,
+  `sat_k1` and the decision shares; for teacher forcing, `switch_rate` and
+  `longest_notbuy_run`.
+- **c06's price for the 384 window:** teacher-forced NLL 0.8589 at 384
+  against 0.8585 at 1,024, on the same 300 customers and 22,490 rows. That is
+  0.0004 nats: negligible.
+- **Time per rollout on an L40S:** 13.6 min for gen 5 and 3.5 min for gen 6,
+  3.9× faster.
+
+**Predictions.**
+1. *Free running outside the band on every seed, about 2.7 to 3.5:* **half
+   held.**
+   - All 15 free-running runs are outside the band.
+   - But both decision arms' means (2.56 and 2.62) sit below the predicted
+     range, and 5 of their 10 seeds fall under 2.7. They are closer than
+     b33's 3.169, but by an amount well inside the seed spread.
+2. *G6 − G5 c06: no difference:* **held.**
+3. *Teacher forced: both outside, near 0.417, no difference:* **held.**
+   - The energies are 0.345 and 0.361 (4.4× and 4.6× the band).
+4. *Markov ahead of both free-running families:* **held,** on every seed.
+5. *A − G5 c06: no difference:* **held.**
+
+**What this settles.** On generation, as on prediction (R44 stage 4), gen 6
+ties tuned gen 5.
+- The architecture change is free on both counts. It buys any history
+  length, and a rollout 3.9× faster.
+- Neither family is a licence to simulate.
+  - Free running, both are about 33× the band, and Markov-1 beats them by
+    a factor of about 3.
+  - Teacher forcing closes 76–90% of that distance. The deficit is therefore
+    in the closed loop, not in the per-step law. That is where R36i and R42
+    put it.
