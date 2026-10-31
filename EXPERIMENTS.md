@@ -37,6 +37,10 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 44467–44487 | `r47b2_*` (21 runs, from `~/ProductGPT/work_r47fix` at `a3b2ac0`) | 2026-10-27 | R47 B2 re-run after the stock_only gradient fix | all 21 finished, exit 0, as did B1's 21 (44400–44440 even) (qstat 2026-10-28); read once 31 Oct: forgetting not identified in B1 or B2 (R47) |
 | 44618 | `gen6_tests` CPU gate for R47 B3 (short queue, `work_r47fix` at `8cc82e0`) | 2026-10-31 | every suite before B3 | exit 0, ALL SUITES PASSED (103 PASS, 0 FAIL) |
 | 44619–44630 | `r47b3_hl100_d{1,0.5,0.1,0}` (12 runs, from `~/ProductGPT/work_r47fix` at `8cc82e0`) | 2026-10-31 | R47 B3: campaign-boundary factor δ at half-life 100, stock_only, seeds 1–3 | 2 running, 10 queued (qstat 2026-10-31 14:43) |
+| 44632 | `r45_partB` (GPU, from `~/ProductGPT/work_r45` at `8fae1d7`) | 2026-10-31 | R45 part B: frozen gen-6 seeds 1–5 score chopped holdout histories, k 0/1/2/4/8, states Z/T | queued behind R47 B3 (qstat 2026-10-31) |
+| 44637, 44638 | `r45c_tests` CPU gates (short queue, from `~/ProductGPT/work_r45c`) | 2026-10-31 | R45 part C: inclusion tests on real data, then the gen-6 and R45 suites | 44637 (`c9604c4`) failed on three test bugs; 44638 (`ca75fdd`) exit 0, ALL SUITES PASSED |
+| 44639–44648 | `r45c_I0` (odd), `r45c_I` (even) (10 runs, from `~/ProductGPT/work_r45c` at `ca75fdd`) | 2026-10-31 | R45 part C: the 8,834 real left-censored players added, seeds 1–5 | queued (qstat 2026-10-31) |
+| 44649 | `r45c_eval` (GPU, `afterok` on 44639–44648) | 2026-10-31 | R45 part C: F, I0, I on the main and censored cells | held until the ten finish |
 | 44443–44446 | `b42_g5_c06_s2`–`s5` (4 runs, from `~/ProductGPT/work_gen6` at `9b3eccd`) | 2026-10-27 | R44 stage 4: gen-5 c06 seeds 2–5 (gen 6 reuses b39_g6w384) | all 4 finished, exit 0; holdout read once: tie (R44 stage 4) |
 | 44465 | `r43_strata` on gen-5 c06 seeds 1–5 (CPU, short queue) | 2026-10-27 | R44 stage 4: length strata for gen 5 | finished exit 0, self-check ok; result in R44 stage 4 |
 | 44522, 44523 | `r43_generate` gates, g5 / g6 (CPU, short queue, from `~/ProductGPT/work_gen6` at `ef7efba`) | 2026-10-28 | R43 step 2: test suites and 12-customer smokes | both exit 0; every gate passed |
@@ -5036,6 +5040,170 @@ first arm is worse):
     scripts/r45_eval_chopped.pbs` from `~/ProductGPT/work_r45`, under 2
     GPU-hours. It waits for Jin's go-ahead. The queue was empty on 31 Oct.
   - Step 2 (generation) waits for the rollout to accept chopped histories.
+
+**Jin's go-ahead (31 Oct 2026):** "I like the results from left censoring
+experiments. Keep moving forward with both simulated data and real data." The
+simulated side is the controlled chop on complete histories (part B now, step 2
+next). The real side is part C below.
+
+**Part B — SUBMITTED (31 Oct 2026): job 44632** from `~/ProductGPT/work_r45` at
+`8fae1d7`, as planned: `TAGS=b39_g6w384,SEEDS=1:2:3:4:5`, depths 0/1/2/4/8,
+states Z and T. It queued behind R47 B3. It also supplies the computed-state
+error that part A's tables lack.
+
+### R45 part C — PLAN (pre-registered 31 Oct 2026, before any run): the real left-censored players
+
+**Question.** Part A found that a missing start costs nothing detectable, so by
+its rule the left-censored players come in with the flag on. Part C asks what
+including them does. Does it help or hurt predicting the complete-history
+customers? How well are the censored players themselves predicted? Part A held
+the customers fixed. Part C adds different customers, whose accounts began
+before the data window. It therefore measures who they are as well as what is
+missing from their histories.
+
+**Data** (`scripts/r45c_prepare.py`, branch `r45-censoring`, commit `c9604c4`;
+aggregates only).
+- **Source.** The R26-corrected, level-7 all-player file
+  `perproduct/output_list_int_wide4_simple7_IPT.json`, written by the same R run
+  (18 Sep 2026) as the clean list that gen 6 reads. It had been on the laptop
+  only. HPCC's `output_list_..._simple6_IPT.json` is the pre-R26 file and is not
+  used.
+- **Filters.** CleanList's four other filters are kept, the length caps
+  included, so only left-censoring changes. That leaves **8,834 of the 10,212**
+  left-censored players. They hold **54.8% of all purchases** (the 5,004 hold
+  30.3%) and 5,793,961 rows (the 5,004 have 3,017,180).
+  - 8,784 of them have rows before campaign 27.
+  - 5,703 have rows in campaign 27.
+  - 4,480 have rows in the holdout.
+- **Self-checks, all passed before the file was written.**
+  - The same filters with `newbee_pull > 0` reproduce the clean list's 5,004
+    uids exactly.
+  - All 5,004 records are identical, field by field, in the two files.
+  - The R generator's own start marker agrees with the filter for every
+    player. The first obtained block is 132 (start of sequence) for all 5,004
+    complete histories and 133 (unknown) for all 8,834 censored ones.
+- **File.** `perproduct/censored_list_int_wide4_simple7_IPT.json`, sha256
+  `59d83c37…`, identical on the laptop and on HPCC.
+
+**Design** (`build_loaders`' extra file, `censor6.CensorMark`).
+- **The 5,004 are untouched.** Their partition (split seed 33 over the main
+  sample only), their validation and their three cells are what they are
+  without the extra file.
+- **The censored players are split 50/50 by their own generator.**
+  - The in-sample half (4,417) trains on campaigns before 27.
+  - The out-of-sample half (4,417) never trains.
+- **Validation stays the main sample's campaign 27**, so every arm selects
+  its epoch on identical occasions.
+- **Two new cells:** censored in-sample × holdout, and censored out-of-sample ×
+  holdout.
+- **An implicit marker in every arm.** Censored histories open with token 133
+  instead of 132, at one row. It is not a product id, so it never enters the
+  inventory. I0 below is therefore "no learned flag", not "no information about
+  censoring".
+
+**Arms** (R44's frozen gen-6 configuration, seeds 1–5):
+
+| arm | training customers | flag | runs |
+|---|---|---|---|
+| F | the 5,004's in-sample half | none | 0: R44 stage 4, `b39_g6w384` |
+| I0 | plus the 4,417 in-sample censored players | off | 5 |
+| I | the same | on (part A's rule) | 5 |
+
+`scripts/r45c_eval.py` scores all 15 runs on the main and censored cells with
+the same partition. It must reproduce every cell already in each run's
+`final.json`. The reader is written and tested on synthetic files before the
+holdout is read, as in part A.
+
+**Decision rules.** These use the adoption rule: |mean| > 0.02 and the same
+sign on at least 4 of 5 paired seeds. Positive means the first arm is worse.
+1. **Headline, I − F on `outsample_users_holdout_period`.**
+   - "Helps" if the mean of F − I exceeds 0.02 and F − I is positive on at
+     least 4 of 5 seeds.
+   - "Hurts" if the mean of I − F exceeds 0.02 and I − F is positive on at
+     least 4 of 5 seeds.
+   - Otherwise "no detectable difference".
+2. **The censored out-of-sample cell, I − F:** the same rule.
+3. **The flag, I − I0,** on both of those cells: the same rule.
+4. **What follows.**
+   - If the headline is not "hurts", the inclusive sample (13,838 players,
+     85.1% of all purchases) becomes eligible as the primary training sample.
+     The switch is Jin's and the coauthors' call, because it changes the
+     paper's sample.
+   - If it hurts, the censored players stay out and the cost is reported as
+     the reason.
+   - The decision reads arm I. If rule 3 separates I from I0, both are
+     reported.
+
+**Predictions.**
+1. **Headline: helps, but by under 0.02.** In part A the lost labels cost
+   0.009–0.021, and part C more than doubles the training customers. So I is
+   ahead of F on at least 3 of 5 seeds, with a mean gap between 0 and 0.02.
+2. **Censored out-of-sample cell: I ahead of F by more than 0.02.** F has
+   never seen a customer whose inventory starts empty late in an account's
+   life, which is prediction 4 of part B seen from the other side.
+3. **Flag: no detectable difference.** It was inert in part A, and the 133
+   marker already identifies these players.
+4. **Descriptive: the censored cells score worse than the main cells in every
+   arm.** Their state is wrong from the first row.
+
+**Budget.** 10 GPU runs, each with about 2–3 times part A's training rows, so
+roughly 40–60 minutes and about 8 GPU-hours in all. The evaluation job waits on
+all ten (`afterok`), at about 2–3 GPU-hours. Submit from a new HPCC worktree,
+`~/ProductGPT/work_r45c` (detached at the part C commit). `work_r45` holds
+part B's queued job and is never pulled.
+
+**Code.** Two commits on `r45-censoring`, neither pushed. They reach HPCC as a
+git bundle.
+- `c9604c4`: the loader, the trainer and job options, the data preparation,
+  `r45c_eval.py` and the tests.
+- `35841a7`: `submit_r45c.sh`, `r45c_eval.pbs` and the reader,
+  `scripts/r45c_read.py` (sha256 `11f55d22…`).
+- `ca75fdd`: three fixes to the gate's test (below). No training code changed.
+
+The reader implements the rules and predictions above. It was tested on
+synthetic runs: planted helps, hurts and no-difference effects come back as
+such, and a wrong cfg, a flag on F, or a missing run each stop it.
+
+**Gate before submission:** `scripts/r45c_tests_cpu.pbs` runs
+`test_r45c_inclusion.py` on the real data against arm F's seed-1
+configuration. It checks that the 5,004's cells are identical with and without
+the extra file and that the headline scores the same occasions. It checks that
+the censored halves are disjoint and deterministic and never mix with the main
+cells. It checks that the flag marks exactly the censored players and moves
+only their logits, through the trainer's own loader. The gen-6 and R45 suites
+run after it.
+- **First gate, job 44637 (at `c9604c4`): failed on three bugs in the test,
+  not in the code.**
+  - The headline count was read from the DataLoader instead of its dataset,
+    so it came back as 0.
+  - The censored in-sample half was compared with `user_id` included. A
+    customer who does not train shares the unknown-user index 0, so that
+    field legitimately differs between `extra_train` 0 and 1. The embedding
+    is off in every arm, so it reaches nothing.
+  - The flag check picked a customer with no scored occasion, and collate
+    refused it.
+  - Every main-sample check passed: validation, the three main cells and
+    training are identical, user index included, with and without the extra
+    file. The partition, the marking and both existing suites (gen 6, R45)
+    also passed.
+- **Second gate, job 44638 (at `ca75fdd`): passed, exit 0, 4 minutes.**
+  - All 18 part C checks passed. The headline scores 217,303 occasions in
+    every build.
+  - The censored cells score 264,064 (in-sample) and 262,758 (out-of-sample)
+    occasions.
+  - The flag leaves the main customer's logits unchanged (0.0) and moves the
+    censored one's (1.5).
+  - The gen-6 and R45 suites also passed.
+
+**Part C — SUBMITTED (31 Oct 2026)** from `~/ProductGPT/work_r45c` at
+`ca75fdd`, with `bash scripts/submit_r45c.sh`. The frozen line was read from
+`r44_frozen_g6.env`.
+- **Training runs:** jobs 44639–44648. I0 is the odd-numbered jobs and I the
+  even ones, seeds 1–5 in order.
+- **Evaluation:** job 44649 (`r45c_eval.pbs`, `afterok` on all ten). It is held
+  until they finish.
+- **Queue:** the runs wait behind R47 B3 (44629/44630 running) and part B
+  (44632).
 
 ### R47 — PLAN (approved by Jin 26 Oct 2026; part A done, B1–B2 submitted 27 Oct): do players forget their holdings, within and across campaigns?
 
