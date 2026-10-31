@@ -37,10 +37,14 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 44467–44487 | `r47b2_*` (21 runs, from `~/ProductGPT/work_r47fix` at `a3b2ac0`) | 2026-10-27 | R47 B2 re-run after the stock_only gradient fix | all 21 finished, exit 0, as did B1's 21 (44400–44440 even) (qstat 2026-10-28); read once 31 Oct: forgetting not identified in B1 or B2 (R47) |
 | 44618 | `gen6_tests` CPU gate for R47 B3 (short queue, `work_r47fix` at `8cc82e0`) | 2026-10-31 | every suite before B3 | exit 0, ALL SUITES PASSED (103 PASS, 0 FAIL) |
 | 44619–44630 | `r47b3_hl100_d{1,0.5,0.1,0}` (12 runs, from `~/ProductGPT/work_r47fix` at `8cc82e0`) | 2026-10-31 | R47 B3: campaign-boundary factor δ at half-life 100, stock_only, seeds 1–3 | all 12 finished, exit 0 (qstat 2026-10-31); read once: not identified (R47 B3 RESULT) |
-| 44632 | `r45_partB` (GPU, from `~/ProductGPT/work_r45` at `8fae1d7`) | 2026-10-31 | R45 part B: frozen gen-6 seeds 1–5 score chopped holdout histories, k 0/1/2/4/8, states Z/T | queued behind R47 B3 (qstat 2026-10-31) |
+| 44632 | `r45_partB` (GPU, from `~/ProductGPT/work_r45` at `8fae1d7`) | 2026-10-31 | R45 part B: frozen gen-6 seeds 1–5 score chopped holdout histories, k 0/1/2/4/8, states Z/T | finished exit 0 in 6.5 min, self-check ok (qstat 2026-10-31); read: at most +0.004 nats up to k = 4, +0.010 at k = 8 (R45 part B RESULT) |
 | 44637, 44638 | `r45c_tests` CPU gates (short queue, from `~/ProductGPT/work_r45c`) | 2026-10-31 | R45 part C: inclusion tests on real data, then the gen-6 and R45 suites | 44637 (`c9604c4`) failed on three test bugs; 44638 (`ca75fdd`) exit 0, ALL SUITES PASSED |
-| 44639–44648 | `r45c_I0` (odd), `r45c_I` (even) (10 runs, from `~/ProductGPT/work_r45c` at `ca75fdd`) | 2026-10-31 | R45 part C: the 8,834 real left-censored players added, seeds 1–5 | queued (qstat 2026-10-31) |
-| 44649 | `r45c_eval` (GPU, `afterok` on 44639–44648) | 2026-10-31 | R45 part C: F, I0, I on the main and censored cells | held until the ten finish |
+| 44639–44648 | `r45c_I0` (odd), `r45c_I` (even) (10 runs, from `~/ProductGPT/work_r45c` at `ca75fdd`) | 2026-10-31 | R45 part C: the 8,834 real left-censored players added, seeds 1–5 | all 10 finished exit 0, 20–49 min (qstat 2026-10-31) |
+| 44649 | `r45c_eval` (GPU, `afterok` on 44639–44648) | 2026-10-31 | R45 part C: F, I0, I on the main and censored cells | finished exit 0, self-check passed; reader run once: no detectable difference, inclusive sample eligible (R45 part C RESULT) |
+| 44656 | `r45_generate` CPU gate (short queue, `SMOKE_ONLY=1`, from `~/ProductGPT/work_r45g` at `7b9eff7`) | 2026-10-31 | R45 step 2: five test suites and the 12-customer smoke | suites passed; smoke STOPPED (exit 4) on a bug in its own chop check, which refused customers with no holdout row; see R45 step 2 |
+| 44657 | `r45_generate` (GPU, 8 h, `afterok` on 44656) | 2026-10-31 | R45 step 2: generation on chopped histories, 60 rollouts | deleted by PBS when 44656 failed; never ran |
+| 44658 | `r45_generate` CPU gate (short queue, `SMOKE_ONLY=1`, `work_r45g` at `52ead12`) | 2026-10-31 | R45 step 2: the gate again, after the fix | queued (qstat 2026-10-31) |
+| 44659 | `r45_generate` (GPU, 8 h, `afterok` on 44658) | 2026-10-31 | R45 step 2: generation on chopped histories, 60 rollouts | held until the gate passes |
 | 44443–44446 | `b42_g5_c06_s2`–`s5` (4 runs, from `~/ProductGPT/work_gen6` at `9b3eccd`) | 2026-10-27 | R44 stage 4: gen-5 c06 seeds 2–5 (gen 6 reuses b39_g6w384) | all 4 finished, exit 0; holdout read once: tie (R44 stage 4) |
 | 44465 | `r43_strata` on gen-5 c06 seeds 1–5 (CPU, short queue) | 2026-10-27 | R44 stage 4: length strata for gen 5 | finished exit 0, self-check ok; result in R44 stage 4 |
 | 44522, 44523 | `r43_generate` gates, g5 / g6 (CPU, short queue, from `~/ProductGPT/work_gen6` at `ef7efba`) | 2026-10-28 | R43 step 2: test suites and 12-customer smokes | both exit 0; every gate passed |
@@ -4763,7 +4767,7 @@ holdout and with half the seed variance.
   `b39_g6w384` seeds 1–5, which already exist. Part B (GPU,
   `r45_eval_chopped.pbs`) therefore does not have to wait for batch 42.
 
-### R45 — PLAN (approved by Jin 26 Oct 2026; part A submitted 27 Oct, read 31 Oct): controlled left-censoring on complete histories
+### R45 — PLAN (approved by Jin 26 Oct 2026; parts A and B read 31 Oct; step 2 submitted 31 Oct): controlled left-censoring on complete histories
 
 **Question (Jin's).** What does it cost to learn from histories whose start is
 missing, and how does that cost grow with the depth of the missing start, for
@@ -5051,7 +5055,48 @@ next). The real side is part C below.
 states Z and T. It queued behind R47 B3. It also supplies the computed-state
 error that part A's tables lack.
 
-### R45 part C — PLAN (pre-registered 31 Oct 2026, before any run): the real left-censored players
+**Part B — RESULT (31 Oct 2026): a model trained on complete histories loses at
+most 0.004 nats when handed a history missing up to 4 campaigns, and 0.010 at 8.
+The loss is the same sign on every seed and grows with depth; two thirds of it is
+the restarted state.**
+
+*Read.* Job 44632 exited 0 in 6.5 minutes, on git `8fae1d7`. The log has no
+error lines. The depth-0 self-check reproduced every run's `final.json` (0.8808,
+0.8826, 0.8852, 0.8713, 0.8713). Every depth and state scores the same 217,303
+events. The differences below come from `results/r45/partB.json` in
+`~/ProductGPT/work_r45`. The plan gives part B no rule; part A's cost test (the
+same sign on every seed and |mean| > 0.02) is applied for reference only.
+
+*NLL minus F's on the headline cell* (mean over seeds 1–5; positive seeds in
+brackets; F scores 0.8782, seed sd 0.0065):
+| depth k | Z (state restarts) | T (state supplied) | Z − T (the state) | log-inventory error | pity error |
+|---|---|---|---|---|---|
+| 1 | +0.0003 (5/5) | +0.0001 (4/5) | +0.0003 | 0.046 | 0.008 |
+| 2 | +0.0012 (5/5) | +0.0004 (5/5) | +0.0008 | 0.100 | 0.018 |
+| 4 | +0.0041 (5/5) | +0.0013 (5/5) | +0.0028 | 0.202 | 0.042 |
+| 8 | +0.0103 (5/5) | +0.0034 (5/5) | +0.0069 | 0.331 | 0.082 |
+
+The paired seed sd of Z − F is 0.0003, 0.0007, 0.0017 and 0.0029.
+- **Small but real.** No depth reaches 0.02. The signs are uniform and the
+  paired sd is tiny, so the loss exists; at 8 missing campaigns it is half the
+  threshold.
+- **The state error** (mean absolute error against the truth, over the scored
+  rows, for Z) is a property of the data and identical across seeds. It fills
+  the column part A's tables lacked.
+- **Part A's predictions, rechecked here:**
+  - 2 (monotone in depth, flattening by k = 4): monotone, but accelerating,
+    not flattening.
+  - 3 (mostly state, not context): holds here. Z − T exceeds T − F at every
+    depth; the state carries about two thirds.
+  - 4 (part B costs more than part A at equal depth): holds as stated. Part B's
+    Z − F is +0.0003, +0.0012 and +0.0041, against part A's Z − L of −0.0033,
+    −0.0094 and +0.0033. At k = 1 and 2 it holds only because part A's
+    estimates are negative, and every number involved is under 0.005 nats.
+- **What this settles.** For prediction, a model trained on complete histories
+  scores censored ones at nearly full accuracy. What little it loses is mostly
+  the inventory and pity it cannot see.
+
+### R45 part C — PLAN (pre-registered 31 Oct 2026, before any run; read 31 Oct): the real left-censored players
 
 **Question.** Part A found that a missing start costs nothing detectable, so by
 its rule the left-censored players come in with the flag on. Part C asks what
@@ -5205,6 +5250,86 @@ run after it.
 - **Queue:** the runs wait behind R47 B3 (44629/44630 running) and part B
   (44632).
 
+**Part C — RESULT (31 Oct 2026): adding the 8,834 real left-censored players
+makes no detectable difference to any cell. By the rule, the inclusive sample is
+eligible as the primary sample; the switch is Jin's and the coauthors' call.**
+
+*Read.*
+- **Training:** all 10 runs (44639–44648) exited 0, with walltimes of 20–49
+  minutes and best epochs 5–22.
+  - Every log shows the 4,417 censored in-sample players trained and 3,484,061
+    training events, against F's 1,096,378.
+  - No log has a Traceback, error, OOM or time-budget line. A search for "nan"
+    matches only "Kannan" in the split line.
+  - I0 and I share a best epoch on 4 of 5 seeds. Their validation NLLs differ
+    (the reader's gate) and their holdout NLLs differ by up to 0.014, so they
+    are distinct runs.
+- **Evaluation:** 44649 exited 0 in 12.6 minutes, on a-11 at `ca75fdd`. Its
+  self-check passed: every cell in every `final.json` reproduced.
+- **Reader:** `scripts/r45c_read.py` (sha256 `11f55d22…`), run once on 31 Oct
+  from `~/ProductGPT/work_r45c` at `ca75fdd`. Output:
+  `results/r45/partC_read.txt` and `partC_read.json`. Every gate passed: 15
+  runs, cfgs as planned, the same events in every cell, no two validation NLLs
+  equal.
+
+*NLL* (mean over seeds 1–5, with the seed sd):
+| arm | headline (complete, out-of-sample) | complete, in-sample | censored, out-of-sample | censored, in-sample | best epochs |
+|---|---|---|---|---|---|
+| F | 0.8782 (0.0065) | 0.8720 (0.0071) | 0.8478 (0.0071) | 0.8378 (0.0071) | 28, 25, 10, 22, 25 |
+| I0 | 0.8812 (0.0102) | 0.8756 (0.0107) | 0.8452 (0.0114) | 0.8345 (0.0115) | 5, 17, 14, 10, 19 |
+| I | 0.8843 (0.0099) | 0.8788 (0.0100) | 0.8500 (0.0115) | 0.8391 (0.0116) | 5, 17, 22, 10, 19 |
+
+The cells score 217,303, 222,889, 262,758 and 264,064 events.
+
+*The rules* (paired by seed; positive = the first arm is worse):
+- **1. Headline, I − F:** +0.0171, −0.0006, +0.0027, +0.0119, −0.0008. Mean
+  +0.0060 (sd 0.0080), worse on 3 of 5: **no detectable difference**.
+- **2. Censored out-of-sample, I − F:** +0.0169, −0.0017, −0.0037, +0.0048,
+  −0.0051. Mean +0.0022, worse on 2 of 5: **no detectable difference**.
+- **3. The flag, I − I0:** mean +0.0031 on the headline and +0.0048 on the
+  censored cell, both worse on 4 of 5 but under 0.02: **no detectable
+  difference** on either.
+- **4. Decision (pre-registered):** rule 1 does not say "hurts", so the
+  inclusive sample (13,838 players) is **eligible** as the primary training
+  sample. The switch is Jin's and the coauthors' call.
+
+*Reported with no decision attached* (all "no detectable difference"):
+- I0 − F: +0.0029 on the headline (worse on 3 of 5) and −0.0026 on the
+  censored cell (worse on 3 of 5).
+- I − F: +0.0013 on the censored in-sample cell, and +0.0069 on the complete
+  in-sample cell (worse on 4 of 5, under 0.02).
+- Including the censored players raises the seed sd from 0.0065 to about
+  0.010 on every cell.
+
+*Predictions.*
+1. *Headline: I ahead of F on at least 3 of 5, mean between −0.02 and 0:*
+   **failed.** The mean is +0.0060, and I is ahead on 2.
+2. *Censored cell: I helps by more than 0.02:* **failed.** +0.0022. Training on
+   4,417 censored players does not predict the other 4,417 better than training
+   on complete histories alone.
+3. *The flag is not detectable:* **held.**
+4. *The censored cells score worse than the headline in every arm:* **failed,
+   the other way.** Censored players are easier to predict: 0.835–0.850 against
+   0.878–0.884, in every arm, by about 0.03 nats.
+
+*What this settles.*
+- **More players do not buy accuracy.** Tripling the training events (1.10M
+  to 3.48M) moves no cell detectably. Read with part A: removing 12–53% of the
+  complete customers' labels cost 0.009–0.021 nats (L − F), but adding other
+  players' labels gains nothing detectable.
+- **A model trained on complete histories already transfers** to censored
+  players: F predicts them as well as I0 and I, which trained on half of them.
+  This agrees with part B: a complete-history model loses at most 0.004 nats on
+  histories missing up to 4 campaigns.
+- **Censored players are about 0.03 nats easier** in every arm. *Inference, not
+  tested:* their accounts predate the data window, so they are long-standing
+  players whose behaviour may be more settled.
+- **The flag adds nothing** for real censored players, as in part A.
+- **The choice it opens.** The inclusive sample holds 85% of purchases (30.3% +
+  54.8%) instead of 30%, at no detectable cost in accuracy, for about 3× the
+  training time. If it is adopted, I0 (no flag) is the simpler arm, and rule 3
+  finds no reason to prefer I.
+
 ### R45 step 2 — DESIGN (fixed 31 Oct 2026, before any step-2 rollout and before part B or C was read): generation on chopped histories
 
 **Question (the R45 plan's step 2).** Does a missing start damage generation?
@@ -5333,6 +5458,27 @@ a CPU gate on the short queue.
   `work_r45c` stay as their jobs ran.
 - **Reading:** once, with `python3 scripts/r45_step2_read.py --r43
   ~/ProductGPT/work_gen6/results/r43/step2_g6.json`.
+
+**Step 2 — SUBMITTED (31 Oct 2026)** from `~/ProductGPT/work_r45g` (a new
+detached worktree, shipped by git bundle). The design above was committed
+(`c3b2cb1`) before part B's or part C's results were opened.
+- **First gate, job 44656 (at `7b9eff7`): stopped by a bug in the job's own
+  check, not in the generator.**
+  - All five suites passed. In the smoke, all 21 checkpoints loaded, and the
+    frame and the 12 customers matched R43's smoke (sha `78c662b2…`, 547
+    holdout rows).
+  - The chop check then refused k = 1 for customers who have no row in
+    campaign 28 or later; the holdout cell holds such customers. For them
+    `first_row_of_campaign` returns the padded batch length, which differs
+    between the full and the chopped batch. Nothing is generated for them.
+  - PBS deleted the chained GPU job 44657 before it ran.
+- **The fix, `52ead12`:** the check compares holdout starts only for customers
+  with a holdout row, and requires that a customer has holdout rows in both
+  batches or in neither. A new test case (17 checks now) has such a customer,
+  chopped at a different row from the longest one; the old rule refuses it and
+  the new one passes it. Nothing else changed.
+- **Resubmitted:** CPU gate 44658, then generation 44659 (GPU, walltime 8 h,
+  `afterok` on 44658). The GPU job re-runs every gate before stage 1.
 
 ### R47 — PLAN (approved by Jin 26 Oct 2026; part A done, B1–B2 submitted 27 Oct): do players forget their holdings, within and across campaigns?
 
