@@ -110,7 +110,9 @@ def chop_batch(cell, idx, k: int, val_from: int):
 
 def check_chop(bz, b6, s, lz, full_len, owns_z, owns6) -> list:
     """Row t of the chopped batch must be row s + t of the full one, every row
-    after the chop must be kept, and each holdout must start s rows earlier."""
+    after the chop must be kept, and each holdout must start s rows earlier. A
+    customer with no holdout row has none in either batch (first_row_of_campaign
+    then returns each batch's own length; nothing is generated for them)."""
     bad = []
     for c in range(len(s)):
         o, L = int(s[c]), int(lz[c])
@@ -119,7 +121,11 @@ def check_chop(bz, b6, s, lz, full_len, owns_z, owns6) -> list:
         for key in ROWS:
             if not torch.equal(bz[key][c, :L], b6[key][c, o:o + L]):
                 bad.append(f"customer {c}: {key}")
-        if int(owns_z[c]) + o != int(owns6[c]):
+        has6 = bool((b6["campaign"][c] >= HOLDOUT_FROM).any())
+        hasz = bool((bz["campaign"][c] >= HOLDOUT_FROM).any())
+        if has6 != hasz:
+            bad.append(f"customer {c}: holdout rows in one batch only")
+        elif has6 and int(owns_z[c]) + o != int(owns6[c]):
             bad.append(f"customer {c}: holdout starts at {int(owns_z[c])} + {o}, not {int(owns6[c])}")
     return bad
 

@@ -14,7 +14,9 @@ synthetic customers.
       rows differ is refused.
   G4  unchop: at k = 0 the chop path reproduces the plain rollout draw for draw;
       at k = 2 every generated row lands on a live row of the full history, the
-      real rows before each holdout are untouched and nothing is lost.
+      real rows before each holdout are untouched and nothing is lost. The job's
+      chop check passes a customer who never reaches the holdout and catches a
+      shifted one.
   G5  training after the init_stream refactor: censor_vec and censor_h0 get
       finite, non-zero gradients through stream_forward.
 
@@ -39,7 +41,7 @@ for p in (REPO, REPO / "gen5_multistream", REPO / "gen6_streaming", REPO / "simu
 import rollout as ro  # noqa: E402
 from censor6 import ChopView, collate_prefix  # noqa: E402
 from dataset_multistream import collate_multistream  # noqa: E402
-from r45_generate import chop_batch, unchop  # noqa: E402
+from r45_generate import check_chop, chop_batch, unchop  # noqa: E402
 from test_r45_censor import item, model  # noqa: E402
 
 FAIL = []
@@ -214,6 +216,25 @@ def g4():
     check("the generated acquisitions are the chopped rollout's",
           all(np.array_equal(back["obtained"][j, s[j // 2]:s[j // 2] + lz[j // 2]],
                              r["obtained"][j, :lz[j // 2]]) for j in range(6)))
+
+    # check_chop, with a fourth customer who never reaches the holdout (the cell
+    # holds such customers; HPCC gate 44656 tripped on them)
+    quiet = item(40, 4, camp_len=3)                  # campaigns 3..16, chopped at a
+    quiet["label"] = torch.zeros_like(quiet["label"])  # different row from the longest
+    four = items + [quiet]
+    b6 = full(four)
+    bz, s, lz = chop_batch(four, [0, 1, 2, 3], 2, VAL)
+    o6 = ro.first_row_of_campaign(b6["campaign"], HOLD)
+    oz = ro.first_row_of_campaign(bz["campaign"], HOLD)
+    lens = np.array([int(it["lto"].size(0)) for it in four])
+    ok = check_chop(bz, b6, s, lz, lens, oz, o6)
+    wrong = oz.copy()
+    wrong[1] += 1
+    check(f"check_chop passes a customer with no holdout row (starts {oz.tolist()} vs "
+          f"{o6.tolist()}, chops {s.tolist()}; the old rule would refuse it) and catches "
+          f"a shifted holdout", ok == [] and int(oz[3]) + int(s[3]) != int(o6[3]) and
+          check_chop(bz, b6, s, lz, lens, wrong, o6) == [
+              f"customer 1: holdout starts at {int(wrong[1])} + {int(s[1])}, not {int(o6[1])}"])
 
 
 def g5():
