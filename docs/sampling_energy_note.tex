@@ -1,0 +1,815 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,booktabs,graphicx,microtype,tabularx,xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black]{hyperref}
+\usepackage{caption}
+\captionsetup{font=small}
+\usepackage[round]{natbib}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\norm}[1]{\lVert #1 \rVert}
+\title{\textbf{Running the model forward, and measuring how far it lands}\\[2pt]
+\large The sampling procedure and the energy-distance yardstick behind the\\
+generative-failure figure, with the numbers from the fixed engine (R36i)}
+\author{ProductGPT technical note (R36)}
+\date{19 October 2026; revised 31 October 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent The generative-failure figure makes two claims. A model that predicts
+the next decision as well as any other family produces whole purchase histories
+far from the real ones when it is run on its own output. And most of that
+distance comes from feeding the model its own decisions and acquisitions, not
+from the per-step distribution or from the randomness of the loot boxes. This
+note documents how each generator is sampled
+(Sections~\ref{sec:objects}--\ref{sec:generators}), how the distance between
+generated and real histories is defined and calibrated
+(Section~\ref{sec:metric}), and the numbers from R36i, which re-ran every arm
+on the fixed rollout engine with one set of 300 customers and one band
+(Section~\ref{sec:results}). On the fixed engine, free running lands at 41
+times the band and loses to independent draws. Scheduled sampling closes 59\%
+of the gap, and the Markov chain stays closer than every neural generator.
+Teacher forcing is outside the band (5.3 times), so only the weaker claim
+survives: most of the distance comes from the feedback loop. Arm C and teacher
+forcing read the realised holdout; they diagnose the failure but cannot
+simulate a policy. Section~\ref{sec:weakness} shows why energy distance is
+nearly blind to a wrong dependence structure, and Section~\ref{sec:perstat}
+breaks the distance down by statistic. Later runs on the same yardstick show
+classical parametric choice models generating ten times closer than free-running
+ProductGPT while predicting worse. Section~\ref{sec:caveats} lists the
+qualifications.
+\end{abstract}
+
+\section{What has to be built}\label{sec:question}
+
+Everything up to R35 evaluated the model one step at a time: given a customer's
+\emph{true} history, how well is the next decision predicted? A marketing
+application wants more than that. To simulate a policy, the model has to
+generate whole sequences, conditioning on what it generated a moment earlier.
+If the model's conditionals were correctly specified, the chain rule would
+deliver valid sequences for free. The two criteria come apart only under
+misspecification, and they come apart for a specific reason. Training evaluates
+the model on histories drawn from the \emph{data}; a rollout visits histories
+drawn from the \emph{model}. A sequence-level failure alongside good one-step
+fit is therefore a specification test that the likelihood cannot perform.
+
+Testing this needs two instruments. The first is a way to generate holdout
+histories under different feedback regimes, so the source of any failure can
+be located. The second is a distance between a \emph{set} of generated histories
+and the set of real ones, with a reference scale that says how large a distance
+real data produces against itself.
+
+\section{Objects and notation}\label{sec:objects}
+
+Customers are indexed $i = 1,\dots,N$, and their occasions (rows of the panel)
+$t = 1,\dots,T_i$, in calendar order. Each occasion belongs to a campaign
+$c(t)$. The holdout is $\mathcal{H}_i = \{t : c(t) \ge 28\}$, campaigns 28--30,
+and $t_i^0 = \min \mathcal{H}_i$ is the customer's first holdout occasion.
+
+\begin{itemize}
+\item \textbf{Decision} $y_{it} \in \{1,\dots,9\}$: one or ten pulls
+  (Buy1, Buy10) on one of four banners (regular, figure A, figure B, weapon),
+  or NotBuy.
+\item \textbf{Offers} $o_{it}$: the featured products on each banner at $t$.
+  Offers are set by the firm and are treated as exogenous.
+\item \textbf{Acquisitions} $a_{it}$: up to ten product identifiers received
+  as a result of $y_{it}$.
+\item \textbf{Elapsed time} $\Delta_{it}$ since the previous occasion.
+\end{itemize}
+
+\noindent Row $t$ of the model's input carries the outcome of the decision made
+at $t-1$. The model's information at $t$ is therefore
+\begin{equation}
+x_{it} = \big(o_{i,1:t},\; a_{i,0:t-1},\; y_{i,0:t-1},\; \Delta_{i,1:t}\big),
+\label{eq:info}
+\end{equation}
+truncated to the last 384 rows, plus a summary of the inventory accumulated
+before that window. Everything the model knows about holdings, duplicates and
+satiation is a function of the acquisition stream $a$. The trained model is a
+nine-way conditional distribution $p_\theta(y \mid x)$, fitted by one-step
+maximum likelihood on observed histories.
+
+What a decision yields is determined outside the model, by an acquisition
+environment
+\begin{equation}
+a_{it} \sim Q\big(\,\cdot \mid y_{it}, o_{it}, \pi_{it}\big),
+\qquad \pi_{i,t+1} = U(\pi_{it}, y_{it}, a_{it}),
+\label{eq:env}
+\end{equation}
+where $\pi_{it}$ is the customer's pity state (pulls since the last 4-star and
+5-star, per banner) and $U$ is its deterministic update.
+
+\section{The acquisition environment \texorpdfstring{$Q$}{Q}}\label{sec:env}
+
+\paragraph{How many items.} A purchase fills $n$ slots, with $n$ drawn from the
+empirical distribution of filled slots given the decision. This is calibrated
+rather than fixed at 1 or 10 because the event-level attribution in the data is
+imperfect: a Buy10 fills ten slots only 72\% of the time, and one slot 23\% of
+the time.
+
+\paragraph{Rarity of each pull.} Rarity follows the published rates with pity.
+If $s$ pulls have passed since the last 5-star on a banner, the next pull is a
+5-star with probability
+\begin{equation}
+p_5(s) =
+\begin{cases}
+\beta & s+1 < \text{soft},\\
+\min\{1,\; \beta + (s+2-\text{soft})\cdot 10\beta\} & \text{soft} \le s+1 < \text{hard},\\
+1 & s+1 \ge \text{hard}.
+\end{cases}
+\end{equation}
+4-stars follow the same rule with their own counter. The parameters are those
+published for the game:
+
+\begin{center}
+\small
+\begin{tabular}{lcccccc}
+\toprule
+banner & $\beta_5$ & soft$_5$ & hard$_5$ & $\beta_4$ & soft$_4$ & hard$_4$\\
+\midrule
+regular, figure A, figure B & 0.006 & 74 & 90 & 0.051 & 9 & 10\\
+weapon & 0.007 & 63 & 80 & 0.060 & 9 & 10\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent The data agree with them closely: measured 5-star rates on the
+calibration campaigns are 1.25\% (figure banners) and 1.73\% (weapon), against
+published effective rates of about 1.6\% and 1.85\%. The 4-star rate is 13\%,
+against a published 13\%.
+
+\paragraph{Which product.} When a 5-star lands on a banner whose featured slot
+is filled, it is the featured product, a standard-pool product, or another
+limited product. The three shares are taken from the calibration campaigns. A
+non-featured 5-star, and every 3- or 4-star, is drawn by its calibration
+frequency among the products that banner actually yielded at that rarity.
+
+The game's ``50/50 guarantee'' (after losing the coin flip once, the next 5-star
+is featured; two losses on the weapon banner) is implemented, but it is switched
+off by the data. Under a guarantee after $L$ losses, the long-run featured share
+is $1/\sum_{s=0}^{L}(1-q)^s$. That share can never fall below 0.5 on a character
+banner or 0.333 on the weapon banner. The measured shares are 0.323 (figure A),
+0.146 (figure B) and 0.335 (weapon), so no $q$ reproduces them, and the
+environment uses the unconditional three-way split (R36h). This is a finding
+about the data's attribution of acquisitions to banners, not about the game.
+
+\paragraph{What it is fitted on.} Calibration rows ($c(t) < 28$) of the first
+600 customers in the \emph{training} set. The environment never sees the
+customers being scored or any holdout campaign.
+
+\paragraph{Warm-up.} Before a customer's rollout starts, the pity counters are
+advanced by replaying that customer's real history up to $t_i^0$, so each
+simulated customer enters the holdout with the pity state the real customer had.
+
+\section{The generators}\label{sec:generators}
+
+\subsection{Common protocol}
+
+\begin{enumerate}
+\item \textbf{Customers.} $N=300$ out-of-sample customers, drawn at random
+  (seed 0) from the cell that produces the headline NLL (customers held out of
+  training, scored on the holdout campaigns): 22,490 holdout occasions in all.
+\item \textbf{Models and runs.} The neural arms use b33, the gen-5 model with
+  campaign effects and a holding half-life of 2, and b35, the same model
+  trained with scheduled sampling. Every arm has three runs: training seeds
+  1--3 for model arms, three draw seeds otherwise.
+\item \textbf{Context window.} The attention context is cut to the last 384
+  occasions to fit in memory, with everything acquired before the window carried
+  in. This costs b33 $+0.0007$ nats of teacher-forced NLL against the full 1,024
+  (0.8615 against 0.8608 on the same 300 customers).
+\item \textbf{Fixed occasion grid.} The occasions and their elapsed times are
+  held at their observed values; only the decision at each occasion is
+  generated. The model consumes elapsed time but does not predict it, so it
+  cannot generate the grid. What is tested is therefore the composition and
+  dependence of decisions \emph{given when occasions arrive}, not purchase
+  timing or frequency.
+\item \textbf{Real past, real offers.} Rows before $t_i^0$ are the customer's
+  real history. Offers are real throughout.
+\item \textbf{Replicates.} $M=8$ independent replicates per customer, so 2,400
+  generated histories are compared with 300 real ones.
+\item \textbf{Sampling rule.} Ancestral sampling at temperature 1 with no top-$k$
+  or nucleus truncation: draw $u \sim U(0,1)$ and take the first class whose
+  cumulative probability exceeds $u$. Truncated decoding would change the very
+  distribution under test.
+\end{enumerate}
+
+\subsection{Free running}
+
+For each holdout occasion $t \in \mathcal{H}_i$, in order:
+\begin{align}
+\tilde y_{it} &\sim p_\theta\big(\,\cdot \mid \tilde x_{it}\big), \\
+\tilde a_{it} &\sim Q\big(\,\cdot \mid \tilde y_{it}, o_{it}, \tilde\pi_{it}\big),
+\qquad \tilde \pi_{i,t+1} = U(\tilde\pi_{it}, \tilde y_{it}, \tilde a_{it}),\\
+\tilde x_{i,t+1} &= \tilde x_{it} \text{ with } (\tilde y_{it}, \tilde a_{it})
+\text{ appended as the previous decision and the new acquisitions.}
+\end{align}
+After the first holdout occasion nothing in the decision or acquisition streams
+is real. The model conditions on what \emph{it} decided and on what the lottery
+gave it. Inventory, duplicate counts and every satiation term update
+automatically, because they are functions of the acquisition stream.
+
+\subsection{Teacher forcing}
+
+A decision is drawn at every occasion, but it is recorded and never fed back:
+\begin{equation}
+\tilde y_{it} \sim p_\theta\big(\,\cdot \mid x_{it}^{\text{obs}}\big),
+\qquad t \in \mathcal{H}_i .
+\end{equation}
+Each draw is a one-step forecast from the true history. The scored history is
+$(\tilde y, a^{\text{obs}})$.
+
+\subsection{Arm C: real decisions, lottery re-drawn}
+
+No model is involved. The customer's observed decisions are replayed, and the
+environment re-draws what they yielded:
+$\tilde a_{it} \sim Q(\,\cdot \mid y_{it}^{\text{obs}}, o_{it}, \tilde\pi_{it})$.
+This isolates the randomness of the loot boxes, together with any error in the
+environment.
+
+\subsection{The two-by-two}
+
+The four arms differ only in which streams are fed back:
+
+\begin{center}
+\small
+\begin{tabular}{lll}
+\toprule
+ & acquisitions real & acquisitions simulated \\
+\midrule
+decisions real    & the data itself & arm C \\
+decisions sampled & teacher forcing & free running \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Only free running is a simulator.} Arm C replays each customer's
+actual holdout decisions. Teacher forcing feeds the model the customer's actual
+holdout decisions and acquisitions at every occasion. Both therefore need the
+realised future, which by definition does not exist for a policy that has not
+been run. They have no managerial use as simulators. Their role is diagnostic:
+each switches off one feedback channel, which locates where the failure enters.
+The yardstick for a generator a manager could actually use is free running,
+judged against the baselines below. The results table keeps the two groups
+apart, and they should not be ranked on one scale.
+
+\subsection{Baselines}
+
+Both baselines use the same grid, environment, warm-up and replicates as the
+model, so a difference between them and the model is a difference in the
+decision process alone. Both are estimated on the same training customers'
+calibration rows as the environment.
+\begin{itemize}
+\item \textbf{Independent draws:} $\tilde y_{it} \sim \hat q(y)$, the
+  calibration-period shares of the nine decisions. This matches every marginal
+  share by construction and must fail anything that depends on order.
+\item \textbf{First-order Markov chain:}
+  $\tilde y_{it} \sim \hat q(y \mid \tilde y_{i,t-1})$, a $9\times 9$
+  transition matrix plus a row for ``no previous decision'', Laplace-smoothed
+  ($\alpha = 1$). This 81-number model is the bar a deep sequence model has to
+  clear.
+\end{itemize}
+
+\subsection{Scheduled sampling}
+
+The rollout is identical to free running. What changes is how the model was
+\emph{trained} \citep{bengio2015}. In each minibatch:
+\begin{enumerate}
+\item A first forward pass under teacher forcing draws
+  $\hat y_{t} \sim p_\theta(\cdot \mid x_t^{\text{obs}})$ at every row.
+\item Each row's previous-decision input is replaced by the model's own draw
+  $\hat y_{t-1}$ with probability $p_e = p\cdot\min\{1, (e+1)/10\}$, which ramps
+  to $p$ over the first ten epochs $e$. Otherwise it keeps the observed
+  $y_{t-1}$.
+\item The loss is computed on a second pass with the corrupted inputs.
+\end{enumerate}
+Only the decision stream is corrupted; acquisitions stay real in training. The
+objective is known to be inconsistent \citep{huszar2015}, so it is reported as
+a remedy, not as a contribution.
+
+\section{Measuring the distance between sets of histories}\label{sec:metric}
+
+\subsection{Step 1: summarise each history as 27 statistics}
+
+Each holdout history $h$, real or generated, is reduced to a vector
+$\phi(h) \in \mathbb{R}^{27}$. The model was not fitted to any of these
+statistics. All are computed over the holdout occasions only.
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}l c X@{}}
+\toprule
+statistic & count & definition \\
+\midrule
+spend & 1 & total pulls bought (Buy1 $=1$, Buy10 $=10$) \\
+incidence & 1 & share of occasions with a purchase \\
+decision shares & 9 & share of occasions with each of the nine decisions \\
+longest NotBuy run & 1 & longest run of consecutive NotBuy occasions \\
+buy runs & 2 & mean and longest run of consecutive purchase occasions \\
+switch rate & 1 & share of consecutive purchases that change banner \\
+spend concentration & 1 & Herfindahl index of spend across the four banners \\
+autocorrelation & 5 & of the purchase indicator, lags 1--5 \\
+escalation & 1 & $P(\text{Buy10 at } t \mid \text{Buy10 at } t-1)$ \\
+persistence & 1 & $P(\text{purchase at } t \mid \text{purchase at } t-1)$ \\
+satiation signature & 4 & $P(\text{buy on banner } b \mid \text{holding } k
+  \text{ copies of } b\text{'s featured product})$, $k = 0,1,2,3{+}$, pooled over
+  figure A, figure B and weapon \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\noindent The satiation signature is the statistic the inventory stream exists
+to get right. It is computed from the acquisition stream that accompanies the
+decisions: the real one for real and teacher-forced histories, the simulated
+one for free running, arm C and the baselines.
+
+\subsection{Step 2: standardise}
+
+Each statistic is centred and scaled by the \emph{real} set's mean and standard
+deviation. Undefined values (escalation for a customer who never bought a
+Buy10, an autocorrelation with too few occasions, an empty satiation bucket)
+are set to the real mean, that is to zero after standardisation, for both sets
+alike. A missing value cannot by itself create a discrepancy. Distances below
+are therefore measured in units of real-data standard deviations, in a
+27-dimensional space.
+
+\subsection{Step 3: energy distance}
+
+Let $X$ and $X'$ be independent draws of $\phi(h)$ from the real distribution
+$F$, and $Y, Y'$ independent draws from the generated distribution $G$. The
+energy distance \citep{szekely2013} is
+\begin{equation}
+\mathcal{E}(F,G) \;=\; 2\,\E\norm{X - Y} \;-\; \E\norm{X - X'} \;-\; \E\norm{Y - Y'},
+\label{eq:ed}
+\end{equation}
+with $\norm{\cdot}$ the Euclidean norm. In words: twice the average distance
+between a real and a generated history, minus the average distance among real
+histories and among generated ones. If the generator is faithful, a generated
+history sits as far from a real one as two real ones sit from each other, and
+the three terms cancel.
+
+Two properties make it the right yardstick here. First,
+$\mathcal{E}(F,G) \ge 0$, with equality if and only if $F = G$ (given finite
+first moments). Second, it compares the whole joint distribution, not just
+means, because it equals a weighted distance between characteristic functions,
+\begin{equation}
+\mathcal{E}(F,G) \;=\; \frac{1}{c_d}\int_{\mathbb{R}^d}
+\frac{|\varphi_F(s) - \varphi_G(s)|^2}{\norm{s}^{d+1}}\, ds,
+\qquad c_d = \frac{\pi^{(d+1)/2}}{\Gamma\big((d+1)/2\big)},
+\end{equation}
+with $d = 27$. A difference in level, spread, shape or co-movement of the
+statistics all count.
+
+\paragraph{The estimator is signed.} With samples $x_1,\dots,x_n$ and
+$y_1,\dots,y_m$,
+\begin{equation}
+\widehat{\mathcal{E}} \;=\; \frac{2}{nm}\sum_{i=1}^{n}\sum_{j=1}^{m}\norm{x_i - y_j}
+\;-\; \frac{1}{n(n-1)}\sum_{i \ne i'}\norm{x_i - x_{i'}}
+\;-\; \frac{1}{m(m-1)}\sum_{j \ne j'}\norm{y_j - y_{j'}} .
+\label{eq:edhat}
+\end{equation}
+The within-set sums leave out each point's zero distance to itself, which makes
+$\widehat{\mathcal{E}}$ unbiased: $\E\,\widehat{\mathcal{E}} = \mathcal{E}(F,G)$
+at every sample size. When $F = G$ it therefore scatters around zero and is
+negative about half the time. A negative value, such as arm C's $-0.010$, means
+``indistinguishable from real'', not ``closer than real''.
+
+\subsection{Step 4: the reference band}
+
+A raw distance has no natural scale, so it is calibrated against real data
+scored against itself. Let $R$ be the $n_R$ real customers, $S$ the
+$n_R \cdot M$ generated histories, and $h = \lfloor n_R/2 \rfloor$.
+
+\begin{enumerate}
+\item \textbf{Null distribution.} For $b = 1,\dots,B$, split $R$ at random into
+  two disjoint halves of size $h$ and compute $\widehat{\mathcal{E}}_b^{0}$
+  between them. With $n_R = 300$, $h = 150$ and $B = 120$ (R36i, as in R36c
+  and R36e).
+\item \textbf{Observed value.} For $b = 1,\dots,B$, draw $h$ customers from $R$
+  and $h$ histories from $S$, each without replacement, compute
+  $\widehat{\mathcal{E}}_b$, and average:
+  $\bar{\mathcal{E}} = B^{-1}\sum_b \widehat{\mathcal{E}}_b$. Drawing at the
+  same size $h$ makes each draw directly comparable with a null draw.
+\item \textbf{Verdict.} The generator is \emph{inside the band} if
+  $\bar{\mathcal{E}} \le q_{0.95}\big(\{\widehat{\mathcal{E}}_b^{0}\}\big)$.
+  The scripts also report
+  $z = \big(\bar{\mathcal{E}} - \text{mean}(\widehat{\mathcal{E}}^0)\big) /
+  \text{sd}(\widehat{\mathcal{E}}^0)$, and the share of null draws at or above
+  $\bar{\mathcal{E}}$.
+\end{enumerate}
+
+\subsection{How to read the verdict}
+
+The averaged statistic $\bar{\mathcal{E}}$ estimates the population distance
+$\mathcal{E}(F,G)$, and its expectation does not depend on $h$. The band does:
+under $F=G$ the estimator's spread shrinks roughly as $1/h$. The recorded bands
+fit that rate: 0.373 at 30 against 30, and 0.078 at 150 against 150, a ratio of
+4.8 against a sample-size ratio of 5.
+
+Two consequences follow.
+\begin{itemize}
+\item \textbf{It is a tolerance criterion, not a 5\% test.} The rule compares an
+  average over many draws with the spread of a single draw. It asks whether the
+  generator's distance from the real data is no larger than the distance between
+  two random halves of real customers typically is. A generator with a small but
+  real discrepancy ($0 < \mathcal{E} < 0.078$ at this sample size) passes. That
+  is a defensible standard, but the paper should state it in these words, or
+  replace it with a permutation test on the full samples if a formal test is
+  wanted.
+\item \textbf{Verdicts at different sample sizes are not comparable.} A distance
+  that passes at 60 customers can fail at 300, because the band narrows while
+  the estimate does not. This is exactly what happened to the teacher-forced
+  arm (Section~\ref{sec:caveats}).
+\end{itemize}
+
+\subsection{The weakness: dependence among the statistics}\label{sec:weakness}
+
+Energy distance reacts strongly when the distribution of a statistic is wrong,
+and weakly when every statistic's distribution is right but the statistics are
+wrongly \emph{linked} across customers \citep{pinson2013}. In marketing terms, a
+generator could reproduce the spread of spend across customers and the spread of
+satiation across customers, yet attach strong satiation to light spenders
+instead of heavy ones. It would be generating the wrong customer types, which
+is what targeting depends on. Energy distance would barely register it.
+
+\paragraph{Why.} Take the squared distance between a real and a generated
+history. With $X$ and $Y$ independent, and means $\mu$ and $\nu$,
+\begin{equation}
+\E\norm{X - Y}^2 \;=\; \sum_{k=1}^{d}\Big[\operatorname{Var}X_k +
+\operatorname{Var}Y_k + (\mu_k - \nu_k)^2\Big].
+\end{equation}
+No covariance appears: the squared distance depends on each statistic's
+distribution separately. Energy distance uses the unsquared distance, so the
+dependence structure enters only through how spread out $\norm{X-Y}^2$ is
+around its mean, which is a second-order effect. In 27 dimensions the distance
+also concentrates tightly around its root mean square, which shrinks that
+second-order effect further. A delta-method expansion makes this exact enough to
+quantify. For Gaussian statistics with unit variances, dimension $d$ and
+covariance matrices $\Sigma_X, \Sigma_Y$:
+\begin{align}
+\mathcal{E} &\;\approx\; \frac{\norm{\Sigma_X - \Sigma_Y}_F^2}{2\,(2d)^{3/2}}
+&&\text{margins right, dependence wrong,} \label{eq:weak}\\
+\mathcal{E} &\;\approx\; \frac{\norm{\mu - \nu}^2}{\sqrt{2d}}
+&&\text{dependence right, means wrong.} \nonumber
+\end{align}
+With $d = 27$ the two denominators are 794 and 7.3. Per unit of squared error, a
+wrong mean weighs about 110 times as much as a wrong covariance.
+
+\paragraph{How large, in practice.} Table~\ref{tab:weak} simulates 27 standard
+normal statistics at the R36 sample sizes (300 real customers against 2,400
+generated histories, 120 split-half draws), using the same code as R36.
+
+\begin{table}[h]
+\centering
+\small
+\caption{Energy distance against a wrong dependence structure and against a
+wrong mean, 27 standard normal statistics. ``Predicted'' is
+equation~\eqref{eq:weak}; ``population'' uses 2,500 against 2,500, three
+repetitions; ``R36 procedure'' is \texttt{seq\_metrics.compare} at R36's sizes,
+with that case's own band. The classifier is trained on 300 against 300.}
+\label{tab:weak}
+\begin{tabular}{@{}lrrrrcr@{}}
+\toprule
+what the generator gets wrong & predicted & population & R36 proc. & band & verdict & AUC \\
+\midrule
+nothing & 0.000 & 0.001 & $-0.001$ & 0.024 & inside & 0.45 \\
+one correlation, $+0.5 \to -0.5$ & 0.003 & 0.002 & 0.004 & 0.023 & inside & 0.59 \\
+all 351 correlations, $0.3 \to 0$ & 0.080 & 0.050 & 0.048 & 0.048 & at the edge & 0.78 \\
+all 351 correlations, $0.5 \to 0$ & 0.221 & 0.127 & 0.113 & 0.046 & outside & 0.91 \\
+one mean, shifted by 0.75 s.d. & 0.076 & 0.078 & 0.079 & 0.021 & outside & 0.62 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent Reversing the sign of a correlation, a qualitative error about which
+customers do what, moves the distance by 0.004, a sixth of its band. Deleting
+every one of the 351 correlations of 0.3 only just reaches the band. Shifting a
+single statistic's mean by three quarters of a standard deviation lands at
+almost four times its band. The expansion is accurate for small errors and
+overstates large ones, but the ordering is not in doubt. The bands here are for
+Gaussian statistics; the real band (0.078) differs because the real statistics
+are skewed, discrete and partly imputed, so each case should be read against
+its own band.
+
+\paragraph{The consequence for the figure.} A generator inside the band is
+shown to have the right distribution for each statistic and roughly the right
+overall spread. It is not shown to have the right links between statistics.
+Note also that the classifier does the opposite: it detects the correlation
+errors better than the mean shift. The per-statistic tables in
+Appendix~\ref{app:perstat} cannot help here at all: a one-dimensional distance
+is blind to dependence by construction. A direct check would compare the
+$27\times27$ correlation matrices of real and generated statistics, with a
+split-half band for that comparison too.
+
+\paragraph{The complements.} Because dependence is what a rollout puts at risk,
+the pipeline reports two further measures.
+\begin{itemize}
+\item A \textbf{classifier two-sample test} \citep{lopezpaz2017}: gradient-boosted
+  trees trained to tell real from generated, five-fold cross-validated AUC with
+  a 95\% interval. An AUC of 0.5 means indistinguishable. Permutation importances
+  name the statistics the classifier leans on, which is the diagnosis.
+\item A \textbf{variogram score} \citep{scheuerer2015}, which compares the
+  spread of every pair of statistics and is sensitive to dependence.
+\end{itemize}
+
+\section{The numbers on the fixed engine (R36i)}\label{sec:results}
+
+R36i (job 42879, 20 October 2026) scored every arm in one process: one draw of
+300 customers, eight replicates, one scaler and one band, on the rollout engine
+fixed on 16 October. The band reproduced the earlier runs' $q_{0.95}$ of
+0.0781258 exactly, so these are the same customers as before. Every arm run
+generated a decision on exactly the 179,920 live occasions ($8 \times 22{,}490$),
+with no mismatched occasions and no real acquisition altered.
+
+\begin{table}[h]
+\centering
+\small
+\caption{Energy distance between generated and real holdout histories, R36i.
+Mean $\pm$ s.d.\ over three runs; band $q_{0.95} = 0.078$; AUC is the mean
+classifier two-sample AUC. The last column is the pre-fix value.
+$^{*}$Pre-fix teacher forcing was b29\_hl2 on 60 customers, against a band of
+0.373.}
+\label{tab:results}
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+arm & $\bar{\mathcal{E}}$ & $\times$ band & $z$ & AUC & pre-fix \\
+\midrule
+\multicolumn{6}{@{}l}{\emph{Generators a manager could use}}\\
+first-order Markov chain & $0.784 \pm 0.006$ & 10.0 & 21.8 & 0.885 & 0.711 \\
+scheduled sampling, $p = 0.35$ (b35) & $1.311 \pm 0.299$ & 16.8 & 36.5 & 0.841 & 0.928 \\
+scheduled sampling, $p = 0.15$ (b35) & $1.710 \pm 0.389$ & 21.9 & 47.5 & 0.851 & 1.390 \\
+independent draws & $2.468 \pm 0.008$ & 31.6 & 68.6 & 0.913 & 2.190 \\
+free running (b33) & $3.169 \pm 0.381$ & 40.6 & 88.1 & 0.869 & 2.352 \\
+\midrule
+\multicolumn{6}{@{}l}{\emph{Diagnostic controls: they read the realised holdout}}\\
+arm C & $-0.000 \pm 0.002$ & 0.0 & 0.0 & 0.552 & $-0.010$ \\
+teacher forcing (b33) & $0.417 \pm 0.080$ & 5.3 & 11.6 & 0.851 & $0.307^{*}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{The pre-registered verdicts}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lp{0.56\linewidth}@{}}
+\toprule
+verdict & result \\
+\midrule
+V1 the lottery is harmless & holds: arm C inside the band on 3 of 3 draws \\
+V2 the closed loop fails & holds: free running outside on 3 of 3 seeds \\
+V3 the per-step law is indistinguishable & \textbf{fails}: teacher forcing outside on 3 of 3 seeds \\
+V4 the loop makes most of the gap & holds: teacher forcing removes 88\%, 85\% and 87\% of the free-running distance \\
+V5 the ordering & holds: arm C $<$ teacher forcing $<$ Markov $<$ free running \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent The diagnosis therefore survives in its weak form, as pre-registered.
+The paper can say that \emph{most of the distance is created by feeding the
+model its own output}. It can no longer say that teacher-forced sequences are
+indistinguishable from real ones.
+
+\paragraph{What goes wrong.} Pooled over the holdout occasions, free running
+abandons NotBuy and inflates the rare multi-pull decisions:
+
+\begin{center}
+\small
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+ & NotBuy & Buy10 regular & Buy10 figure B & Buy1 weapon & Buy10 weapon \\
+\midrule
+observed & 0.425 & 0.003 & 0.013 & 0.044 & 0.010 \\
+teacher forcing & 0.352 & 0.012 & 0.032 & 0.061 & 0.020 \\
+free running & 0.156 & 0.033 & 0.111 & 0.159 & 0.183 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{The remedy.} Energy falls monotonically in the scheduled-sampling
+probability: 3.169, 1.710, 1.311 for $p = 0, 0.15, 0.35$. Both remedied models
+are lower than b33 on every seed. At $p = 0.35$ the remedy closes 59\% of the
+gap (61\% before the fix), but it is still 17 times the band and behind the
+Markov chain on every seed (its best seed 1.129, against 0.791).
+
+\subsection{Which statistics give each generator away}\label{sec:perstat}
+
+Table~\ref{tab:overview} applies the same yardstick to each statistic alone
+(Appendix~\ref{app:perstat} has the definition and the 27 full tables). Each
+entry is the arm's mean energy as a multiple of that statistic's own band.
+
+\begin{table}[h]
+\centering
+\small
+\caption{Energy by statistic, in multiples of each statistic's real-vs-real
+band (R36i, mean over three runs). Grey: inside the band on every run. Bottom
+row: statistics outside the band on every run.}
+\label{tab:overview}
+\InputIfFileExists{r36i_per_statistic_overview.tex}{}{\emph{(overview not
+generated)}}
+\end{table}
+
+\begin{enumerate}
+\item \textbf{Free running fails almost everywhere, mainly by overspending.} It
+  is outside on every run for 24 of 27 statistics. Customers buy 349 pulls on
+  average over the holdout against 110, choose NotBuy on 9\% of occasions
+  against 28\% (averaged per customer), and their longest NotBuy run is 3.9
+  occasions against 10.9. The worst statistic is the Buy10 weapon share, 179
+  times its band.
+\item \textbf{Scheduled sampling halves the damage and keeps the pattern.} At
+  $p = 0.35$, 15 of 27 statistics are outside on every run, and spend is still
+  double (219 pulls). It does repair the banner switch rate and spend
+  concentration.
+\item \textbf{The Markov chain gets the levels right and misses longer memory.}
+  Spend, the mean buying run, persistence and escalation are inside on every
+  run. It fails on everything that needs more than one step of history: the
+  purchase autocorrelation at lags 2--5 (30 to 42 times the band) and the
+  longest NotBuy run (16 times).
+\item \textbf{Independent draws fail everything that depends on order}: the
+  switch rate is 79 times its band and the lag-1 autocorrelation 101 times.
+\item \textbf{Arm C passes 26 of 27.} Its one failure is the satiation signature
+  at one copy (7.7 times the band). The lottery leaves 68\% of customers without
+  a defined value, against 50\% in the data, and those who have one buy again at
+  0.26 against 0.12. The Markov chain (7.4) and independent draws (6.9) fail
+  this statistic by the same amount, so for them it is the lottery's error. For
+  free running (58 times) most of it is the model's.
+\item \textbf{Teacher forcing misses run lengths and switching}: 16 of 27 are
+  outside on every run, the worst being the lag-1 autocorrelation (17 times),
+  the switch rate (16) and the longest NotBuy run (9.2). This matches the joint
+  classifier, which separates teacher forcing from real data almost as well as
+  it separates free running (AUC 0.851 against 0.869).
+\end{enumerate}
+
+\subsection{The same yardstick in later work}
+
+Two later experiments reused this yardstick, with the same customers, band and
+lottery, and reproduced R36i's model-free arms to the fourth decimal or better.
+\begin{itemize}
+\item \textbf{R43 step 2 (29 October).} The gen-6 streaming model and the tuned
+  gen-5 model free-run at 2.617 and 2.563 (34 and 33 times the band), with no
+  difference between them. Teacher forcing removes 76--90\% of the distance in
+  both, and the Markov chain is ahead of every seed of every family.
+\item \textbf{R46 part B (27 October; branch \texttt{r46-parametric}, not yet
+  merged).} Classical parametric choice models with lagged decisions, run
+  structure and holdings free-run at 0.308 (R4) and 0.318 (R6, with latent
+  classes): ten times closer than free-running ProductGPT and closer than the
+  Markov chain, although R6 predicts worse one step ahead (holdout NLL 0.983
+  against the GRU's 0.886). Nothing passes the band. This is the sharpest instance of the
+  paper's spine: the weaker predictor is by far the better simulator.
+\end{itemize}
+
+\section{Qualifications}\label{sec:caveats}
+
+\paragraph{1. The earlier numbers ran on a rollout engine with four defects.}
+They were found and fixed on 16 October 2026 (commit \texttt{7aca2a3}), and
+R36i re-ran every arm on the fixed engine:
+\begin{enumerate}
+\item \textbf{Pre-window inventory dropped.} The rollout never passed the
+  inventory accumulated before the 384-row window, so slots-type models
+  (b29\_hl2, b33, b35) started every rollout with an empty inventory.
+\item \textbf{Wrong item mix.} The environment drew every 4-star from the
+  character pool, even on the weapon banner, and never gave a regular-banner
+  5-star weapon. The real 4-star weapon shares are 0.32--0.74 by banner; 5-star
+  weapons are 0.23 of regular-banner 5-stars.
+\item \textbf{Early loop exit.} The loop stopped at the first row where no
+  customer in a batch was active, so a customer whose holdout began after such
+  a gap was scored as an empty history.
+\item \textbf{Pity warm-up off by one.} The warm-up stopped at the batch's
+  earliest holdout row and missed each customer's last real outcome.
+\end{enumerate}
+
+\noindent \emph{What the fix changed.} Free running rose from 2.352 to 3.169
+(by 0.62 to 1.00 per seed) and now loses to independent draws on every seed.
+The arms without a model moved too (independent draws by $+0.28$, Markov by
+$+0.07$). Only defects 3 and 4 can reach them, so part of every pre-fix
+number's error was the engine's, shared by all arms. Free running rose about
+three times as much as independent draws, which is consistent with defects 1
+and 2 (what the model feeds itself) adding to it; this run cannot separate the
+four. Defect 3 did reach the pre-fix runs: it skipped 939 of the 22,490 holdout
+occasions (4.2\%), belonging to 10 of the 300 customers. Still on the pre-fix
+engine, and not to be quoted without that qualifier: the R36c table comparing
+model variants (b18 cells, b29\_hl2), R37 (the duplet), R38 and R42.
+
+\paragraph{2. Teacher forcing is not indistinguishable from real data.} Before
+the fix its verdict ``inside the band'' compared 0.307 with a 60-customer band
+of 0.373, five times wider than the 300-customer band
+(Section~\ref{sec:metric}). On 300 customers it is 0.417, 5.3 times the band,
+outside on every seed, at $z = 11.6$. It is also \emph{detectable}: the
+classifier separates it from real data almost as well as free running (AUC
+0.851 against 0.869), on run lengths and switching. It generates NotBuy on
+35\% of occasions against 43\% observed. What survives is the contrast: it
+removes 85--88\% of the free-running distance. The defensible statement is
+that \emph{most} of the generative gap comes from feeding the model its own
+output, not that the per-step distribution is exact.
+
+\paragraph{3. ``Inside the band'' is a tolerance, and it ignores dependence.}
+The rule asks whether a generator lands no farther from the data than two random
+halves of real customers do; it is not a 5\% test (Section~\ref{sec:metric}).
+Being inside also says nothing about whether the statistics are correctly linked
+across customers, because energy distance barely sees dependence
+(Section~\ref{sec:weakness}).
+
+\paragraph{4. The lottery has a small, located error.} Arm C's classifier
+interval excludes 0.5 on every draw (0.518--0.607), so under R36's stricter rule
+(the classifier's interval must contain 0.5) not even arm C passes. The
+per-statistic breakdown locates the error: the satiation signature at one copy,
+7.7 times its band, and nothing else. Every arm that draws acquisitions from the
+lottery inherits it. The identity process is also calibrated rather than taken
+from the game, because the data's featured shares are incompatible with the
+game's guarantee. The lottery has to be tightened before it carries a policy
+number.
+
+\paragraph{5. What the design cannot test.} The occasion grid is fixed, so the
+exercise says nothing about purchase timing or frequency; that needs a duration
+head. The 384-occasion window is priced at $+0.0007$ nats for b33, with the
+pre-window inventory carried in.
+
+\paragraph{Status.} Every number in Section~\ref{sec:results} is from R36i
+(commit \texttt{3ef735e} on \texttt{gen6-streaming}) and can be quoted without
+the pre-fix qualifier, for the gen-5 b33 and b35 models at context 384. The
+figure now uses these numbers; arm C and teacher forcing appear only in its
+two-by-two, as diagnostic controls, and its yardstick panel ranks only the
+generators a manager could use.
+
+\appendix
+\section{Energy distance one statistic at a time}\label{app:perstat}
+
+The joint distance says how far a generator lands; the tables below say on which
+statistics. For statistic $k$, with $F_k$ and $G_k$ its real and generated
+distribution functions,
+\begin{equation}
+\mathcal{E}_k \;=\; 2\,\E|X_k - Y_k| - \E|X_k - X_k'| - \E|Y_k - Y_k'|
+\;=\; 2\int_{-\infty}^{\infty}\big(F_k(x) - G_k(x)\big)^2\,dx,
+\end{equation}
+twice the squared area between the two distribution functions. Each table uses
+the same standardised values, the same rule for undefined values, the same
+estimator and the same split-half draws as the joint distance, so each
+statistic has its own band built on the same customer splits. The source is
+R36i's saved per-customer statistics, which reproduce all 21 run-level joint
+energies behind Table~\ref{tab:results} to within $10^{-15}$. The tables are generated by
+\texttt{scripts/r36i\_per\_statistic.py}.
+
+\paragraph{Columns.} \emph{Energy} is the mean $\pm$ s.d.\ over the three runs
+of each arm (training seeds for model arms, draw seeds otherwise). \emph{Inside}
+counts the runs at or below the band. \emph{Gen.\ mean} is the generated
+statistic's average in its natural units, to set against the real mean in the
+caption. \emph{Undefined} is the share of generated histories for which the
+statistic does not exist (no Buy10 to escalate from, an empty satiation
+bucket).
+
+\paragraph{Four cautions.}
+\begin{enumerate}
+\item The tables are blind to dependence by construction
+  (Section~\ref{sec:weakness}). A generator can pass all 27 and still fail
+  jointly.
+\item Undefined values are set to the real mean, as in the joint distance. A
+  generator that leaves a statistic undefined more often than real customers do
+  therefore shows a distance on it. That is informative in itself, which is why
+  the undefined share is shown. For the satiation signature at $k = 2$ and
+  $k = 3{+}$, undefined for 89\% and 97\% of real customers, the bands are
+  tiny (0.003 and 0.001), and the ratios mostly reflect how often the statistic
+  is defined.
+\item With 27 statistics and a 95\% band, an exact generator would still land
+  outside on about one statistic in twenty. Read the pattern across statistics,
+  not a single exceedance.
+\item The lottery's own error sits on the satiation signature at one copy
+  (arm C, 7.7 times its band), and every arm that uses the lottery inherits it.
+\end{enumerate}
+
+\InputIfFileExists{r36i_per_statistic_tables.tex}{}{%
+\begin{center}\fbox{\parbox{0.9\linewidth}{\small No tables yet. They are
+generated by \texttt{scripts/r36i\_per\_statistic.py} from the per-customer
+statistics that the R36i run saves. The pre-fix runs saved only summaries, so
+their per-statistic distances cannot be recovered without re-running them.}}
+\end{center}}
+
+\begin{thebibliography}{9}
+\bibitem[Bengio et al.(2015)]{bengio2015}
+Bengio, S., Vinyals, O., Jaitly, N., and Shazeer, N. (2015).
+Scheduled sampling for sequence prediction with recurrent neural networks.
+\emph{Advances in Neural Information Processing Systems} 28.
+
+\bibitem[Husz\'ar(2015)]{huszar2015}
+Husz\'ar, F. (2015). How (not) to train your generative model: scheduled
+sampling, likelihood, adversary? arXiv:1511.05101.
+
+\bibitem[Lopez-Paz and Oquab(2017)]{lopezpaz2017}
+Lopez-Paz, D. and Oquab, M. (2017). Revisiting classifier two-sample tests.
+\emph{International Conference on Learning Representations}.
+
+\bibitem[Pinson and Tastu(2013)]{pinson2013}
+Pinson, P. and Tastu, J. (2013). Discrimination ability of the energy score.
+Technical report, Technical University of Denmark.
+
+\bibitem[Scheuerer and Hamill(2015)]{scheuerer2015}
+Scheuerer, M. and Hamill, T. M. (2015). Variogram-based proper scoring rules for
+probabilistic forecasts of multivariate quantities. \emph{Monthly Weather
+Review} 143, 1321--1334.
+
+\bibitem[Sz\'ekely and Rizzo(2013)]{szekely2013}
+Sz\'ekely, G. J. and Rizzo, M. L. (2013). Energy statistics: A class of
+statistics based on distances. \emph{Journal of Statistical Planning and
+Inference} 143(8), 1249--1272.
+\end{thebibliography}
+
+\end{document}

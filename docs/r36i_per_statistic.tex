@@ -1,0 +1,135 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,booktabs,microtype,xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!50!black]{hyperref}
+\usepackage{caption}
+\captionsetup{font=small}
+\newcommand{\E}{\mathbb{E}}
+\title{\textbf{Which statistics give each generator away?}\\[2pt]
+\large Energy distance one statistic at a time, on the fixed engine (R36i)}
+\author{ProductGPT technical note (R36i)}
+\date{31 October 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent The joint energy distance says how far a generator's holdout
+histories land from the real ones. This note breaks it down by statistic: one
+energy distance, with its own real-vs-real band, for each of the 27 statistics,
+for every arm of R36i. Free running fails almost everywhere, mainly by
+overspending. Scheduled sampling halves the damage but keeps the same pattern.
+The Markov chain gets the levels right and misses memory beyond one step.
+Teacher forcing misses run lengths and switching. Arm C fails on one statistic
+only, the satiation signature at one copy, which locates the lottery's known
+residual and qualifies that statistic for every arm that uses the lottery.
+\end{abstract}
+
+\section{Data and definition}
+
+\paragraph{Source.} R36i, job 42879 (20 October 2026), on the fixed rollout
+engine: 300 out-of-sample customers, holdout campaigns 28--30, eight replicates
+per customer, three runs per arm (training seeds for model arms, draw seeds
+otherwise). The arms are those of the generative-failure figure: free running
+of the b33 model, scheduled sampling at $p = 0.15$ and $0.35$ (b35), the
+first-order Markov chain, independent draws, and the two diagnostic controls,
+arm C and teacher forcing. The controls read the realised holdout, so they
+locate failures but cannot simulate a policy. The saved per-customer statistics
+reproduce all 21 joint energies in the ledger to within $10^{-15}$.
+
+\paragraph{Definition.} For statistic $k$, with real and generated distribution
+functions $F_k$ and $G_k$,
+\begin{equation}
+\mathcal{E}_k \;=\; 2\,\E|X_k - Y_k| - \E|X_k - X_k'| - \E|Y_k - Y_k'|
+\;=\; 2\int_{-\infty}^{\infty}\big(F_k(x) - G_k(x)\big)^2\,dx .
+\end{equation}
+Each statistic is standardised by the real mean and standard deviation, and
+undefined values are set to the real mean, exactly as for the joint distance.
+The estimator, the matched half-samples (150 against 150) and the 120
+split-half draws are also the same, so each statistic's band is built on the
+same customer splits as the joint band (0.078).
+
+\paragraph{How to read the numbers.} Four cautions.
+\begin{enumerate}
+\item \textbf{These tables cannot see dependence.} A one-dimensional distance
+  is blind to how statistics move together. A generator could pass all 27 and
+  still fail jointly.
+\item \textbf{Sparse statistics have tiny bands.} The satiation signature at
+  $k = 2$ and $k = 3{+}$ is undefined for 89\% and 97\% of real customers (few
+  hold two or more copies of a featured product while it is on offer). Their
+  bands are therefore 0.003 and 0.001, and their ratios mostly reflect how often
+  the statistic is defined, which the ``undefined'' column shows.
+\item \textbf{27 statistics, one band each.} An exact generator would still land
+  outside on about one statistic in twenty. Read patterns, not single
+  exceedances.
+\item \textbf{The lottery's own error.} Arm C, which uses real decisions and the
+  simulated lottery, fails on the satiation signature at one copy (Section~2).
+  Every arm that draws acquisitions from the lottery inherits that error.
+\end{enumerate}
+
+\section{The overview}
+
+Table~\ref{tab:overview} expresses each arm's mean energy as a multiple of that
+statistic's band. Values above 1 are outside on average; grey values are inside
+on all three runs.
+
+\begin{table}[h]
+\centering
+\small
+\caption{Mean energy over three runs, in multiples of each statistic's
+real-vs-real band. Grey: inside the band on every run. Bottom row: statistics
+outside the band on every run.}
+\label{tab:overview}
+\input{r36i_per_statistic_overview.tex}
+\end{table}
+
+\paragraph{What it shows.}
+\begin{enumerate}
+\item \textbf{Free running fails almost everywhere, mainly by overspending.} It
+  is outside on every run for 24 of 27 statistics. Customers spend 349 pulls on
+  average over the holdout against 110 in the data, choose NotBuy on 9\% of
+  occasions against 28\%, and their longest NotBuy run is 3.9 occasions against
+  10.9. The worst single statistic is the share of Buy10 on the weapon banner,
+  179 times its band. The satiation signature at one copy is 58 times its band,
+  far beyond the lottery's own error (8 times, item 5).
+\item \textbf{Scheduled sampling halves the damage and keeps the pattern.} At
+  $p = 0.35$, 15 of 27 statistics are outside on every run. Spend is still
+  double the real level (219 pulls), and the Buy10 weapon share is 72 times its
+  band. It does repair the banner switch rate and spend concentration, both
+  inside on every run.
+\item \textbf{The Markov chain gets the levels right and misses longer memory.}
+  Spend, the mean buying run, persistence and escalation are inside on every
+  run. What fails is everything that needs more than one step of history: the
+  purchase autocorrelation at lags 2--5 (30 to 42 times the band) and the
+  longest NotBuy run (16 times). 20 of 27 are outside on every run.
+\item \textbf{Independent draws fail everything that depends on order}, as
+  designed: the switch rate is 79 times its band and the lag-1 autocorrelation
+  101 times. 25 of 27 are outside.
+\item \textbf{Arm C passes 26 of 27.} Its one failure is the satiation signature
+  at one copy, 7.7 times the band. With real decisions, the simulated lottery
+  leaves 68\% of customers without a defined value, against 50\% in the data,
+  and those who have one buy again at 0.26 against 0.12. The lottery hands
+  featured copies to different customers, or at different moments, from those
+  the data record. The Markov chain (7.4) and independent draws (6.9) fail this
+  statistic by the same amount, so for them it is the lottery's error, not
+  theirs.
+\item \textbf{Teacher forcing misses run lengths and switching.} 16 of 27 are
+  outside on every run. The worst are the lag-1 autocorrelation (17 times), the
+  switch rate (16), the Buy10 figure-B share (9.4), the longest NotBuy run
+  (9.2) and the Buy10 regular share (8.6). Spend is 153 pulls against 110. This
+  matches the joint classifier, which separates teacher forcing from real data
+  mainly on run length and switching.
+\end{enumerate}
+
+\section{The 27 tables}
+
+Each table gives, for every arm, the mean $\pm$ s.d.\ of the energy over its
+three runs, the mean $z$ against the split-half null, the number of runs inside
+the band, the generated statistic's average in its natural units (the real
+average is in the caption), and the share of generated histories for which the
+statistic is undefined.
+
+\bigskip
+\input{r36i_per_statistic_tables.tex}
+
+\end{document}
