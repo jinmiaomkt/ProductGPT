@@ -18,9 +18,13 @@ call the same function.
     R6     R4 with K latent classes                        d_asc, d_inc, d_loy, d_nb, cls
     H6     part C's heterogeneity-only null: R4 without    asc, offer, a_out, out, holdings,
            decision state dependence, K classes            d_asc, cls
+    R6B    part D: R6 with the banner stock on its own     R6 + a_ban (appended last)
+           decay; the buy and ten-pull stocks keep a_dec
 
 H6 drops the lag matrix (constants instead), the runs and Bawa terms, the
 decision stocks and the state-dependent class deviations; it nests in R6.
+R6B nests R6 at a_ban = a_dec. It is fitted only: policy.Tracker carries one
+decision decay, so R6B has no rollout.
 
 The lag matrix makes constants redundant (every row has exactly one previous
 decision), so rungs with `lag` carry no `asc`; in R6 the class deviations of
@@ -34,7 +38,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 import torch
 
-RUNGS = ("M0", "M1", "R0", "R1", "R1b", "R2", "R3", "R4", "R5", "R6", "H6")
+RUNGS = ("M0", "M1", "R0", "R1", "R1b", "R2", "R3", "R4", "R5", "R6", "H6", "R6B")
 
 ALT_BANNER = torch.tensor([0, 0, 1, 1, 2, 2, 3, 3, -1])
 BUY = torch.tensor([1, 1, 1, 1, 1, 1, 1, 1, 0], dtype=torch.float64)
@@ -43,11 +47,15 @@ BAN = torch.stack([(ALT_BANNER == b).to(torch.float64) for b in range(4)])   # (
 
 
 def flags(rung: str) -> Dict[str, bool]:
+    if rung == "R6B":
+        # part D: R6 with the banner stock on its own decay
+        return dict(flags("R6"), ban_decay=True)
     i = RUNGS.index(rung)
     if rung == "H6":
         # part C: everything R4 has except decision state dependence
         return dict(asc=True, lag=False, offer=True, rho=False, runs=False, stocks=False,
-                    outstock=True, hold=True, nest=False, classes=True, sd_classes=False)
+                    outstock=True, hold=True, nest=False, classes=True, sd_classes=False,
+                    ban_decay=False)
     # Amendment 7 (26 Oct): R5 is off the ladder and R6 is R4 + latent
     # classes, so the nest belongs to R5 alone.
     f = dict(asc=rung in ("M0", "R0"), lag=rung == "M1" or i >= RUNGS.index("R1"),
@@ -57,6 +65,7 @@ def flags(rung: str) -> Dict[str, bool]:
              classes=rung == "R6")
     f["outstock"] = f["stocks"]
     f["sd_classes"] = f["classes"]
+    f["ban_decay"] = False
     return f
 
 
@@ -105,6 +114,9 @@ class Spec:
             if f["sd_classes"]:
                 add("d_inc", K1); add("d_loy", K1); add("d_nb", K1)
             add("cls", K1)
+        if f["ban_decay"]:
+            # last, so R6B's vector is R6's with one entry appended
+            add("a_ban", 1)
         self.flags = f
 
     @property
@@ -137,7 +149,8 @@ class Spec:
         if "lag" in off and marginal is not None:
             a, b = off["lag"]
             th[a:b] = torch.as_tensor(np.tile(np.log(marginal[:8] / marginal[8]), 10))
-        for n, v in (("a_dec", logit(0.7)), ("a_out", logit(0.9)), ("rho", logit(0.05))):
+        for n, v in (("a_dec", logit(0.7)), ("a_out", logit(0.9)), ("rho", logit(0.05)),
+                     ("a_ban", logit(0.7))):
             if n in off:
                 th[off[n][0]] = v
         if "nest" in off:
@@ -203,14 +216,21 @@ def utilities(spec: Spec, P: Dict[str, torch.Tensor], X: Dict[str, torch.Tensor]
         r = X["runs"]
         U = U + (r[..., 0] * P["runs"][0] + r[..., 1] * P["runs"][1])[..., None] * BUY \
             + (r[..., 2] * P["runs"][2])[..., None] * TEN
-    LD = None
+    LD = SB = None
     if f["stocks"]:
         a_d, a_o = torch.sigmoid(P["a_dec"][0]), torch.sigmoid(P["a_out"][0])
         # A rollout carries the stocks row by row (parametric/policy.py) and
         # passes them in; the T1 scorer computes them here from `ind`.
         LD = X["LD"] if "LD" in X else decay(X["ind"][..., :6], a_d)
         LO = X["LO"] if "LO" in X else decay(X["ind"][..., 6:9], a_o)
-        U = U + P["loy"][0] * (LD[..., :4] @ BAN)
+        LB = LD[..., :4]
+        if f["ban_decay"]:
+            # R6B: the four banner stocks on a_ban; buy and ten-pull keep a_dec
+            if "LD" in X:
+                raise NotImplementedError("R6B has no rollout: policy.Tracker carries one decision decay")
+            LB = decay(X["ind"][..., :4], torch.sigmoid(P["a_ban"][0]))
+        SB = LB @ BAN
+        U = U + P["loy"][0] * SB
         U = U + (P["inc"][0] * LD[..., 4] + LO @ P["out"])[..., None] * BUY \
             + (P["tenl"][0] * LD[..., 5])[..., None] * TEN
     elif f["outstock"]:
@@ -235,7 +255,7 @@ def utilities(spec: Spec, P: Dict[str, torch.Tensor], X: Dict[str, torch.Tensor]
         if f["sd_classes"]:
             d_inc, d_loy, d_nb = zk(P["d_inc"]), zk(P["d_loy"]), zk(P["d_nb"])
             dU = dU + (d_inc[:, None, None] * LD[None, ..., 4] + d_nb[:, None, None] * X["runs"][None, ..., 0])[..., None] * BUY \
-                + d_loy[:, None, None, None] * (LD[..., :4] @ BAN)[None]
+                + d_loy[:, None, None, None] * SB[None]
         U = U + dU
     return U
 

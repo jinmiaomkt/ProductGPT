@@ -118,6 +118,8 @@ class Tracker:
 
     def __init__(self, spec: M.Spec, theta: torch.Tensor, ctx: Context,
                  seq: Dict[str, np.ndarray]):
+        if spec.flags["ban_decay"]:
+            raise NotImplementedError("R6B (part D) is fitted only; the Tracker carries one decision decay")
         self.spec, self.theta, self.ctx = spec, theta, ctx
         self.prev = seq["prev"].astype(np.int64).copy()
         self.obt = seq["obtained"].astype(np.int64).copy()

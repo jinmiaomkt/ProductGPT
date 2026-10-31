@@ -1,0 +1,97 @@
+#!/bin/bash
+# ============================================================================
+# R46 part D (banner loyalty), CPU arrays. Pre-registered in EXPERIMENTS.md,
+# R46 part D (approved by Jin 31 Oct 2026). No GPU, no laptop.
+#
+#   STAGE=TEST               D-G1 (test_r46_banner.py), then part C's, B's and A's suites
+#   STAGE=SMOKE1  -J 0-2     150 customers, 2 rounds: real R6B, real K = 12, null stage 1
+#   STAGE=SMOKE2  -J 0-1     the same on the smoke's null table: R6B, K = 12
+#   STAGE=REALB   -J 0-1     real rows, R6B starts 0-1 (with the sandwich, D-G3)
+#   STAGE=REALK   -J 0-5     real rows, K = 9 starts 0-2, K = 12 starts 0-2   (long queue)
+#   STAGE=NULL1   -J 0-19    fresh null (b) table r: simulate, save, fit R6 (K = 6)
+#   STAGE=NULL2B  -J 0-39    per table: R6B starts 0-1                         (after NULL1)
+#   STAGE=NULL2K  -J 0-119   per table: K = 9 starts 0-2, K = 12 starts 0-2    (after NULL1, long)
+#   STAGE=CMP                the read-out (SMOKE=1 for the smoke's)
+#
+# scripts/submit_r46d.sh submits the full chain; K > 6 elements go to `long`
+# with 24 h by qsub overrides (-q long -l walltime=24:00:00).
+# Log per element: ~/ProductGPT/logs/r46d_<stage>_<array id>_<index>.log
+# Results: $R46/partD/{real,null/stage1,null/fits}/<tag>.json, tables in $R46/partD/null/tables/
+# ============================================================================
+#PBS -N r46d
+#PBS -l select=1:ncpus=8:mem=24GB
+#PBS -q short
+#PBS -l walltime=12:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+
+set -eo pipefail
+module purge
+module load python/3.11.4
+cd "$PBS_O_WORKDIR"
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
+export PYTHONUNBUFFERED=1
+export OMP_NUM_THREADS=8 NCPUS=8 MKL_NUM_THREADS=8
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+R46="${R46:-/storage/home/jinmiao/ProductGPT/runs/r46}"
+export R46
+STAGE="${STAGE:-TEST}"
+IDX="${PBS_ARRAY_INDEX:-0}"
+JID="${PBS_JOBID%%.*}"
+JID="${JID//[\[\]]/_}"
+LOG=/storage/home/jinmiao/ProductGPT/logs/r46d_${STAGE}_${JID}_${IDX}.log
+exec > >(tee -a "$LOG") 2>&1
+echo "R46 part D stage $STAGE element $IDX on $(hostname) at $(date), commit $(git rev-parse --short HEAD)"
+
+DB=(python scripts/r46d_banner.py)
+SMOKE_DIR="$R46/partD_smoke"
+KARMS=(K9 K9 K9 K12 K12 K12)
+
+case "$STAGE" in
+  TEST)
+    python scripts/test_r46_banner.py
+    python scripts/test_r46_identify.py
+    python scripts/test_r46_policy.py
+    python scripts/test_r46_parametric.py --quick
+    ;;
+  SMOKE1)
+    S=(--smoke --out-dir "$SMOKE_DIR")
+    case "$IDX" in
+      0) "${DB[@]}" --job real --arm R6B --start 0 "${S[@]}" ;;
+      1) "${DB[@]}" --job real --arm K12 --start 1 "${S[@]}" ;;
+      2) "${DB[@]}" --job null1 --rep 0 "${S[@]}" ;;
+    esac
+    ;;
+  SMOKE2)
+    ARMS=(R6B K12); STARTS=(1 1)
+    "${DB[@]}" --job null2 --rep 0 --arm "${ARMS[$IDX]}" --start "${STARTS[$IDX]}" --smoke --out-dir "$SMOKE_DIR"
+    ;;
+  REALB)
+    "${DB[@]}" --job real --arm R6B --start "$IDX"
+    ;;
+  REALK)
+    "${DB[@]}" --job real --arm "${KARMS[$IDX]}" --start $((IDX % 3))
+    ;;
+  NULL1)
+    "${DB[@]}" --job null1 --rep "$IDX"
+    ;;
+  NULL2B)
+    "${DB[@]}" --job null2 --rep $((IDX / 2)) --arm R6B --start $((IDX % 2))
+    ;;
+  NULL2K)
+    K=$((IDX % 6))
+    "${DB[@]}" --job null2 --rep $((IDX / 6)) --arm "${KARMS[$K]}" --start $((K % 3))
+    ;;
+  CMP)
+    if [ -n "${SMOKE:-}" ]; then
+      python scripts/r46d_compare.py --out-dir "$SMOKE_DIR" --smoke
+    else
+      python scripts/r46d_compare.py --out-dir "$R46/partD"
+    fi
+    ;;
+  *) echo "unknown STAGE $STAGE"; exit 2 ;;
+esac
+echo "R46 part D stage $STAGE element $IDX done at $(date)"

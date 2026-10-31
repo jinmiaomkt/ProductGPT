@@ -14,6 +14,7 @@ simulated table sees exactly the state the draws were made from (gate C-G2).
     synthetic_table(...)        the simulated occasion table (fit.py's input)
     check_design / check_simulation   gates C-G1 and C-G2
     embed_h6, continuous_h6     the Keane nulls
+    split_classes(...)          part D: K classes to more by splitting the heaviest
     quantities(spec, theta)     the SD and HG quantities, as torch scalars
 
 Nothing here prints a record: counts, shares and checksums only.
@@ -280,6 +281,45 @@ def continuous_h6(theta_h6: torch.Tensor, K: int, *, K_big: int = 200, seed: int
     return sb, pack(sb, parts), info
 
 
+DEV_KEYS = ("d_asc", "d_inc", "d_loy", "d_nb")
+
+
+def split_classes(spec: M.Spec, theta: torch.Tensor, K_new: int, *, eps: float, seed: int
+                  ) -> Tuple[M.Spec, torch.Tensor, Dict]:
+    """Part D: a K-class estimate as a K_new-class start, by splitting the
+    K_new - K heaviest classes.
+
+    A split class becomes two, each with half its weight. The copy keeps every
+    class parameter, and its class constants (d_asc) are moved by eps * z,
+    z ~ N(0, I) from `seed`. The originals keep their places (class 0 stays the
+    reference) and the copies follow, heaviest first. At eps = 0 the mixture
+    is the K-class model exactly."""
+    K = spec.K
+    n_split = K_new - K
+    if not spec.flags["classes"] or not 0 < n_split <= K:
+        raise ValueError(f"split_classes: {spec.rung} K={K} to K={K_new}")
+    P = spec.unpack(theta)
+    zk = lambda v: torch.cat([torch.zeros(1, *v.shape[1:], dtype=F64), v], 0)
+    logw = torch.log_softmax(zk(P["cls"]), 0)
+    split = np.argsort(-logw.numpy(), kind="stable")[:n_split]
+    sel = torch.as_tensor(split, dtype=torch.long)
+    devs = [n for n in DEV_KEYS if n in P]
+    full = {n: zk(P[n]) for n in devs}                                 # (K, ...) with class 0's zeros
+    z = np.random.default_rng(seed).standard_normal((n_split, full["d_asc"].shape[1]))
+    new = {n: torch.cat([full[n], full[n][sel]], 0) for n in devs}
+    new["d_asc"][K:] = new["d_asc"][K:] + eps * torch.as_tensor(z, dtype=F64)
+    lw = logw.clone()
+    lw[sel] = lw[sel] - np.log(2.0)
+    lw = torch.cat([lw, lw[sel]])
+    s_new = M.Spec(spec.rung, K=K_new)
+    parts = {n: v for n, v in P.items() if n not in devs and n != "cls"}
+    parts.update({n: new[n][1:] for n in devs})
+    parts["cls"] = lw[1:] - lw[0]
+    info = dict(K=K, K_new=K_new, split=split.tolist(), eps=eps, seed=seed,
+                weights=logw.exp().round(decimals=5).tolist())
+    return s_new, pack(s_new, parts), info
+
+
 def bootstrap_weights(n: int, seed: int) -> np.ndarray:
     """Customer bootstrap: how many times each of n customers is drawn."""
     return np.random.default_rng(seed).multinomial(n, np.full(n, 1.0 / n)).astype(np.int64)
@@ -312,7 +352,7 @@ def quantities(spec: M.Spec, theta: torch.Tensor) -> Dict[str, torch.Tensor]:
         q["repeat_med"] = 0.5 * (s[3] + s[4])
         for j in range(8):
             q[f"repeat[{j}]"] = rep[j]
-    for n, label in (("a_dec", "hl_dec"), ("a_out", "hl_out")):
+    for n, label in (("a_dec", "hl_dec"), ("a_out", "hl_out"), ("a_ban", "hl_ban")):
         if n in P:
             q[label] = np.log(0.5) / torch.log(torch.sigmoid(P[n][0]))
     if "bawa" in P:

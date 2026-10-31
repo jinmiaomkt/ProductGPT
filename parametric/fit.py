@@ -350,7 +350,7 @@ def transformed(spec, theta, V) -> Dict[str, Dict[str, float]]:
         se = float(torch.sqrt(g @ Vz @ g)) if Vz is not None else float("nan")
         out[name] = {"value": float(v), "se": se}
 
-    for n, label in (("a_dec", "decisions"), ("a_out", "outcomes")):
+    for n, label in (("a_dec", "decisions"), ("a_out", "outcomes"), ("a_ban", "banner")):
         if n in off:
             i = off[n][0]
             add(f"alpha_{label}", lambda t, i=i: sig(t[i]))
@@ -473,7 +473,7 @@ def main() -> None:
         raise SystemExit(f"--score-roles: unknown roles {sorted(set(eval_roles) - set(EVAL_ROLES))}")
 
     tag = {"R5": f"R5_s{a.start}", "R6": f"R6_K{a.K}_s{a.start}",
-           "H6": f"H6_K{a.K}_s{a.start}"}.get(a.rung, a.rung)
+           "H6": f"H6_K{a.K}_s{a.start}", "R6B": f"R6B_K{a.K}_s{a.start}"}.get(a.rung, a.rung)
     out = Path(a.out_dir) / tag
     out.mkdir(parents=True, exist_ok=True)
     log(f"R46 fit {tag}  threads={a.threads}  torch {torch.__version__}")
