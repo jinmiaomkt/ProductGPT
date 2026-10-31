@@ -6248,3 +6248,64 @@ real one}) / 21. The minimum is 0.048, as in part C.
 - The data's own rarity rates: the environment stays as in part C, so part
   D's null (b) is part C's (part C caveat).
 - The generation evaluation (deferred, 27 Oct).
+
+### R46 — part D launched (31 Oct 2026): every gate passes at smoke size; the full chain is on HPCC CPUs
+
+- **Code** at `72659bb` on `r46-parametric`, delivered to `work_r46` by git
+  bundle. Nothing was changed from the plan.
+  - `parametric/model.py`: rung R6B. Its vector is R6's with `a_ban` appended
+    last, so no existing layout moves. The four banner stocks decay at
+    `a_ban`; buy and ten-pull keep `a_dec`.
+  - R6B is fitted only. `policy.Tracker` refuses it, and so does a carried
+    stock.
+  - `identify.split_classes` and `hl_ban` in `quantities`.
+  - The scripts are those the plan named, plus `scripts/submit_r46d.sh`.
+- **D-G1** (TEST, job 44633): 8 of 8 on HPCC CPU, after the same 8 on the
+  laptop.
+  - R6B at `a_ban = a_dec` is R6 to 0.0.
+  - Moving `a_ban` with loyalty off changes no utility (0.0). With loyalty on,
+    the change matches the formula to 1.7e-15, and NotBuy never moves.
+  - An ε = 0 split reproduces the K = 6 likelihood and predictive to 1.5e-14
+    at K = 9 and 12, for R6 and R6B. It splits the heaviest classes and halves
+    their weights, and ε moves only the copies.
+  - `hl_ban` and the class-weighted loyalty read back to 2.7e-15.
+  - The nested split's objective is K = 6's plus the ridge on the duplicated
+    terms, to 3.0e-16.
+  - Part C's suite 9/9, part B's 13/13, part A's 5/5: the existing layouts are
+    unchanged.
+  - One test was corrected before any HPCC run. B8 first used the small
+    panel's own per-row ridge (0.01 / n). That made `a_ban`'s ridge term
+    (1.9e-5) larger than three L-BFGS rounds could recover.
+    - The gradient matched finite differences, and every L-BFGS step went
+      downhill.
+    - B8 now uses the real design's per-row ridge.
+    - At 1.06M training rows, the same term is 2.5e-9 on the real data and
+      about 1.1e-7 on a null table (`a_dec` at a 90-occasion half-life). Both
+      are inside D-G2's 1e-6.
+- **Smoke** (150 customers, 2 rounds; jobs 44634, 44635, read-out 44636):
+  every gate passes.
+  - C-G1, C-G2 (block 0.0, probabilities 5.6e-16), C-G5 (table and feature
+    checksums equal stage 1's), D-G2, and D-G3 on the real smoke.
+  - The read-out ran the verdict code on one table: a code path, not a
+    test.
+  - Peak memory 1.8–3.7 GB. K > 6 elements are given 32 GB, which costs no
+    slots at 8 CPUs each.
+  - The Newton polish stops at once on a nested K = 12 start ("Hessian not
+    negative definite", from the duplicated classes), so the L-BFGS point is
+    kept, as designed.
+- **Full chain** submitted 31 Oct 16:42 from `work_r46` at `72659bb`:
+  - REALB 44650 (2, short); REALK 44651 (6, long, 32 GB);
+  - NULL1 44652 (20, short);
+  - NULL2B 44653 (40, short) and NULL2K 44654 (120, long, 32 GB), both
+    `afterok` NULL1;
+  - CMP 44655 (`afterany`).
+
+  All 28 first-wave elements started at once.
+  - From the smoke and part C's logs: a full-size L-BFGS round takes about
+    8.5 min at K = 6 and about 12 min at K = 12, and a Newton step about
+    17–35 min.
+  - Projected: R6B ≤ 7 h with the sandwich; K = 12 about 4–8 h; NULL1 about
+    3.5 h (part C's longest 5.7 h).
+- **The read-out** is `python scripts/r46d_compare.py --out-dir $R46/partD`,
+  run once by CMP. It reads verdicts only when every table is complete and
+  every gate passes.
