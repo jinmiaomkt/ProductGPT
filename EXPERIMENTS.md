@@ -5205,6 +5205,135 @@ run after it.
 - **Queue:** the runs wait behind R47 B3 (44629/44630 running) and part B
   (44632).
 
+### R45 step 2 — DESIGN (fixed 31 Oct 2026, before any step-2 rollout and before part B or C was read): generation on chopped histories
+
+**Question (the R45 plan's step 2).** Does a missing start damage generation?
+Part A found it costs one-step prediction nothing detectable. Generation could
+differ: R37 traced the free-running spiral to the inventory channel, and a chop
+restarts the inventory at zero.
+
+**Fixed by the R45 plan (26 Oct):** the R36c protocol on the fixed engine; F, Z
+and Z+flag at k ∈ {1, 2, 4}, 3 seeds each; the depth curve of the energy. Jin's
+go-ahead to build it (31 Oct): "Yes, build it".
+
+**Design choices made now.**
+- **Only the model's input is chopped.**
+  - Each customer's first k active campaigns are removed with `ChopView`
+    (calendar, state zero, flag set for chopped customers). That is exactly how
+    part A trained and tested Z and ZF.
+  - The environment keeps the full history: its pity counters are warmed on
+    the full real prefix (`rollout(..., pity_from=...)`).
+  - A censored player's game still knows their pity; only the data lost it.
+    Warming on the chopped prefix would mix the model's information loss with a
+    wrong game.
+- **Scored in R43 step 2's frame.** The generated rows are placed back on the
+  full history (row t of the chopped history is row s + t of the full one), then
+  cropped to R36i's 384-row frame. So the scoring uses the same 300 customers (sha
+  `be33f73d819b13eb`), the same 22,490 holdout rows and the same band (q95
+  0.0781). R43's yardsticks can be quoted alongside (Markov 0.784, i.i.d. 2.468).
+- **"F at k" is read as F handed a censored history.** F on the full history
+  does not depend on k. F at k is part B's generation analogue.
+- **Additions to the plan's 27 rollouts.**
+  - The k = 0 reference: 3 rollouts, R43's G6 on seeds 1–3.
+  - Teacher-forced controls for every arm: 30 rollouts, no decision attached.
+  - The reason: R43 found the free-running seed sd (0.67) is 8.5× the band, so
+    at 3 seeds the free-running rule is weak. The teacher-forced seed sd was
+    0.04.
+- **The flag in generation (a fix).** Before this, the gen-6 step-by-step path
+  dropped the censoring flag: `advance` had no `censored` argument.
+  - `init_stream(censored)` now starts a flagged customer's GRU at
+    `censor_h0`, and `advance(censored)` passes the flag to every row.
+  - Training's `stream_forward` reuses `init_stream`. The numbers are
+    unchanged.
+
+| arm | checkpoint | model's input | role |
+|---|---|---|---|
+| F, k = 0 | `b39_g6w384` | full history | the reference (R43's G6) |
+| F, k = 1/2/4 | `b39_g6w384` | chopped, state zero | a full-history model handed a censored history |
+| Z, k = 1/2/4 | `r45a_Z_k<k>` | chopped, state zero | trained and generating on censored histories |
+| ZF, k = 1/2/4 | `r45a_ZF_k<k>` | chopped, state zero, flag | the same, with the censoring flag |
+
+Seeds 1–3; rollout seed 1000 + training seed; each arm free running (decides)
+and teacher forced (control). 20 arms × 3 seeds = 60 rollouts.
+
+**Rule (R43's, at the plan's 3 seeds).** Free-running energy, paired by seed. A
+difference counts if it has the same sign on all 3 seeds and |mean| > the band's
+q95. Its sign says "worse" or "better"; otherwise "no difference".
+1. **Damage:** Z(k) − F(0).
+2. **Fix:** ZF(k) − Z(k).
+3. **Input only:** F(k) − F(0).
+
+**Decision.** A generation cost of censoring exists if rule 1 says "worse" at
+any depth.
+- If it does, R45 reports it as the limit on simulating from censored
+  histories. Part C's verdict, which is about prediction only, then carries that
+  caveat for generation.
+- If not, R45 has no generation objection to censored histories.
+- **Known weakness, stated in advance.** Under a symmetric null, 3 same signs
+  happen 1 time in 4, and the free-running seed spread dwarfs the band. "Worse"
+  here is weak evidence, and "no difference" is expected whatever the truth.
+  The teacher-forced controls are the sensitive check.
+
+**Reported with no decision attached:** Z(k) − F(k); every rule on the
+teacher-forced arms; the depth curve; AUC; NotBuy share; the share of the
+distance teacher forcing removes; top functionals; minutes per rollout. Also
+continuity: F at k = 0 against R43's G6 on seeds 1–3. It is identical if the GPU
+reproduces the draws.
+
+**Predictions** (written before any step-2 rollout).
+1. Every free-running run is outside the band.
+2. Rule 1: no difference at every depth.
+3. Rule 2: no difference at every depth.
+4. Rule 3: no difference at every depth.
+5. Teacher forced, F(k) − F(0) is positive on the mean at every depth and grows
+   with depth. A model trained on complete histories has never seen an empty
+   inventory late in a history (part A prediction 4's logic).
+6. Teacher forced, Z(k) is below F(k) on the mean at every depth. A model
+   trained on censored histories handles them better than one that was not.
+
+**Gates** (checked by the job, logged, all hard).
+- **Suites:** rollout fixes, seq metrics, gen 6, R45 censoring, and the new
+  `test_r45_generate.py` (16 checks, listed under Code below).
+- **Checkpoints:** all 21 found exactly once. Each shares R44's frozen
+  configuration and data keys with F on its seed. Z and ZF carry calendar, depth
+  k, state zero and `both`; only ZF has the flag.
+- **The frame:** cropped real functionals identical to the frame's.
+- **The chop:**
+  - Every chopped row equals full row s + t.
+  - Chopped plus kept rows equal the full length.
+  - Each holdout starts s rows earlier.
+  - k = 0 changes nothing.
+- **k = 0 through the chop path** equals R43's rollout on chunk 0, draw for draw
+  as scored.
+- **Every run:** mismatch 0, altered 0, rows outside the frame 0, and 179,920
+  live rows.
+- **Smoke:** the k = 0 and k = 2 arms on 12 customers, and all 21 checkpoints
+  load.
+
+**Code:** branch `r45-censoring`.
+- `7bc4829` is the cherry-pick of R43's generation scripts (`ef7efba`).
+- `7b9eff7` has the step-2 code, the flag fix, the tests and the reader
+  `scripts/r45_step2_read.py`. The reader was written now and tested on synthetic
+  results: planted effects come back, and seven kinds of bad input stop it.
+- **Laptop CPU tests:** `test_r45_generate.py` passed 16 of 16.
+  - G1: with the flag, streaming draws equal full-prefix draws, free running
+    and teacher forced.
+  - G2: a flag-free model ignores the field.
+  - G3: the warm-up replays the full prefix call for call.
+  - G4: at k = 0 the chop path is the plain rollout; at k = 2 every generated
+    row lands on a live full-history row.
+  - G5: the flag's parameters get gradients.
+  - The gen-6, R45-censoring and rollout-fix suites still pass, with the same
+    numbers.
+
+**Budget.** 60 rollouts. At R43's gen-6 rate (3.5 minutes per full-history
+rollout on an L40S), that is at most 3.5 hours. Walltime 8 hours, one GPU, after
+a CPU gate on the short queue.
+- **Where it runs:** a new worktree, `~/ProductGPT/work_r45g`, so `work_r45` and
+  `work_r45c` stay as their jobs ran.
+- **Reading:** once, with `python3 scripts/r45_step2_read.py --r43
+  ~/ProductGPT/work_gen6/results/r43/step2_g6.json`.
+
 ### R47 — PLAN (approved by Jin 26 Oct 2026; part A done, B1–B2 submitted 27 Oct): do players forget their holdings, within and across campaigns?
 
 **Why.** Batches 33–34 withdrew the half-life claim: half-lives of 1, 2 and 5
