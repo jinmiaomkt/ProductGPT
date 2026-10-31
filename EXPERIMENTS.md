@@ -33,8 +33,8 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 44211–44258 | `b40_*` (48 runs, from `~/ProductGPT/work_gen6` at `a8ed3f9`) | 2026-10-26 | R44 stage 2: paired search, gen 5 and gen 6 | complete, all 48 exit 0; ranking in R44 |
 | 44320–44337 | `b41_*` (18 runs, from `~/ProductGPT/work_gen6` at `6b96b7d`) | 2026-10-27 | R44 stage 3: 6 candidates × seeds 11–13 | all 18 finished, exit 0 (qstat 2026-10-27); frozen gen-5 c06, gen-6 R43 |
 | 44361–44399 | `r45a_*` (39 runs, from `~/ProductGPT/work_r45` at `8fae1d7`) | 2026-10-27 | R45 part A: censored training, arms L/T/Z/ZF × k 1/2/4 + count, seeds 1–3 | all 39 finished, exit 0 (qstat 2026-10-27 18:30) |
-| 44400–44441 | `r47b1_*`, `r47b2_*` (42 runs, from `~/ProductGPT/work_r47` at `010fc89`) | 2026-10-27 | R47 B1–B2: half-life profile, full vs stock-only slots, seeds 1–3 | B1 (even ids) running/queued; B2 (odd ids) FAILED at 44401 on a stock_only bug, the other 20 cancelled; see R47 |
-| 44467–44487 | `r47b2_*` (21 runs, from `~/ProductGPT/work_r47fix` at `a3b2ac0`) | 2026-10-27 | R47 B2 re-run after the stock_only gradient fix | all 21 finished, exit 0, as did B1's 21 (44400–44440 even) (qstat 2026-10-28); unanalysed |
+| 44400–44441 | `r47b1_*`, `r47b2_*` (42 runs, from `~/ProductGPT/work_r47` at `010fc89`) | 2026-10-27 | R47 B1–B2: half-life profile, full vs stock-only slots, seeds 1–3 | B1 (even ids): all 21 exit 0, read 31 Oct (not identified); B2 (odd ids) FAILED at 44401 on a stock_only bug, the other 20 cancelled; see R47 |
+| 44467–44487 | `r47b2_*` (21 runs, from `~/ProductGPT/work_r47fix` at `a3b2ac0`) | 2026-10-27 | R47 B2 re-run after the stock_only gradient fix | all 21 finished, exit 0, as did B1's 21 (44400–44440 even) (qstat 2026-10-28); read once 31 Oct: forgetting not identified in B1 or B2 (R47) |
 | 44443–44446 | `b42_g5_c06_s2`–`s5` (4 runs, from `~/ProductGPT/work_gen6` at `9b3eccd`) | 2026-10-27 | R44 stage 4: gen-5 c06 seeds 2–5 (gen 6 reuses b39_g6w384) | all 4 finished, exit 0; holdout read once: tie (R44 stage 4) |
 | 44465 | `r43_strata` on gen-5 c06 seeds 1–5 (CPU, short queue) | 2026-10-27 | R44 stage 4: length strata for gen 5 | finished exit 0, self-check ok; result in R44 stage 4 |
 | 44522, 44523 | `r43_generate` gates, g5 / g6 (CPU, short queue, from `~/ProductGPT/work_gen6` at `ef7efba`) | 2026-10-28 | R43 step 2: test suites and 12-customer smokes | both exit 0; every gate passed |
@@ -5151,6 +5151,125 @@ campaign-boundary factor in gen 6's computed state, on a new branch
 - generation stays equal to the full pass;
 
 and a part-A script reading the HPCC data, aggregates only.
+
+**B1–B2 — RESULT (31 Oct 2026): forgetting is not identified from purchase
+likelihood, with or without the never-decaying channels.**
+
+*Read.*
+- All 42 runs exited 0, and none has an error line in its log.
+  - B1: 44400–44440 (even ids), from `010fc89`.
+  - B2: 44467–44487, from `a3b2ac0`.
+- Every run's cfg was checked by the reader: slot state, decay, frozen
+  half-life, δ = 1, window 384 and seed.
+- No run stopped for the time budget.
+- Reader: `scripts/r47_b12_read.py`, commit `8cc82e0`, run once from
+  `~/ProductGPT/work_r47fix`. Output:
+  `~/ProductGPT/work_r47fix/results/r47/b12_read.txt`.
+- The holdout is the headline cell, `outsample_users_holdout_period`, as in
+  R44.
+- The best finite half-life was chosen on campaign-27 validation only.
+
+*Profiles* (NLL, mean over seeds 1–3, with the seed sd):
+| half-life | B1 val | B1 holdout | B2 val | B2 holdout |
+|---|---|---|---|---|
+| 1 | 0.8805 (0.015) | 0.8834 (0.005) | 0.8839 (0.015) | 0.8840 (0.008) |
+| 2 | 0.8824 (0.010) | 0.8829 (0.002) | 0.8828 (0.017) | 0.8838 (0.006) |
+| 5 | **0.8783** (0.021) | 0.8819 (0.006) | 0.8865 (0.014) | 0.8898 (0.004) |
+| 10 | 0.8839 (0.020) | 0.8806 (0.007) | 0.8890 (0.004) | 0.8952 (0.007) |
+| 30 | 0.8859 (0.014) | 0.8900 (0.007) | 0.8811 (0.020) | 0.8921 (0.008) |
+| 100 | 0.8833 (0.011) | 0.8874 (0.003) | **0.8742** (0.013) | 0.8826 (0.004) |
+| ∞ (no decay) | 0.8816 (0.018) | 0.8869 (0.010) | 0.8836 (0.009) | 0.8878 (0.007) |
+
+*The rule:* d = NLL(∞) − NLL(best finite), paired by seed. A positive d
+means forgetting helps.
+- **B1, best finite half-life 5:**
+  - val +0.0156, −0.0106, +0.0047: mean +0.0032 against 2 sd 0.0263;
+  - holdout +0.0133, +0.0029, −0.0010: mean +0.0051 against 2 sd 0.0148.
+  - Signs are mixed in both, so **not identified**.
+- **B2, best finite half-life 100:**
+  - val −0.0025, +0.0084, +0.0223: mean +0.0094 against 2 sd 0.0248;
+  - holdout −0.0022, +0.0115, +0.0065: mean +0.0053 against 2 sd 0.0139.
+  - Signs are mixed in both, so **not identified**.
+- **The other two holdout cells** (no decision attached) point the same way:
+  - B1 means +0.0051 (in-sample holdout) and +0.0072 (out-of-sample
+    calibration);
+  - B2 means +0.0054 and +0.0091;
+  - neither part has 3 of 3 seeds with the same sign in the in-sample
+    holdout cell.
+
+*Reported with no decision attached.*
+- **Both profiles are flat within seed noise.**
+  - Across the grid, validation means span 0.0076 (B1) and 0.0148 (B2).
+  - The seed sd at a single half-life is 0.004–0.021.
+- **Removing the count and occasions-since channels costs almost nothing.**
+  - B2 − B1 holdout means at the same half-life range from −0.0048 (100)
+    to +0.0146 (10), averaging +0.0032.
+  - The decayed stock alone carries about as much as the full slot state,
+    in line with R37: the whole obtained stream is worth about 0.014 nats.
+- **B2's validation optimum is the longest finite half-life, 100
+  occasions.** That is the slow-memory end of the grid, as part A
+  predicted. It still does not beat ∞ by the rule.
+
+*Predictions.*
+- **2. B1 flat across the grid, ∞ included:** held.
+- **3. B2 no longer flat, best finite beats ∞, best longer than 5:**
+  - failed on the first two counts: B2 is flat too, and the best finite
+    half-life does not beat ∞;
+  - held only on the third: the best finite half-life is 100.
+
+*What this settles.*
+- **No forgetting claim is made.** The paper's rule needs part A and B2 to
+  agree, and they do not support forgetting:
+  - part A finds holdings persist, within campaigns and across them;
+  - B2 cannot identify a half-life.
+- **The model-free evidence is what the paper can use:** satiation is
+  immediate and persistent.
+- **Purchase likelihood is too weak a detector to add to it.** This is the
+  third weakness the plan named in advance.
+
+**B3 — DRAFT for Jin's review (31 Oct 2026; not approved, nothing
+submitted).**
+- **Design: as pre-registered, unchanged.**
+  - The stock-only model at B2's best half-life on validation, 100 occasions,
+    frozen.
+  - Campaign-boundary factor δ ∈ {1, 0.5, 0.1, 0}, seeds 1–3: 12 runs.
+  - Submitted with `bash scripts/submit_r47b.sh b3 100` from
+    `~/ProductGPT/work_r47fix`, now at `8cc82e0`. That commit contains the
+    stock_only fix `fb95fd2`.
+- **The δ = 1 arm has B2's half-life-100 configuration and seeds exactly.**
+  - It is kept, so that B3 has a control trained in the same batch.
+  - It also shows how far a GPU re-run of an identical configuration moves
+    the NLL. That is useful when the effects are this small.
+  - Dropping it and reusing B2's runs would save 3 runs (about 1
+    GPU-hour).
+- **Gates:**
+  1. `test_r47_forgetting.py` and the gen-6 suite on the CPU `short` queue.
+     They test that δ = 1 reproduces the stock exactly and that δ = 0
+     zeroes it at each boundary.
+  2. `~/ProductGPT/r44_frozen_g6.env` is present and unchanged.
+  3. PBS's variable lists for the δ = 0 and δ = 1 jobs show `CAMP_DECAY`
+     and the frozen half-life.
+- **Predictions** (rewritten after part A and B2, before any B3 run):
+  - **4 (new): not identified.** No δ < 1 beats δ = 1 by the rule.
+    - Part A's across-campaign gap (−0.146 three or more weeks after
+      acquisition, robust to the timing control) says holdings survive the
+      campaign boundary.
+    - B2 shows the likelihood cannot resolve memory at this scale.
+    - If anything, δ = 0 (a full reset at each campaign) is the worst arm
+      on validation.
+  - The original prediction 4 ("the best δ is below 1") was written before
+    part A's result and is superseded. It is kept here as the record.
+- **Decision rule:** unchanged. A campaign-boundary effect is detected only
+  if NLL(δ = 1) − NLL(best δ < 1) exceeds 2 sd of the paired difference, on
+  validation and on holdout, with 3 of 3 seeds of the same sign.
+  "Campaigns reset memory" is claimed only if part A's across-campaign gap
+  and B3 agree.
+- **Budget:** B2's runs took 14–24 minutes each on one GPU, so 12 runs is
+  about 4 GPU-hours, about 2 hours at the two-GPU cap. The queue is empty
+  on 31 Oct.
+- **After B3:** the generation check in R47's plan compares the satiation
+  functionals in rollouts at the best finite half-life against ∞. It needs
+  its own short plan and is not part of this approval.
 
 ### R43 step 2 — PLAN (drafted 27 Oct 2026, approved by Jin 28 Oct): generation, gen 6 against tuned gen 5, with untuned gen 5 as a labelled extra arm
 
