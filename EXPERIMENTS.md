@@ -43,8 +43,8 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 44649 | `r45c_eval` (GPU, `afterok` on 44639–44648) | 2026-10-31 | R45 part C: F, I0, I on the main and censored cells | finished exit 0, self-check passed; reader run once: no detectable difference, inclusive sample eligible (R45 part C RESULT) |
 | 44656 | `r45_generate` CPU gate (short queue, `SMOKE_ONLY=1`, from `~/ProductGPT/work_r45g` at `7b9eff7`) | 2026-10-31 | R45 step 2: five test suites and the 12-customer smoke | suites passed; smoke STOPPED (exit 4) on a bug in its own chop check, which refused customers with no holdout row; see R45 step 2 |
 | 44657 | `r45_generate` (GPU, 8 h, `afterok` on 44656) | 2026-10-31 | R45 step 2: generation on chopped histories, 60 rollouts | deleted by PBS when 44656 failed; never ran |
-| 44658 | `r45_generate` CPU gate (short queue, `SMOKE_ONLY=1`, `work_r45g` at `52ead12`) | 2026-10-31 | R45 step 2: the gate again, after the fix | queued (qstat 2026-10-31) |
-| 44659 | `r45_generate` (GPU, 8 h, `afterok` on 44658) | 2026-10-31 | R45 step 2: generation on chopped histories, 60 rollouts | held until the gate passes |
+| 44658 | `r45_generate` CPU gate (short queue, `SMOKE_ONLY=1`, `work_r45g` at `52ead12`) | 2026-10-31 | R45 step 2: the gate again, after the fix | exit 0 in 15 min, every gate passed (see R45 step 2) |
+| 44659 | `r45_generate` (GPU, 8 h, `afterok` on 44658) | 2026-10-31 | R45 step 2: generation on chopped histories, 60 rollouts | running since 22:43 (qstat 2026-10-31) |
 | 44443–44446 | `b42_g5_c06_s2`–`s5` (4 runs, from `~/ProductGPT/work_gen6` at `9b3eccd`) | 2026-10-27 | R44 stage 4: gen-5 c06 seeds 2–5 (gen 6 reuses b39_g6w384) | all 4 finished, exit 0; holdout read once: tie (R44 stage 4) |
 | 44465 | `r43_strata` on gen-5 c06 seeds 1–5 (CPU, short queue) | 2026-10-27 | R44 stage 4: length strata for gen 5 | finished exit 0, self-check ok; result in R44 stage 4 |
 | 44522, 44523 | `r43_generate` gates, g5 / g6 (CPU, short queue, from `~/ProductGPT/work_gen6` at `ef7efba`) | 2026-10-28 | R43 step 2: test suites and 12-customer smokes | both exit 0; every gate passed |
@@ -5479,6 +5479,16 @@ detached worktree, shipped by git bundle). The design above was committed
   the new one passes it. Nothing else changed.
 - **Resubmitted:** CPU gate 44658, then generation 44659 (GPU, walltime 8 h,
   `afterok` on 44658). The GPU job re-runs every gate before stage 1.
+- **Second gate, job 44658 (at `52ead12`): passed, exit 0, 15 minutes.**
+  - All five suites passed, and all 21 checkpoints load.
+  - Cropped real functionals are identical to the frame's.
+  - On the 12 smoke customers, every customer is chopped and flagged at
+    k ≥ 1. The rows removed average 47, 118 and 279 at k = 1, 2 and 4, and
+    5, 6 and 8 of the 12 lose rows inside the frame.
+  - k = 0 through the chop path is IDENTICAL to R43's rollout on chunk 0.
+  - All 8 smoke arms: mismatch 0, altered 0, rows outside the frame 0. The
+    smoke's energies (12 customers) mean nothing.
+  - 44659 started at 22:43 on 31 Oct.
 
 ### R47 — PLAN (approved by Jin 26 Oct 2026; part A done, B1–B2 submitted 27 Oct): do players forget their holdings, within and across campaigns?
 
