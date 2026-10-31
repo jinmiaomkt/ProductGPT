@@ -35,6 +35,8 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 44361–44399 | `r45a_*` (39 runs, from `~/ProductGPT/work_r45` at `8fae1d7`) | 2026-10-27 | R45 part A: censored training, arms L/T/Z/ZF × k 1/2/4 + count, seeds 1–3 | all 39 finished, exit 0 (qstat 2026-10-27 18:30); read once 31 Oct: no censoring cost detectable at any depth (R45 part A RESULT) |
 | 44400–44441 | `r47b1_*`, `r47b2_*` (42 runs, from `~/ProductGPT/work_r47` at `010fc89`) | 2026-10-27 | R47 B1–B2: half-life profile, full vs stock-only slots, seeds 1–3 | B1 (even ids): all 21 exit 0, read 31 Oct (not identified); B2 (odd ids) FAILED at 44401 on a stock_only bug, the other 20 cancelled; see R47 |
 | 44467–44487 | `r47b2_*` (21 runs, from `~/ProductGPT/work_r47fix` at `a3b2ac0`) | 2026-10-27 | R47 B2 re-run after the stock_only gradient fix | all 21 finished, exit 0, as did B1's 21 (44400–44440 even) (qstat 2026-10-28); read once 31 Oct: forgetting not identified in B1 or B2 (R47) |
+| 44618 | `gen6_tests` CPU gate for R47 B3 (short queue, `work_r47fix` at `8cc82e0`) | 2026-10-31 | every suite before B3 | exit 0, ALL SUITES PASSED (103 PASS, 0 FAIL) |
+| 44619–44630 | `r47b3_hl100_d{1,0.5,0.1,0}` (12 runs, from `~/ProductGPT/work_r47fix` at `8cc82e0`) | 2026-10-31 | R47 B3: campaign-boundary factor δ at half-life 100, stock_only, seeds 1–3 | 2 running, 10 queued (qstat 2026-10-31 14:43) |
 | 44443–44446 | `b42_g5_c06_s2`–`s5` (4 runs, from `~/ProductGPT/work_gen6` at `9b3eccd`) | 2026-10-27 | R44 stage 4: gen-5 c06 seeds 2–5 (gen 6 reuses b39_g6w384) | all 4 finished, exit 0; holdout read once: tie (R44 stage 4) |
 | 44465 | `r43_strata` on gen-5 c06 seeds 1–5 (CPU, short queue) | 2026-10-27 | R44 stage 4: length strata for gen 5 | finished exit 0, self-check ok; result in R44 stage 4 |
 | 44522, 44523 | `r43_generate` gates, g5 / g6 (CPU, short queue, from `~/ProductGPT/work_gen6` at `ef7efba`) | 2026-10-28 | R43 step 2: test suites and 12-customer smokes | both exit 0; every gate passed |
@@ -5356,8 +5358,7 @@ means forgetting helps.
 - **Purchase likelihood is too weak a detector to add to it.** This is the
   third weakness the plan named in advance.
 
-**B3 — DRAFT for Jin's review (31 Oct 2026; not approved, nothing
-submitted).**
+**B3 — PLAN (drafted 31 Oct 2026, approved by Jin 31 Oct as drafted).**
 - **Design: as pre-registered, unchanged.**
   - The stock-only model at B2's best half-life on validation, 100 occasions,
     frozen.
@@ -5399,6 +5400,24 @@ submitted).**
 - **After B3:** the generation check in R47's plan compares the satiation
   functionals in rollouts at the best finite half-life against ∞. It needs
   its own short plan and is not part of this approval.
+
+**B3 — SUBMITTED (31 Oct 2026, 14:43): jobs 44619–44630 (12 runs)** from
+`~/ProductGPT/work_r47fix` at `8cc82e0`.
+- **Gate 1 passed.** CPU job 44618 at `8cc82e0` passed every suite (gen 6,
+  R45, R47, the rollout suites, the hybrid encoder): 103 PASS lines,
+  0 FAIL. That includes F2 (δ = 1 is the default model), F3 (δ = 0.3 and
+  δ = 0 equal the brute-force recursion, and δ = 0 empties the stock at
+  boundaries) and the stock_only multi-chunk backward at δ = 1 and δ = 0.3.
+- **Gate 2 passed.** `r44_frozen_g6.env` is dated 27 Oct 12:40 and holds the
+  frozen line unchanged.
+- **Gate 3 passed.** The variable lists of 44619 (δ = 1, seed 1), 44622
+  (δ = 0, seed 1) and 44630 (δ = 0, seed 3) show `DECAY=exp`,
+  `DECAY_INIT=100`, `DECAY_FREEZE=1`, `SLOT_STATE=stock_only`, the intended
+  `CAMP_DECAY`, the frozen line and the attribute kernel, tiers and campaign
+  control.
+- **Job order:** seed-major, δ 1, 0.5, 0.1, 0. Seed 1 is 44619–44622, seed 2
+  is 44623–44626 and seed 3 is 44627–44630. 44619 and 44620 were running at
+  submission.
 
 ### R43 step 2 — PLAN (drafted 27 Oct 2026, approved by Jin 28 Oct): generation, gen 6 against tuned gen 5, with untuned gen 5 as a labelled extra arm
 
