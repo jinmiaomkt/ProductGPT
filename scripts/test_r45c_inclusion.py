@@ -56,12 +56,12 @@ def check(name, ok):
         FAIL.append(name)
 
 
-def fp(it):
+def fp(it, skip=()):
     """Fingerprint of one item: every tensor's shape and bytes."""
     h = hashlib.sha1()
     for k in sorted(it):
         v = it[k]
-        if torch.is_tensor(v):
+        if torch.is_tensor(v) and k not in skip:
             h.update(k.encode())
             h.update(str(tuple(v.shape)).encode())
             h.update(v.contiguous().numpy().tobytes())
@@ -69,12 +69,33 @@ def fp(it):
 
 
 def summary(cfg):
-    """uid order and fingerprints of every cell, then the datasets are dropped."""
+    """uid order and fingerprints of every cell, then the datasets are dropped.
+    Each entry is (uid, all tensors, all but user_id): a customer who does not
+    train shares the unknown-user index 0, so user_id legitimately differs
+    between extra_train 0 and 1 for the censored in-sample half (the embedding
+    is off in every arm, so it reaches nothing)."""
     tr, va, te, _ = t5.build_loaders(cfg)
     cells = {"train": tr.dataset, "val": va.dataset, **{k: v.dataset for k, v in te.items()}}
-    out = {k: [(ds[i]["uid"], fp(ds[i])) for i in range(len(ds))] for k, ds in cells.items()}
-    events = {k: ds.scored_events() for k, ds in te.items() if hasattr(ds, "scored_events")}
+    out = {k: [(ds[i]["uid"], fp(ds[i]), fp(ds[i], ("user_id",))) for i in range(len(ds))]
+           for k, ds in cells.items()}
+    events = {k: v.dataset.scored_events() for k, v in te.items()}
     return out, events, cfg.pop("_extra_uids", None), cells
+
+
+def full(rows):
+    return [(u, f) for u, f, _ in rows]
+
+
+def no_id(rows):
+    return [(u, g) for u, _, g in rows]
+
+
+def first_scored(ds):
+    for i in range(len(ds)):
+        lab = ds[i]["label"]
+        if bool(((lab >= 1) & (lab <= 9)).any()):
+            return i
+    raise SystemExit("no scored customer in the cell")
 
 
 def main() -> None:
@@ -92,32 +113,36 @@ def main() -> None:
 
     print("P1 main sample untouched")
     for k in ("val",) + MAIN:
-        check(f"{k}: {len(s0[k]):,} customers, identical in both extra builds",
-              s0[k] == s1[k] == s2[k])
+        check(f"{k}: {len(s0[k]):,} customers, identical in both extra builds (user_id included)",
+              full(s0[k]) == full(s1[k]) == full(s2[k]))
     check(f"train, extra not trained: identical ({len(s0['train']):,} customers)",
-          s0["train"] == s1["train"])
+          full(s0["train"]) == full(s1["train"]))
     n0 = len(s0["train"])
     check(f"train, extra trained: the main {n0:,} unchanged, then "
-          f"{len(s2['train']) - n0:,} censored", s2["train"][:n0] == s0["train"]
-          and {u for u, _ in s2["train"][n0:]} <= set(x2))
+          f"{len(s2['train']) - n0:,} censored", full(s2["train"][:n0]) == full(s0["train"])
+          and {u for u, _, _ in s2["train"][n0:]} <= set(x2))
 
     print("P2 headline occasions")
     check(f"{HEAD} scores {e0.get(HEAD, 0):,} occasions in every build",
           e0.get(HEAD) == e1.get(HEAD) == e2.get(HEAD) and e0.get(HEAD, 0) > 0)
 
     print("P3 extra partition")
-    xin = [u for u, _ in s2[CENS[0]]]
-    xout = [u for u, _ in s2[CENS[1]]]
+    xin = [u for u, _, _ in s2[CENS[0]]]
+    xout = [u for u, _, _ in s2[CENS[1]]]
     check(f"halves {len(xin):,} / {len(xout):,}: disjoint, cover all {len(x2):,}",
           not set(xin) & set(xout) and set(xin) | set(xout) == set(x2)
           and len(xin) + len(xout) == len(x2))
-    check("identical for extra_train 0 and 1", s1[CENS[0]] == s2[CENS[0]]
-          and s1[CENS[1]] == s2[CENS[1]] and x1 == x2)
-    main_u = {u for k in ("train", "val") + MAIN for u, _ in s0[k]}
+    check("identical for extra_train 0 and 1 (all but user_id)",
+          no_id(s1[CENS[0]]) == no_id(s2[CENS[0]]) and no_id(s1[CENS[1]]) == no_id(s2[CENS[1]])
+          and x1 == x2)
+    check("the out-of-sample half is identical including user_id (never trains in either)",
+          full(s1[CENS[1]]) == full(s2[CENS[1]]))
+    main_u = {u for k in ("train", "val") + MAIN for u, _, _ in s0[k]}
     check("no censored player in a main cell, no main customer in a censored cell",
           not main_u & set(x2) and x0 is None)
     check(f"extra_train 1 trains exactly the in-sample half ({len(xin):,})",
-          [u for u, _ in s2["train"][n0:]] == xin)
+          [u for u, _, _ in s2["train"][n0:]] == xin)
+    print(f"  (censored cells score {e2[CENS[0]]:,} and {e2[CENS[1]]:,} occasions)")
 
     print("P4 CensorMark")
     marks = {k: [int(CensorMark(cells2[k], x2)[i]["censored"]) for i in range(len(cells2[k]))]
@@ -137,10 +162,10 @@ def main() -> None:
     torch.manual_seed(0)
     m = build_from_cfg(cfg, feat.float(), 20_000).eval()
     m.chunk = 256
-    mixed = t5.Subset(torch.utils.data.ConcatDataset(
-        [CensorMark(cells2[HEAD], x2), CensorMark(cells2[CENS[1]], x2)]),
-        [0, len(cells2[HEAD])])          # one main, one censored customer
-    batch = t6.collate_scored([mixed[0], mixed[1]])
+    # one main and one censored customer, each with scored holdout occasions
+    pair = [CensorMark(cells2[HEAD], x2)[first_scored(cells2[HEAD])],
+            CensorMark(cells2[CENS[1]], x2)[first_scored(cells2[CENS[1]])]]
+    batch = t6.collate_scored(pair)
     check(f"the batch carries censored = {batch['censored'].tolist()}",
           batch["censored"].tolist() == [0, 1])
     kw = t6._inventory_kwargs6(m, batch, torch.device("cpu"))
