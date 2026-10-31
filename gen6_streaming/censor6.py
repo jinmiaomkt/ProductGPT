@@ -98,6 +98,27 @@ class ChopView(Dataset):
         return it
 
 
+class CensorMark(Dataset):
+    """Part C: real left-censored customers. Nothing is chopped; the censoring
+    flag is set for the customers in `uids` (the extra file's) and only them."""
+
+    def __init__(self, base: Dataset, uids):
+        self.base, self.uids = base, frozenset(uids)
+
+    def __len__(self) -> int:
+        return len(self.base)
+
+    def set_epoch(self, epoch: int) -> None:
+        if hasattr(self.base, "set_epoch"):
+            self.base.set_epoch(epoch)
+
+    def __getitem__(self, i: int) -> Dict[str, Any]:
+        it = dict(self.base[i])
+        it["chopped"] = torch.tensor(0, dtype=torch.long)
+        it["censored"] = torch.tensor(int(it["uid"] in self.uids), dtype=torch.long)
+        return it
+
+
 def collate_prefix(items: List[Dict[str, Any]], out: Dict[str, Any]) -> Dict[str, Any]:
     """Add the chop fields to a collated batch; prefixes are LEFT-padded so every
     prefix ends at row -1 and PAD rows (no acquisitions, decision 0) change

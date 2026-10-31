@@ -1,0 +1,56 @@
+#!/bin/bash
+# ============================================================================
+# R45 part C gate on a CPU node: the inclusion tests on real data
+# (scripts/test_r45c_inclusion.py, against R44's frozen gen-6 seed-1 run), then
+# the gen-6 and R45 suites, so the extra-file option is shown to change nothing
+# when it is off.
+#
+#   cd ~/ProductGPT/work_r45c
+#   qsub scripts/r45c_tests_cpu.pbs
+# Log: ~/ProductGPT/logs/r45c_tests_<jobid>.log
+# ============================================================================
+#PBS -N r45c_tests
+#PBS -l select=1:ncpus=4:mem=48GB
+#PBS -q short
+#PBS -l walltime=02:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+
+set -o pipefail
+module purge
+module load python/3.11.4
+cd "$PBS_O_WORKDIR"
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
+export PYTHONUNBUFFERED=1
+export OMP_NUM_THREADS=4
+export CUDA_VISIBLE_DEVICES=""
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+log=/storage/home/jinmiao/ProductGPT/logs/r45c_tests_${PBS_JOBID%%.*}.log
+mkdir -p "$(dirname "$log")"
+exec >"$log" 2>&1
+
+echo "PBS job: $PBS_JOBID on $(hostname)"
+echo "Git:     $(git log --oneline -1)"
+CKPT="${CKPT:-/storage/home/jinmiao/ProductGPT/runs/gen6_hpcc_W384_C512_b4_b39_g6w384_s1/gen6_streaming/hpcc/best.pt}"
+
+rc=0
+run() {
+  echo
+  echo "===== $*"
+  if python -W ignore "$@"; then
+    echo "===== $1: exit 0"
+  else
+    status=$?
+    echo "===== $1: exit $status"
+    rc=1
+  fi
+}
+run scripts/test_r45c_inclusion.py --ckpt "$CKPT"
+run scripts/test_gen6_streaming.py
+run scripts/test_r45_censor.py
+echo
+echo "ALL SUITES: $([[ $rc -eq 0 ]] && echo PASSED || echo FAILED)"
+exit $rc

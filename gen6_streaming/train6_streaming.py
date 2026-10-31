@@ -55,7 +55,7 @@ import dataset_multistream  # noqa: E402
 import model_multistream_state_space as mm  # noqa: E402
 import train5_multistream as t5  # noqa: E402
 from dataset_multistream import collate_multistream  # noqa: E402
-from censor6 import MODES as CHOP_MODES, STATES as CHOP_STATES, ChopView, collate_prefix  # noqa: E402
+from censor6 import MODES as CHOP_MODES, STATES as CHOP_STATES, CensorMark, ChopView, collate_prefix  # noqa: E402
 from model6_streaming import build_from_cfg  # noqa: E402
 from shared.features import load_feature_tensor  # noqa: E402
 
@@ -247,6 +247,12 @@ def main() -> None:
                          "eval = the test cells only; both = everywhere")
     ap.add_argument("--censor-flag", type=int, default=0,
                     help="1 = learned censoring vector and starting GRU state for chopped customers")
+    # R45 part C: real left-censored customers, from a second data file
+    ap.add_argument("--extra-data-file", default=None,
+                    help="extra customers (the left-censored players), partitioned on their own; "
+                         "the main sample's split and validation are unchanged")
+    ap.add_argument("--extra-train", type=int, default=1,
+                    help="1 = their in-sample half trains; 0 = scored only")
     ap.add_argument("--allow-laptop", action="store_true",
                     help="override the guard that refuses to train on Windows (see below)")
     args = ap.parse_args()
@@ -295,8 +301,13 @@ def main() -> None:
                 "chop": args.chop, "chop_depth": int(args.chop_depth),
                 "chop_state": args.chop_state, "chop_where": args.chop_where,
                 "censor_flag": bool(args.censor_flag)})
+    if args.extra_data_file:
+        cfg.update({"extra_data_file": args.extra_data_file, "extra_train": bool(args.extra_train)})
     if cfg["chop"] != "none" and cfg["chop_depth"] <= 0:
         raise SystemExit("--chop needs --chop-depth > 0")
+    if cfg["chop"] != "none" and cfg.get("extra_data_file"):
+        raise SystemExit("--chop (controlled censoring) and --extra-data-file (real censoring) "
+                         "are separate experiments; use one")
     if cfg.get("max_users") and cfg.get("split_mode") == "both":
         print("[data] note: max_users subsamples customers BEFORE the split (pilot only)")
 
@@ -317,9 +328,14 @@ def main() -> None:
     tr0, va0, te0, num_users = t5.build_loaders(cfg, uids_dir=uids_dir)
     nw = int(cfg.get("num_workers", 0))
 
+    extra_uids = cfg.pop("_extra_uids", None)
+
     def chopped(ds, side: str):
         """R45: training customers' inputs (training and validation) are side
-        'train'; the test cells are side 'eval'."""
+        'train'; the test cells are side 'eval'. Part C marks the real
+        left-censored customers instead."""
+        if extra_uids is not None:
+            return CensorMark(ds, extra_uids)
         if cfg["chop"] == "none" or cfg["chop_where"] not in (side, "both"):
             return ds
         return ChopView(ds, cfg["chop"], cfg["chop_depth"], cfg["chop_state"], cfg["val_from"])

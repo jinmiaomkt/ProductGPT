@@ -451,9 +451,28 @@ def build_loaders(cfg: Dict[str, Any],
             shift_obtained=shift_b, truncate="tail",
         )
         keep = raw if not cfg.get("max_users") else [raw[i] for i in idx]
+        # R45 part C: extra customers (the left-censored players) from a second
+        # file. They are appended AFTER the main sample and partitioned on their
+        # own, so the main sample's partition -- and every cell built from it --
+        # is exactly what it is without them. Their user indices follow the main
+        # sample's, so no main customer's index moves either.
+        extra = []
+        if cfg.get("extra_data_file"):
+            extra = load_json_dataset(str(config5._paths.data_file(cfg["extra_data_file"])))
+            print(f"[data] {len(extra)} extra customers in {cfg['extra_data_file']}")
+        n_main = len(keep)
+        uid_index = None
+        if extra:
+            def _u(r):
+                return str(r["uid"][0] if isinstance(r["uid"], list) else r["uid"])
+            main_u = sorted({_u(r) for r in keep})
+            extra_u = sorted({_u(r) for r in extra} - set(main_u))
+            if len(extra_u) != len(extra):
+                raise SystemExit("extra customers overlap the main sample or repeat")
+            uid_index = {u: i + 1 for i, u in enumerate(main_u + extra_u)}
         base = TransformerDataset(
-            keep, augment_permute_obtained=cfg["augment_permute_obtained"],
-            **common_b)
+            keep + extra, augment_permute_obtained=cfg["augment_permute_obtained"],
+            uid_to_index=uid_index, **common_b)
         if not base.has_holdout:
             raise SystemExit("split_mode=both needs the holdout flags in the data.")
 
@@ -470,11 +489,22 @@ def build_loaders(cfg: Dict[str, Any],
         # multi-seed runs share one partition and their differences reflect
         # training noise rather than which customers landed in which cell.
         rng_u = random.Random(cfg.get("split_seed", cfg["seed"]))
-        order = list(range(len(base)))
+        order = list(range(n_main))
         rng_u.shuffle(order)
 
         n_out = max(1, int(cfg.get("user_holdout_frac", 0.5) * len(order)))
         out_users, in_users = order[:n_out], order[n_out:]
+        # The extra customers' own partition: the same fraction out of sample,
+        # from a second generator so it cannot disturb the main one. extra_train
+        # False keeps the in-sample half out of training too (a model trained
+        # without them, scored on their cells).
+        extra_in, extra_out = [], []
+        if extra:
+            ex = list(range(n_main, len(base)))
+            random.Random(f"extra-{cfg.get('split_seed', cfg['seed'])}").shuffle(ex)
+            n_xo = int(cfg.get("user_holdout_frac", 0.5) * len(ex))
+            extra_out, extra_in = ex[:n_xo], ex[n_xo:]
+        extra_train = extra_in if cfg.get("extra_train", True) else []
         val_mode = cfg.get("val_mode", "customers")
         if val_mode == "late":
             # No validation customers are carved out: every in-sample customer
@@ -490,11 +520,13 @@ def build_loaders(cfg: Dict[str, Any],
         # evaluation -- Lu & Kannan's omega-bar, "the average head weight from
         # the training population". A learned average is a real prior; an
         # untrained row is noise.
-        unknown = {base._uid_cache[i] for i in val_users + out_users}
+        unknown = {base._uid_cache[i] for i in val_users + out_users + extra_out}
+        if not extra_train:
+            unknown |= {base._uid_cache[i] for i in extra_in}
         for u in unknown:
             base.uid_to_index[u] = 0
         trained_idx = sorted({base.uid_to_index[base._uid_cache[i]]
-                              for i in train_users} - {0})
+                              for i in train_users + extra_train} - {0})
 
         cal = TemporalRoleView(base, "calibration", holdout_flag=flag)
         hol = TemporalRoleView(base, "holdout", holdout_flag=flag)
@@ -508,14 +540,16 @@ def build_loaders(cfg: Dict[str, Any],
                                      holdout_flag=flag, val_from=vf)
             late = TemporalRoleView(base, "calibration_late",
                                     holdout_flag=flag, val_from=vf)
-            train_ds = early.subset(train_users)
+            # Validation stays the main sample's own (extra customers train
+            # only), so selection runs on the same occasions with or without them.
+            train_ds = early.subset(train_users + extra_train)
             val_ds = late.subset(train_users)
             print(f"[split] VALIDATION = LATE CALIBRATION: in-sample customers "
                   f"train on campaigns < {vf} and validate on {vf}..{boundary - 1}. "
                   "Sits immediately before the holdout, so early stopping can "
                   "see temporal drift (EXPERIMENTS.md R13).")
         else:
-            train_ds = cal.subset(train_users)
+            train_ds = cal.subset(train_users + extra_train)
             val_ds = cal.subset(val_users)
         # NOT cold starts: labels are masked, inputs are not, so an
         # out-of-sample customer's history is still visible to the model.
@@ -524,6 +558,13 @@ def build_loaders(cfg: Dict[str, Any],
             "outsample_users_calib_period": cal.subset(out_users),
             "outsample_users_holdout_period": hol.subset(out_users),
         }
+        if extra:
+            tests["censored_insample_holdout_period"] = hol.subset(extra_in)
+            tests["censored_outsample_holdout_period"] = hol.subset(extra_out)
+            cfg["_extra_uids"] = sorted(base._uid_cache[i] for i in extra_in + extra_out)
+            print(f"[split]   extra: {len(extra_in)} in-sample "
+                  f"({'trained' if extra_train else 'NOT trained'}) / {len(extra_out)} "
+                  "out-of-sample; validation is the main sample's only")
         print(f"[split] BOTH (Lu & Kannan design), holdout_flag={flag}: "
               f"calibration = campaigns < {boundary}, holdout = >= {boundary}")
         print(f"[split]   {len(train_users)} train / {len(val_users)} val / "
