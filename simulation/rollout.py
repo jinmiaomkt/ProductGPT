@@ -159,6 +159,9 @@ def _forward_logits(model, buf: Dict[str, torch.Tensor], upto: int) -> torch.Ten
         for k in ("inv_init_count", "inv_init_last"):
             if buf.get(k) is not None:
                 kw[k] = buf[k]
+    # R45: a gen-6 model with the censoring flag reads it from the batch
+    if getattr(model, "censor_flag", False) and buf.get("censored") is not None:
+        kw["censored"] = buf["censored"]
     out = model(buf["lto"][:, s], buf["obtained"][:, s], buf["prev_decision"][:, s],
                 buf.get("user_idx"), **kw)
     logits = out[0] if isinstance(out, (tuple, list)) else out
@@ -179,12 +182,18 @@ def _replicate(batch: Dict[str, torch.Tensor], n_rep: int) -> Dict[str, torch.Te
 @torch.no_grad()
 def rollout(model, batch: Dict[str, torch.Tensor], env, vocab, *, start: int,
             n_rep: int = 1, seed: int = 0, temperature: float = 1.0,
-            device: str = "cpu", teacher_forced: bool = False) -> Dict[str, np.ndarray]:
+            device: str = "cpu", teacher_forced: bool = False,
+            pity_from: Optional[tuple] = None) -> Dict[str, np.ndarray]:
     """Generate decisions for rows >= `start`, feeding the model its own output.
 
     `teacher_forced=True` keeps the real streams and only samples -- the control
     that isolates how much of any discrepancy is the feedback loop rather than
     the per-step distribution.
+
+    `pity_from=(full_batch, full_start)` warms the environment's pity on another
+    batch's real prefix instead of `batch`'s: the same customers in the same
+    order, each with the same live rows (R45 step 2). The model reads a chopped
+    history, but the game the customer plays kept the full one.
 
     Returns
         decisions  (B*n_rep, S) int64, 0 outside the generated span
@@ -196,12 +205,10 @@ def rollout(model, batch: Dict[str, torch.Tensor], env, vocab, *, start: int,
         lto        (B*n_rep, S, 4) int64, the (exogenous) offers, carried so a
                    caller can score functionals without re-deriving them.
     """
-    from gacha_env import PityState
-
     if getattr(model, "streaming", False):
         return _rollout_streaming(model, batch, env, vocab, start=start, n_rep=n_rep,
                                   seed=seed, temperature=temperature, device=device,
-                                  teacher_forced=teacher_forced)
+                                  teacher_forced=teacher_forced, pity_from=pity_from)
 
     buf = _replicate({k: (v.to(device) if torch.is_tensor(v) else v)
                       for k, v in batch.items()}, n_rep)
@@ -212,9 +219,7 @@ def rollout(model, batch: Dict[str, torch.Tensor], env, vocab, *, start: int,
 
     # Pity is carried per simulated customer and warmed on the real prefix, so a
     # rollout does not start every banner at zero pity.
-    states = [PityState() for _ in range(B)]
-    if env is not None and not teacher_forced:
-        _warm_pity(states, buf, vocab, env, start)
+    states = _pity_states(buf, env, vocab, start, n_rep, teacher_forced, pity_from)
 
     offers = buf["lto"].cpu().numpy()
     for t in range(start, S):
@@ -258,8 +263,8 @@ def rollout(model, batch: Dict[str, torch.Tensor], env, vocab, *, start: int,
 
 @torch.no_grad()
 def _rollout_streaming(model, batch, env, vocab, *, start: int, n_rep: int, seed: int,
-                       temperature: float, device: str,
-                       teacher_forced: bool) -> Dict[str, np.ndarray]:
+                       temperature: float, device: str, teacher_forced: bool,
+                       pity_from: Optional[tuple] = None) -> Dict[str, np.ndarray]:
     """rollout() for the gen-6 streaming hybrid, one occasion at a time.
 
     Same sampling, same random-number order and same feedback rules as the
@@ -268,27 +273,24 @@ def _rollout_streaming(model, batch, env, vocab, *, start: int, n_rep: int, seed
     context: the model carries its state, so each step reads one new row
     instead of re-reading the prefix, over the customer's whole history.
     """
-    from gacha_env import PityState
-
     buf = _replicate({k: (v.to(device) if torch.is_tensor(v) else v)
                       for k, v in batch.items()}, n_rep)
     B, S = buf["label"].shape
     rng = np.random.default_rng(seed)
     alive = (buf["label"] != 0).cpu().numpy()
     gen = np.zeros((B, S), dtype=np.int64)
-    states = [PityState() for _ in range(B)]
-    if env is not None and not teacher_forced:
-        _warm_pity(states, buf, vocab, env, start)
+    states = _pity_states(buf, env, vocab, start, n_rep, teacher_forced, pity_from)
 
     uid = buf.get("user_idx")
     camp = buf.get("campaign") if getattr(model, "camp_bias", None) is not None else None
+    cens = buf.get("censored") if getattr(model, "censor_flag", False) else None
 
     def advance(a: int, b: int, st):
         return model.advance(buf["lto"][:, a:b], buf["obtained"][:, a:b],
                              buf["prev_decision"][:, a:b], st, uid,
-                             camp[:, a:b] if camp is not None else None)
+                             camp[:, a:b] if camp is not None else None, censored=cens)
 
-    st = model.init_stream(B, device)
+    st = model.init_stream(B, device, cens)
     for a in range(0, start, model.chunk):               # the real prefix
         _, st = advance(a, min(start, a + model.chunk), st)
 
@@ -326,6 +328,29 @@ def _rollout_streaming(model, batch, env, vocab, *, start: int, n_rep: int, seed
     return {"decisions": gen, "alive": alive, "start": start,
             "obtained": buf["obtained"].cpu().numpy(),
             "lto": buf["lto"].cpu().numpy()}
+
+
+def _pity_states(buf, env, vocab, start: int, n_rep: int, teacher_forced: bool,
+                 pity_from: Optional[tuple]):
+    """One PityState per simulated customer, warmed on the real prefix of `buf`,
+    or of pity_from's batch when it is given (see rollout)."""
+    from gacha_env import PityState
+
+    B = buf["label"].shape[0]
+    states = [PityState() for _ in range(B)]
+    if env is None or teacher_forced:
+        return states
+    if pity_from is None:
+        _warm_pity(states, buf, vocab, env, start)
+        return states
+    full, full_start = pity_from
+    wb = _replicate({k: v for k, v in full.items() if torch.is_tensor(v)}, n_rep)
+    live = (buf["label"] != 0).sum(dim=1).cpu()
+    if wb["label"].shape[0] != B or not torch.equal((wb["label"] != 0).sum(dim=1).cpu(), live):
+        raise ValueError("pity_from must hold the same customers, in the same order, with "
+                         "the same live rows as the batch")
+    _warm_pity(states, wb, vocab, env, int(full_start))
+    return states
 
 
 def _warm_pity(states, buf, vocab, env, start: int) -> None:

@@ -1,0 +1,87 @@
+#!/bin/bash
+# ============================================================================
+# R45 step 2: generation on chopped histories. Pre-registered in EXPERIMENTS.md
+# (R45 step 2). One GPU.
+#
+#   cd ~/ProductGPT/work_r45g
+#   qsub scripts/r45_generate.pbs
+#
+# Gates on the free CPU queue first (test suites and the smoke, no GPU):
+#   qsub -q short -l select=1:ncpus=4:mem=48GB -l walltime=02:00:00 \
+#        -v SMOKE_ONLY=1 scripts/r45_generate.pbs
+#
+# Stages:
+#   0  gates   test_rollout_fixes.py, test_seq_metrics.py, test_gen6_streaming.py,
+#              test_r45_censor.py, test_r45_generate.py, then the k = 0 and k = 2
+#              arms on 12 customers (--smoke)
+#   1  step 2  every arm on 300 customers x 8 replicates, training seeds 1-3
+#
+# Log: ~/ProductGPT/logs/r45gen_<jobid>.log
+# Results: results/r45/step2.json and step2_functionals.npz in the worktree.
+# Then: python3 scripts/r45_step2_read.py --r43 ~/ProductGPT/work_gen6/results/r43/step2_g6.json
+# ============================================================================
+#PBS -N r45_generate
+#PBS -l select=1:ncpus=8:ngpus=1:mem=64GB
+#PBS -q GPU
+#PBS -l walltime=08:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+
+set -o pipefail
+module purge
+module load python/3.11.4 cuda/12.5
+cd "$PBS_O_WORKDIR"
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
+export PYTHONUNBUFFERED=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export OMP_NUM_THREADS=${NCPUS:-8}
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+jid=${PBS_JOBID%%.*}
+log=/storage/home/jinmiao/ProductGPT/logs/r45gen_${jid}.log
+mkdir -p "$(dirname "$log")"
+exec >"$log" 2>&1
+
+echo "PBS job: $PBS_JOBID on $(hostname)   start $(date --iso-8601=seconds)"
+echo "Dir:     $PBS_O_WORKDIR"
+echo "Git:     $(git log --oneline -1)"
+echo "SMOKE_ONLY=${SMOKE_ONLY:-0}"
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo "no GPU"
+python -c "import torch, numpy, sklearn; print('torch', torch.__version__, 'numpy', numpy.__version__, 'sklearn', sklearn.__version__, 'cuda', torch.cuda.is_available())"
+
+finish() {
+  echo
+  echo "Finish: $(date --iso-8601=seconds)   $1"
+  bash scripts/notify.sh "r45gen ${jid}: $1" || true
+  exit "$2"
+}
+
+# ---------------------------------------------------------------- stage 0
+for t in scripts/test_rollout_fixes.py scripts/test_seq_metrics.py scripts/test_gen6_streaming.py \
+         scripts/test_r45_censor.py scripts/test_r45_generate.py; do
+  echo
+  echo "===== gate: $t"
+  python -W ignore "$t"
+  rc=$?
+  echo "===== gate: $t exit $rc"
+  [[ $rc -eq 0 ]] || finish "STOPPED at gate $t (exit $rc)" 3
+done
+
+echo
+echo "===== gate: smoke, the k = 0 and k = 2 arms on 12 customers"
+python scripts/r45_generate.py --smoke
+rc=$?
+echo "===== gate: smoke exit $rc"
+[[ $rc -eq 0 ]] || finish "STOPPED at the smoke gate (exit $rc)" 4
+[[ "${SMOKE_ONLY:-0}" == "1" ]] && finish "smoke-only run: every gate passed" 0
+
+# ---------------------------------------------------------------- stage 1
+echo
+echo "===== stage 1: R45 step 2"
+python scripts/r45_generate.py
+rc1=$?
+echo "===== stage 1 exit $rc1"
+[[ $rc1 -eq 0 ]] && finish "done, exit 0; read the log before quoting anything" 0
+finish "stage 1 exit $rc1; read the log" 1

@@ -95,17 +95,24 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
             self.censor_h0 = nn.Parameter(torch.zeros(len(self.event_model), d))
 
     # ------------------------------------------------------------ state
-    def init_stream(self, batch_size: int, device) -> Dict[str, Any]:
-        """Empty state for `batch_size` customers at their first occasion."""
+    def init_stream(self, batch_size: int, device, censored=None) -> Dict[str, Any]:
+        """Empty state for `batch_size` customers at their first occasion.
+        `censored` (B,) starts a flagged customer's GRU layers at the learned
+        censor_h0 when the model has the censoring flag (R45)."""
         P = mm.LAST_PROD_ID - mm.FIRST_PROD_ID + 1
         z = lambda *s: torch.zeros(*s, device=device, dtype=torch.float32)  # noqa: E731
+        h = [None] * len(self.event_model)
+        if self.censor_flag and censored is not None:
+            c = censored.to(device).float()
+            h = [(c[:, None] * self.censor_h0[i][None, :])[None].contiguous()
+                 for i in range(len(self.event_model))]
         return {
             "t": 0,
             "count": z(batch_size, P),
             "last": torch.full((batch_size, P), NEVER, device=device, dtype=torch.float32),
             "stock": z(batch_size, P),          # pre-kernel stock D_t
             "pity": z(batch_size, 8),           # raw pulls since last hit, per banner x tier
-            "h": [None] * len(self.event_model),
+            "h": h,
             "k": [None] * len(self.event_model),
             "v": [None] * len(self.event_model),
         }
@@ -339,18 +346,21 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
 
     # ------------------------------------------------------------- passes
     def advance(self, lto_ids, obtained_ids, prev_dec_ids, st: Dict[str, Any],
-                user_idx=None, campaign=None):
+                user_idx=None, campaign=None, censored=None):
         """Process rows st['t'] .. st['t']+L-1 from a carried state.
 
         The generation path: call it once on the real prefix, then once per
         occasion. Returns (logits (B,L,V), new state). No gradient is carried
         through the computed state here; use stream_forward to train.
+        `censored` (B,) as in stream_forward; start from init_stream(B, device,
+        censored) so the GRU starts where stream_forward's does.
         """
         L = lto_ids.size(1)
         t0 = int(st["t"])
         count, since, stock, pity, carry = self.computed_scan(obtained_ids.long(),
                                                               prev_dec_ids.long(), st)
-        r = self._rows(lto_ids, obtained_ids, prev_dec_ids, user_idx, count, since, stock, pity)
+        r = self._rows(lto_ids, obtained_ids, prev_dec_ids, user_idx, count, since, stock, pity,
+                       censored)
         s, hs, ks, vs = self._encode(r, st, t0)
         logits = self._head(s, user_idx, campaign)
         new = {"t": t0 + L, "h": hs, "k": ks, "v": vs, **carry}
@@ -383,16 +393,12 @@ class StreamingHybrid(mm.MultiStreamStateSpaceTransformer):
         C = max(int(chunk or self.chunk), 1)
         lto_ids, obtained_ids, prev_dec_ids = lto_ids.long(), obtained_ids.long(), prev_dec_ids.long()
         B, S = prev_dec_ids.shape
-        st0 = self.init_stream(B, lto_ids.device)
+        st0 = self.init_stream(B, lto_ids.device, censored)
         if prefix_obtained is not None and prefix_obtained.size(1) > 0:
             Lp = int(prefix_obtained.size(1))
             _, _, _, _, carry = self.computed_scan(prefix_obtained.long(), prefix_prev.long(),
                                                    {**st0, "t": -Lp}, detach_carry=False)
             st0 = {**st0, **carry}
-        if self.censor_flag and censored is not None:
-            c = censored.to(lto_ids.device).float()
-            st0["h"] = [(c[:, None] * self.censor_h0[i][None, :])[None].contiguous()
-                        for i in range(len(self.event_model))]
         count, since, stock, pity, _ = self.computed_scan(obtained_ids, prev_dec_ids, st0)
         track = torch.is_grad_enabled() and stock.requires_grad
         stock_leaf = stock.detach().requires_grad_(True) if track else stock
