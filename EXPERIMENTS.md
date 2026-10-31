@@ -32,7 +32,7 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 42880–42897 | `b39_*` (18 runs, from `~/ProductGPT/work_gen6` at `93dcfbf`) | 2026-10-20 | R43 step 1: gen 6 against the rev-2 incumbent | complete, all 18 exit 0; result in R43 |
 | 44211–44258 | `b40_*` (48 runs, from `~/ProductGPT/work_gen6` at `a8ed3f9`) | 2026-10-26 | R44 stage 2: paired search, gen 5 and gen 6 | complete, all 48 exit 0; ranking in R44 |
 | 44320–44337 | `b41_*` (18 runs, from `~/ProductGPT/work_gen6` at `6b96b7d`) | 2026-10-27 | R44 stage 3: 6 candidates × seeds 11–13 | all 18 finished, exit 0 (qstat 2026-10-27); frozen gen-5 c06, gen-6 R43 |
-| 44361–44399 | `r45a_*` (39 runs, from `~/ProductGPT/work_r45` at `8fae1d7`) | 2026-10-27 | R45 part A: censored training, arms L/T/Z/ZF × k 1/2/4 + count, seeds 1–3 | all 39 finished, exit 0 (qstat 2026-10-27 18:30) |
+| 44361–44399 | `r45a_*` (39 runs, from `~/ProductGPT/work_r45` at `8fae1d7`) | 2026-10-27 | R45 part A: censored training, arms L/T/Z/ZF × k 1/2/4 + count, seeds 1–3 | all 39 finished, exit 0 (qstat 2026-10-27 18:30); read once 31 Oct: no censoring cost detectable at any depth (R45 part A RESULT) |
 | 44400–44441 | `r47b1_*`, `r47b2_*` (42 runs, from `~/ProductGPT/work_r47` at `010fc89`) | 2026-10-27 | R47 B1–B2: half-life profile, full vs stock-only slots, seeds 1–3 | B1 (even ids): all 21 exit 0, read 31 Oct (not identified); B2 (odd ids) FAILED at 44401 on a stock_only bug, the other 20 cancelled; see R47 |
 | 44467–44487 | `r47b2_*` (21 runs, from `~/ProductGPT/work_r47fix` at `a3b2ac0`) | 2026-10-27 | R47 B2 re-run after the stock_only gradient fix | all 21 finished, exit 0, as did B1's 21 (44400–44440 even) (qstat 2026-10-28); read once 31 Oct: forgetting not identified in B1 or B2 (R47) |
 | 44443–44446 | `b42_g5_c06_s2`–`s5` (4 runs, from `~/ProductGPT/work_gen6` at `9b3eccd`) | 2026-10-27 | R44 stage 4: gen-5 c06 seeds 2–5 (gen 6 reuses b39_g6w384) | all 4 finished, exit 0; holdout read once: tie (R44 stage 4) |
@@ -4757,7 +4757,7 @@ holdout and with half the seed variance.
   `b39_g6w384` seeds 1–5, which already exist. Part B (GPU,
   `r45_eval_chopped.pbs`) therefore does not have to wait for batch 42.
 
-### R45 — PLAN (approved by Jin 26 Oct 2026; part A submitted 27 Oct): controlled left-censoring on complete histories
+### R45 — PLAN (approved by Jin 26 Oct 2026; part A submitted 27 Oct, read 31 Oct): controlled left-censoring on complete histories
 
 **Question (Jin's).** What does it cost to learn from histories whose start is
 missing, and how does that cost grow with the depth of the missing start, for
@@ -4905,6 +4905,135 @@ the NLLs mean nothing):
 - **State error:** the restarted state's error against the truth grows with
   depth, as it should. The log-inventory error is 0.043 at k = 1 and 0.093 at
   k = 2; the pity error is 0.006 and 0.017.
+
+**Part A — RESULT (31 Oct 2026): a missing start costs nothing detectable at
+any depth up to 4 campaigns. The only measurable cost is the lost training
+labels.**
+
+*Read.*
+- All 39 runs exited 0 (PBS `Exit_status` 0 for 44361–44399, from
+  `qstat -x -f` on 31 Oct), on git `8fae1d7`.
+  - Walltimes were 8–21 minutes and best epochs 7–26. No run stopped for the
+    time budget.
+  - Every log's `[chop]` line and command match its arm.
+  - No log has a Traceback, error, NaN or OOM line. The only warning is
+    torch's nested-tensor UserWarning, present in all 39.
+- **Validation-only gate, before the read.** T, Z and ZF sometimes share best
+  epochs (all three at 12 on seed 1, k = 1), so their per-epoch validation
+  curves were compared first. T differs from Z by up to 0.013–0.125 on each
+  (k, seed), and ZF from Z by up to 0.003–0.016. They are distinct runs.
+- **F** is R44's stage-4 gen-6 runs `b39_g6w384`, seeds 1–3. Their cfgs match
+  the frozen configuration, and their holdout was already opened in R44.
+- **Reader:** `scripts/r45a_read.py`, commit `495a0e3` on `r45-censoring`.
+  - The plan fixes the rules but named no script. The reader was therefore
+    written on 31 Oct, after the runs finished and before any holdout number
+    was read.
+  - It was tested on synthetic `final.json` files: planted effects were
+    recovered, and a wrong cfg, a missing run and duplicated values each
+    stopped it.
+  - The commit is not pushed. The reader ran once (31 Oct, 14:40) from a copy
+    with the same sha256 (`4395d4c4…`) at
+    `~/ProductGPT/work_r45/results/r45/r45a_read.py`.
+  - Output: `results/r45/partA_read.txt` and `partA_read.json` in
+    `~/ProductGPT/work_r45`.
+- **Gates in the reader, all passed:** each cfg against the frozen
+  configuration and its arm's chop settings; no time-budget stops; all 42 runs
+  score the same 217,303 headline and 222,889 in-sample holdout events; no two
+  validation NLLs are equal.
+
+*NLL on `outsample_users_holdout_period`* (mean over seeds 1–3, with the seed
+sd):
+| depth k | L (labels only) | T (context lost) | Z (censored) | Z+flag |
+|---|---|---|---|---|
+| 1 | 0.8922 (0.0045) | 0.8892 (0.0108) | 0.8889 (0.0079) | 0.8877 (0.0054) |
+| 2 | 0.8960 (0.0055) | 0.8955 (0.0085) | 0.8866 (0.0061) | 0.8878 (0.0095) |
+| 4 | 0.9041 (0.0131) | 0.9032 (0.0074) | 0.9074 (0.0141) | 0.9077 (0.0149) |
+
+F (no chop) scores 0.8829 (0.0022). The count chop (Z at 128 occasions)
+scores 0.8867 (0.0046).
+
+*Paired differences* (mean, with the signs on seeds 1, 2, 3; positive = the
+first arm is worse):
+| k | Z − L (the cost) | Z − T (state) | T − L (context) | Z − (Z+flag) (fix) | L − F (volume) |
+|---|---|---|---|---|---|
+| 1 | −0.0033 (−−+) | −0.0003 (+−−) | −0.0030 (−−+) | +0.0012 (+−+) | +0.0093 (+++) |
+| 2 | −0.0094 (−−−) | −0.0089 (−−−) | −0.0005 (+−−) | −0.0012 (+−+) | +0.0131 (+++) |
+| 4 | +0.0033 (++−) | +0.0042 (++−) | −0.0009 (−−+) | −0.0003 (+−−) | +0.0212 (+++) |
+
+*The rules.*
+- **Cost, Z − L:**
+  - k = 1: −0.0062, −0.0096, +0.0061. Mean −0.0033, signs mixed: **not
+    detectable**.
+  - k = 2: −0.0078, −0.0089, −0.0114. Mean −0.0094. The sign is the same on
+    all 3 seeds, but it favours Z and is under 0.02: **not detectable**.
+  - k = 4: +0.0126, +0.0004, −0.0030. Mean +0.0033, signs mixed: **not
+    detectable**.
+- **Fix, Z − (Z+flag):** the means are −0.0012 to +0.0012, with mixed signs
+  at every depth. The flag **recovers nothing**, because there is no cost to
+  recover.
+- **Decision (pre-registered):** no cost exists at any depth. The next step
+  is therefore a pre-registered run that adds the 10,212 left-censored
+  players with the flag on. It needs its own plan and Jin's approval, and
+  nothing is submitted. The flag is inert here (672 parameters, Z+flag ≈ Z),
+  so keeping it on, as the rule says, costs nothing.
+
+*Reported with no decision attached.*
+- **A chop costs only the labels it removes.**
+  - L − F, the lost labels alone, is positive on all 3 seeds at every depth.
+    It grows with depth: +0.009, +0.013, +0.021. By the cost test it would
+    "exist" at k = 4.
+  - Z − F = (Z − L) + (L − F). The whole cost of a censored history against
+    the full data (means +0.006, +0.004, +0.025) is therefore the lost
+    training volume.
+- **The null is well resolved.** The Z − L means sit within ±0.01 of zero,
+  with a paired seed sd of 0.002–0.008.
+- **Chopped training is noisier at depth 4.** The seed sd within an arm is
+  0.007–0.015 at k = 4, against 0.002 for F.
+- **The other holdout cell agrees.** On `insample_users_holdout_period`, the
+  Z − L means are −0.0033, −0.0098 and +0.0023, and the Z − (Z+flag) means
+  run from −0.0011 to +0.0012.
+- **Count cross-check:** Z at 128 occasions − Z at k = 2 is +0.0001
+  (−0.0007, −0.0014, +0.0024). The count chop behaves like calendar depth 2,
+  as the data preparation (job 44272) said it would.
+
+*Predictions.*
+- **1. Small one-step costs (Z − L under 0.02 at every depth):** held. The
+  cost cannot be told apart from zero.
+- **2. Monotone in depth, flattening by k = 4:** failed. There is no depth
+  curve: −0.003, −0.009, +0.003.
+- **3. Mostly state, not context (Z − T ≥ T − L):** not testable in practice.
+  The comparison holds at k = 1 and 4 and fails at k = 2. But every component
+  is within ±0.01, mostly with mixed signs, so neither the state nor the
+  context carries a detectable cost.
+- **4. Part B costs more than part A:** needs part B.
+- **5. Generation:** needs step 2, which is not built.
+
+*Not done, and the limits of the reading.*
+- **The computed-state error is not reported.** The plan asks every table
+  for it.
+  - It is a property of the chop, not of the trained model, and part A's
+    `final.json` files do not carry it.
+  - Part B's script computes it for Z on the same headline cell
+    (`state_error` in `r45_eval_chopped.py`), so it arrives with part B.
+    Part B does not cover the count arm.
+  - T recovers the state exactly (`test_r45_censor.py`, 7.5e-08). L and F
+    keep the whole history.
+- **Part A holds the customers fixed** and removes information from them. It
+  does not test whether the 10,212 behave differently from the 5,004: their
+  accounts began before the data window. The inclusion run tests that.
+
+*What this settles.*
+- For one-step prediction, a missing start of up to 4 campaigns (53% of the
+  training labels) costs nothing detectable once the lost volume is
+  accounted for. The state restarting at zero does no measurable harm.
+- *Inference, not tested:* read the other way, the 10,212 (64% of all
+  purchases) should add usable training labels rather than noise. The
+  inclusion run is what tests this.
+- **Still open in R45:**
+  - Part B is ready: `qsub -v TAGS=b39_g6w384,SEEDS=1:2:3:4:5
+    scripts/r45_eval_chopped.pbs` from `~/ProductGPT/work_r45`, under 2
+    GPU-hours. It waits for Jin's go-ahead. The queue was empty on 31 Oct.
+  - Step 2 (generation) waits for the rollout to accept chopped histories.
 
 ### R47 — PLAN (approved by Jin 26 Oct 2026; part A done, B1–B2 submitted 27 Oct): do players forget their holdings, within and across campaigns?
 
