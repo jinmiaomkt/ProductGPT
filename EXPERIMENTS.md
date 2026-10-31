@@ -6023,3 +6023,228 @@ data, against 0.001 (null a) and −0.039 (null b).
 - The generation evaluation (deferred, 27 Oct).
 - Whether to register a follow-up on banner loyalty: the half-life test, or
   more classes under null (b).
+
+### R46 — PLAN, part D (banner loyalty), drafted 28 Oct 2026, approved by Jin 31 Oct 2026 before any part D code or run: the half-life test under the continuous null, and more classes
+
+Jin, 28 Oct: "Draft a pre-registration for a banner-loyalty follow-up (the
+half-life test under the continuous null, and more classes). Don't run
+anything yet." Jin, 31 Oct: "Approve part D". The plan below is committed
+unchanged before any part D code is written. Null (c) is not added.
+
+**Question.** Part C's I3 failed for banner loyalty alone. On null (b)
+(continuous taste, no state dependence), R6 reports banner loyalty of 2.26,
+above the real 2.06. There are two ways to tell real banner loyalty apart
+from persistent taste.
+1. **Its memory.** State dependence on a past purchase should fade, and
+   persistent taste does not. In part C, the spurious loyalty had a
+   half-life of 85–99 occasions in all 20 null (b) fits, against 1.76 on
+   the real data. That was seen after the fact (part C, point 6), so it is
+   a lead, not a result.
+2. **More classes.** The leak is a misspecification: six classes
+   approximating 200. If the null's spurious loyalty shrinks as classes are
+   added while the real estimate holds, banner loyalty is state dependence
+   that six classes were too few to show.
+
+**Why the half-life test needs a new rung.**
+- R6's banner, buy and ten-pull stocks share one decay (`a_dec`,
+  `parametric/model.py`).
+- On null (b) there is no other state dependence, so the banner stock sets
+  that decay alone. On the real data, the buy and ten-pull stocks also pull
+  on it, and both survived null (b).
+- So the real 1.76 may be the buy and ten-pull stocks' memory, not banner
+  loyalty's. A test on the shared half-life cannot separate the two.
+- **R6B** is R6 with one extra parameter, `a_ban`: the banner stock's own
+  decay. The buy and ten-pull stocks keep `a_dec`. R6B nests R6
+  (`a_ban = a_dec`). Its banner half-life `hl_ban` is the primary statistic.
+- The shared half-life of the frozen R6 is tested too (I6), because that is
+  the lead as stated.
+
+**Arms.** Each arm changes one factor against R6 (K = 6).
+
+| arm | asks | fitted | on the real data | on each fresh null (b) table |
+|---|---|---|---|---|
+| D1 | does banner loyalty fade faster than continuous taste can make it? | R6B (K = 6) | 2 starts | 2 starts |
+| D2 | does the null's spurious banner loyalty go away with more classes? | R6 at K = 9 and K = 12 | 3 starts per K | 3 starts per K |
+| base | part C's fit, repeated on fresh tables | R6 (K = 6) | part A's estimate | part C's start |
+
+**The null.**
+- **Null (b) exactly as in part C:** H6's best start (`H6_K6_s1`), with its
+  six class-constant vectors replaced by the same 200 classes (seed 46499),
+  simulated on the real design with the same environment and Tracker. Part
+  C's gates C-G1 and C-G2 apply unchanged.
+- **Fresh tables:** 20, seeds 46500 + r (r = 0–19).
+  - Part C's 20 null (b) tables (seeds 46400–46419) suggested the lead. They
+    are not part of any test here, but their numbers are reported beside the
+    new ones.
+  - Each fresh table is simulated once (stage 1), saved, and read by every fit
+    on it (gate C-G5 by checksum).
+
+**Starts.** Every rule below is applied identically to the real table and to
+each null table. A start is the K = 6 R6 estimate on that same table: part
+A's estimate on the real data, and the stage-1 fit on a null table. The
+stage-1 fit itself uses part C's start (H6 embedded in R6, with the real
+`a_dec`). This is the one asymmetry, and it is inherited from part C's I3.
+- **R6B:**
+  - (A) the table's R6 estimate with `a_ban = a_dec`;
+  - (B) the same with `a_ban` at a 90-occasion half-life.
+
+  The lower penalised training objective is kept. One start sits in each
+  basin, so neither a short nor a long real half-life can be an artefact of
+  where the fit began.
+- **R6 at K = 9 and 12, by splitting classes:**
+  - K = 9 splits the three heaviest classes of the table's K = 6 estimate;
+    K = 12 splits all six.
+  - A split class becomes two classes, each with half its weight. The copy
+    keeps every class parameter, and its class constants are moved by ε·z,
+    where z is standard normal (seed 46900 + s).
+  - Three starts: s = 0 (ε = 0, the nested start, which is the K = 6 model
+    and converges at once), s = 1 (ε = 0.1) and s = 2 (ε = 0.5).
+  - The lowest penalised training objective is kept. Because the nested start
+    is included, more classes can never look worse than six through a bad
+    start.
+- **Fitting:** `parametric/fit.py`'s estimator on the training mask, as in
+  parts A and C: L-BFGS, Newton polish, ridge precision 0.01.
+
+**Quantities.**
+- **D1:** `hl_ban`, R6B's banner half-life in occasions. Also reported:
+  R6B's banner loyalty (class-weighted), its buy and ten-pull half-life, and
+  part C's four SD quantities.
+- **D2:** banner loyalty (class-weighted) at K = 6, 9 and 12, and part C's
+  other three SD quantities (buy loyalty, ten-pull loyalty, the repeat
+  premium).
+- **Real data, descriptive:** the campaign-27 NLL of R6B, R6 K = 9 and
+  R6 K = 12, next to R6 K = 6's 0.9690.
+
+**Gates (each logged; nothing is read until they pass).**
+- **C-G1, C-G2** on every fresh table, as in part C.
+- **C-G5:** every fit on a table reads the stage-1 table (checksum).
+- **D-G1, unit tests first** (`scripts/test_r46_banner.py`, HPCC CPU):
+  - R6B with `a_ban = a_dec` gives R6's probabilities exactly;
+  - moving `a_ban` alone changes the banner-stock terms and leaves the buy
+    and ten-pull terms unchanged, so the new parameter does what it claims;
+  - an ε = 0 split gives the K = 6 probabilities exactly, at K = 9 and 12;
+  - `hl_ban` and the class-weighted loyalty read back correctly from a known
+    parameter vector;
+  - the existing rungs' layouts, and the part A, B and C suites, are
+    unchanged.
+- **D-G2, nesting:** on every table, the kept R6B fit's penalised objective
+  is no worse than R6's, and the kept K = 9 and K = 12 fits' objectives are
+  no worse than the nested start's (+1e-6 for the ridge on duplicated
+  class terms).
+- **D-G3, `hl_ban` identified on the real data:**
+  - R6B's sandwich SE for `hl_ban` is finite and not on the ridge list;
+  - if the two real starts end within 1e-6 in objective, their `hl_ban`
+    values agree within 2 SE.
+
+  If D-G3 fails, I5 is void, and `hl_ban` is reported as not identified on
+  the real data.
+
+**Decision rules.** Monte Carlo p-values over the 20 fresh null (b) tables,
+one-sided and fixed now: p = (1 + #{null values at least as extreme as the
+real one}) / 21. The minimum is 0.048, as in part C.
+- **I5, banner loyalty fades faster than continuous taste makes it
+  (primary):**
+  - p5 = (1 + #{null `hl_ban` ≤ real `hl_ban`}) / 21;
+  - holds if p5 ≤ 0.048, i.e. the real banner half-life is shorter than all
+    20 null ones.
+- **I6, the lead as stated (secondary):**
+  - p6 = (1 + #{null shared half-life ≤ 1.762}) / 21, R6 at K = 6;
+  - holds if p6 ≤ 0.048.
+- **I7, banner loyalty passes part C's I3 with twelve classes:**
+  - at K = 12, p7 = (1 + #{null banner loyalty ≥ real banner loyalty}) / 21;
+  - holds if p7 ≤ 0.048.
+  - K = 9 is reported beside it but not tested, so there is one test, not
+    two.
+  - The other three SD quantities are tested at K = 12 by part C's rule and
+    reported. They are not part of I7.
+
+**Predictions.**
+1. On the fresh tables, R6 (K = 6) repeats part C: banner loyalty above the
+   real 2.06 on at least 18 of 20, and a shared half-life above 50 occasions
+   on all 20. So I6 holds.
+2. On the real data, R6B's banner half-life is under 10 occasions.
+3. On the null tables, R6B's banner half-life is above 50 occasions on all 20.
+4. **I5 holds.**
+5. On the null tables, the spurious banner loyalty falls with classes: its
+   K = 12 mean is at least a third below its K = 6 mean.
+6. On the real data, banner loyalty at K = 12 is within 10% of K = 6's 2.064.
+7. **I7 holds.**
+8. Buy loyalty, ten-pull loyalty and the repeat premium pass at K = 12, as
+   they did at K = 6.
+
+**What each outcome licenses.**
+
+| I5 | I7 | reading |
+|---|---|---|
+| holds | holds | Banner loyalty is not continuous taste of the null (b) kind: its decay is too fast, and its level survives once twelve classes are allowed. Part C's I3 failure is put down to the six-class approximation. |
+| holds | fails | Continuous taste can match banner loyalty's level even with twelve classes, but not its short memory. The paper reports banner loyalty as state dependence on its time profile and says the level test fails. |
+| fails | holds | Banner loyalty's own memory is as long as persistent taste's, yet its level beats the null with twelve classes. Not established either way, and the paper does not claim it. |
+| fails | fails | Banner loyalty cannot be told apart from continuous taste on this design. The paper's state dependence is the last decision, the runs, and buy and ten-pull loyalty (part C). |
+
+- **If I6 holds but I5 fails:** the short shared half-life was the buy and
+  ten-pull stocks' memory, and part C's lead was misleading. The ledger says
+  so.
+- **If D-G3 fails:** the real data do not pin down banner loyalty's own
+  memory, I5 is void, and the reading rests on I7.
+
+**What this cannot show.**
+- I5 rejects one null: normal taste in the constants, matched to H6's
+  moments.
+- It cannot reject taste that drifts across campaigns. Drifting taste also
+  fades, so it could produce short-memory loyalty. That is the remaining
+  alternative, and the paper names it.
+
+**Holdout.** Not read.
+- Every fit uses training rows only, and the real fits are scored on
+  campaign 27 only (`--score-roles val`).
+- Nothing is reselected: T1's R6 (K = 6) stands. R6B and K > 6 are
+  diagnostics.
+- If R6 at K = 12 beats K = 6 on campaign 27 by more than 0.02 nats, that is
+  recorded for a later registration and not scored on the holdout.
+
+**Code to write (none exists yet).**
+- `parametric/model.py`: rung `R6B`, appended after H6 so no existing layout
+  moves.
+- `parametric/identify.py`: `split_classes` (K = 6 to 9 or 12), and
+  `hl_ban` in `quantities`.
+- `scripts/r46d_banner.py` (one fit per call), `scripts/r46d_cpu.pbs`,
+  `scripts/r46d_compare.py` and `scripts/test_r46_banner.py`.
+
+**Compute: HPCC CPU, PBS arrays, 8 CPUs per element.**
+
+| stage | elements | content | queue and size |
+|---|---|---|---|
+| TEST | 1 | D-G1, then the part A, B and C suites | short |
+| SMOKE | 5 | 150 customers, 2 rounds: real R6B, real K = 12, null stage 1, null R6B, null K = 12 | short |
+| REAL | 8 | R6B × 2 starts; K = 9 × 3; K = 12 × 3 | R6B short, K > 6 long |
+| NULL1 | 20 | simulate and save table r, then fit R6 (K = 6) | short, 24 GB |
+| NULL2 | 160 | per table: R6B × 2, K = 9 × 3, K = 12 × 3 (`afterok` NULL1) | R6B short, K > 6 long |
+| CMP | 1 | the read-out (`afterany`) | short |
+
+- **Size.**
+  - A K = 6 fit took about 3.3 h in part C (longest 5.6 h). K = 9 and 12
+    carry 233 and 269 parameters against 197.
+  - Projected about 5 h and 8 h, which is why K > 6 goes to `long` with
+    24 h walltime.
+  - Memory: 24 GB at K = 6 (peak 4–6 GB in part C); K > 6 is sized from the
+    smoke's peak.
+  - About 800 element-hours in all, roughly two days at part C's
+    concurrency.
+- **Seeds:**
+  - fresh null (b) tables 46500 + r;
+  - the 200-class draw 46499 (part C's);
+  - split perturbations 46900 + s.
+- **Results** (HPCC, gitignored): `runs/r46/partD/{real,null}/` and
+  `partD/compare.json`; logs `~/ProductGPT/logs/r46d_*`.
+
+**Out of scope.**
+- **Null (c):** the real model with banner loyalty removed, plus continuous
+  taste. It holds the other state dependence fixed, so it is a sharper null
+  for banner loyalty. It needs a constrained rung and its continuous version.
+  It can be added as D3 before anything runs.
+- A continuous-mixing estimator (simulated ML with normal constants): the
+  direct answer to Keane, but a new estimator.
+- R6B with more classes (the cross of D1 and D2).
+- The data's own rarity rates: the environment stays as in part C, so part
+  D's null (b) is part C's (part C caveat).
+- The generation evaluation (deferred, 27 Oct).
