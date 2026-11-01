@@ -6309,3 +6309,39 @@ real one}) / 21. The minimum is 0.048, as in part C.
 - **The read-out** is `python scripts/r46d_compare.py --out-dir $R46/partD`,
   run once by CMP. It reads verdicts only when every table is complete and
   every gate passes.
+
+### R46 — part D, 1 Nov 2026: C-G5 refused all 120 K = 9 / 12 null fits on the long-queue nodes; rerun on the short queue, no change to code, plan or gates
+
+- **What happened.** Everything except NULL2K exited 0: REALB, REALK, NULL1
+  and NULL2B. All 120 NULL2K elements (44654) stopped after 18 s. C-G5 found
+  that each table's checksum matched stage 1's, but the features rebuilt
+  from it did not. The fit never started, and no JSON was written.
+  - The split is by node. Every element on the short-queue nodes (a-4, a-5,
+    a-6) passed C-G5: NULL2B 40/40, plus SMOKE2's 2. Every element on the
+    long-queue nodes (a-7, a-8) failed it.
+  - The wrong checksum is deterministic: table r00 rebuilds to `dfc6fab6…`
+    on both a-7 and a-8, against stage 1's `05842929…`.
+  - The real-data fits are unaffected. REALK ran on the long nodes, but the
+    real data are read from the saved feature file, never rebuilt.
+- **The first read-out** (CMP 44655) ran `afterany` on schedule. It printed
+  the real block and the per-table completeness, and read no verdict ("a gate
+  failed or a fit is missing"). Its output is kept as
+  `partD/compare_44655_incomplete.json`.
+- **Rerun** at 12:05 on 1 Nov, from `work_r46` at `72659bb` (unchanged):
+  - NULL2K: 44673, 120 elements, `-q short`, 12 h, 24 GB (part D's peak is
+    6.5 GB);
+  - read-out: 44674 (`afterany`).
+
+  The queue is the only change. The long queue was chosen at launch for its
+  24 h walltime. The real K = 12 fits took 1.4–2.6 h on the long nodes, so
+  12 h leaves room.
+- **Diagnostic** (not part of the test): jobs 44675 (short) and 44676 (long)
+  each rebuild table r00's features, and 44677 compares them.
+  - 44676 ran on a-7 (Intel Xeon Platinum, AVX-512, numpy 1.26.4, torch 2.6.0)
+    and reproduced the failing checksum `dfc6fab6…`.
+  - 44675 waits for a short-queue slot, which the rerun has filled. The size of
+    the difference is not known yet: it may be float32 rounding (the pity
+    depths are float32 torch), but that is not checked.
+- **Rerun's first wave:** 28 elements started on a-4, a-5 and a-6, and C-G5
+  passed on all 28 (0 FAIL). The other 92 queue behind them.
+- **Not read yet, by the rule:** I5, I6 and I7. The verdicts wait for 44674.
