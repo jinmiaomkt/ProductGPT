@@ -44,7 +44,7 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 44656 | `r45_generate` CPU gate (short queue, `SMOKE_ONLY=1`, from `~/ProductGPT/work_r45g` at `7b9eff7`) | 2026-10-31 | R45 step 2: five test suites and the 12-customer smoke | suites passed; smoke STOPPED (exit 4) on a bug in its own chop check, which refused customers with no holdout row; see R45 step 2 |
 | 44657 | `r45_generate` (GPU, 8 h, `afterok` on 44656) | 2026-10-31 | R45 step 2: generation on chopped histories, 60 rollouts | deleted by PBS when 44656 failed; never ran |
 | 44658 | `r45_generate` CPU gate (short queue, `SMOKE_ONLY=1`, `work_r45g` at `52ead12`) | 2026-10-31 | R45 step 2: the gate again, after the fix | exit 0 in 15 min, every gate passed (see R45 step 2) |
-| 44659 | `r45_generate` (GPU, 8 h, `afterok` on 44658) | 2026-10-31 | R45 step 2: generation on chopped histories, 60 rollouts | running since 22:43 (qstat 2026-10-31) |
+| 44659 | `r45_generate` (GPU, 8 h, `afterok` on 44658) | 2026-10-31 | R45 step 2: generation on chopped histories, 60 rollouts | finished exit 0 in 3 h 04 min, integrity clean on all 60 (qstat 2026-11-01); reader run once: no generation cost detectable at any depth (R45 step 2 RESULT) |
 | 44443–44446 | `b42_g5_c06_s2`–`s5` (4 runs, from `~/ProductGPT/work_gen6` at `9b3eccd`) | 2026-10-27 | R44 stage 4: gen-5 c06 seeds 2–5 (gen 6 reuses b39_g6w384) | all 4 finished, exit 0; holdout read once: tie (R44 stage 4) |
 | 44465 | `r43_strata` on gen-5 c06 seeds 1–5 (CPU, short queue) | 2026-10-27 | R44 stage 4: length strata for gen 5 | finished exit 0, self-check ok; result in R44 stage 4 |
 | 44522, 44523 | `r43_generate` gates, g5 / g6 (CPU, short queue, from `~/ProductGPT/work_gen6` at `ef7efba`) | 2026-10-28 | R43 step 2: test suites and 12-customer smokes | both exit 0; every gate passed |
@@ -4767,7 +4767,7 @@ holdout and with half the seed variance.
   `b39_g6w384` seeds 1–5, which already exist. Part B (GPU,
   `r45_eval_chopped.pbs`) therefore does not have to wait for batch 42.
 
-### R45 — PLAN (approved by Jin 26 Oct 2026; parts A and B read 31 Oct; step 2 submitted 31 Oct): controlled left-censoring on complete histories
+### R45 — PLAN (approved by Jin 26 Oct 2026; parts A and B read 31 Oct; step 2 read 1 Nov): controlled left-censoring on complete histories
 
 **Question (Jin's).** What does it cost to learn from histories whose start is
 missing, and how does that cost grow with the depth of the missing start, for
@@ -5330,7 +5330,7 @@ The cells score 217,303, 222,889, 262,758 and 264,064 events.
   training time. If it is adopted, I0 (no flag) is the simpler arm, and rule 3
   finds no reason to prefer I.
 
-### R45 step 2 — DESIGN (fixed 31 Oct 2026, before any step-2 rollout and before part B or C was read): generation on chopped histories
+### R45 step 2 — DESIGN (fixed 31 Oct 2026, before any step-2 rollout and before part B or C was read; read 1 Nov): generation on chopped histories
 
 **Question (the R45 plan's step 2).** Does a missing start damage generation?
 Part A found it costs one-step prediction nothing detectable. Generation could
@@ -5489,6 +5489,96 @@ detached worktree, shipped by git bundle). The design above was committed
   - All 8 smoke arms: mismatch 0, altered 0, rows outside the frame 0. The
     smoke's energies (12 customers) mean nothing.
   - 44659 started at 22:43 on 31 Oct.
+
+**Step 2 — RESULT (1 Nov 2026): no generation cost of censoring is detectable
+at any depth. Every free-running arm, censored or not, is 28–39× the band, so
+the simulator's own drift swamps whatever a missing start does.**
+- **The job.** 44659 exited 0 after 3 h 04 min on a-11 at `52ead12`; the log
+  was read in full.
+  - Every gate passed again, and the band (q95 0.0781258) reproduced R36i/R43's.
+  - k = 0 through the chop path is IDENTICAL to R43's rollout.
+  - All 60 runs: mismatch 0, altered 0, rows outside the frame 0. Each rollout
+    took 2.5–3.5 minutes.
+- **The reader** was run once (sha `09fbd27e…`, input `step2.json` sha
+  `c8a689d6…`). All gates passed. Output: `work_r45g/results/r45/step2_read.json`.
+  - Continuity: fr_F_k0 and tf_F_k0 equal R43's G6 on seeds 1–3 exactly
+    (difference 0.0).
+  - Seeds 1–3 of G6 average 3.024; R43's five-seed mean was 2.617, because
+    seeds 4 and 5 scored 1.643 and 2.367.
+
+Energy, mean over seeds 1–3 (seed sd). Band q95 0.078; R43's yardsticks are
+Markov 0.784 and i.i.d. 2.468.
+
+| k | F free | Z free | ZF free | F forced | Z forced | ZF forced |
+|---|---|---|---|---|---|---|
+| 0 | 3.024 (0.43) | — | — | 0.349 (0.04) | — | — |
+| 1 | 2.913 (0.32) | 2.728 (0.27) | 2.698 (0.47) | 0.359 (0.04) | 0.409 (0.07) | 0.390 (0.06) |
+| 2 | 2.876 (0.35) | 2.219 (0.34) | 2.478 (0.44) | 0.369 (0.04) | 0.408 (0.08) | 0.412 (0.07) |
+| 4 | 2.996 (0.36) | 2.893 (0.73) | 3.041 (0.49) | 0.396 (0.05) | 0.545 (0.15) | 0.533 (0.15) |
+
+**The rules** (free running, paired by seed; positive means the first arm is
+farther from the real data).
+
+| rule | k = 1 | k = 2 | k = 4 |
+|---|---|---|---|
+| 1. Z(k) − F(0), damage | −0.297, no difference | −0.806 (0/3 farther), **better** | −0.132, no difference |
+| 2. ZF(k) − Z(k), fix | −0.030, no difference | +0.260 (3/3), **worse** | +0.149, no difference |
+| 3. F(k) − F(0), input only | −0.111 (0/3), **better** | −0.149 (0/3), **better** | −0.028, no difference |
+
+**DECISION: rule 1 never says "worse", so no generation cost of censoring is
+detectable. R45 has no generation objection to censored histories.**
+
+- **The four non-null calls don't fit a censoring story.**
+  - They say that removing history brings generation *closer* to the real
+    data, and that the flag pushes it *farther*.
+  - None is monotone in depth: k = 2 differs and k = 4 does not.
+  - In the three "better" calls, seed 3 carries two thirds or more of the
+    mean. For example, F(2) − F(0) is −0.015, −0.089 and −0.343 by seed.
+  - The flag's "worse" at k = 2 is the steadiest call (+0.287, +0.339 and
+    +0.152), but it is absent at k = 1 and k = 4.
+  - This is the weakness stated in advance. The free-running seed sd
+    (0.27–0.73) is 3.5–9× the band, and under the null 3 same signs happen 1
+    time in 4, so 9 comparisons expect about 2 such calls. I read them as
+    noise; that reading is untested.
+- **Where the arms differ:** Z at k = 2 generates more NotBuy (0.247, against
+  F's 0.176). Every free-running arm generates less than half the real NotBuy
+  share (0.425), and the longest NotBuy run is a top functional throughout.
+- **Teacher forced (descriptive, the sensitive check):**
+  - A full-history model handed a censored history, F(k) − F(0): +0.010,
+    +0.021 and +0.048. It is positive on 3 of 3 seeds at every depth and grows
+    with depth, but stays under the band. This is part B's pattern in
+    generation.
+  - Z(k) − F(0): +0.060, +0.060 and +0.196. At k = 4 it is positive on 3 of 3
+    seeds and 2.5× the band.
+  - Z(k) − F(k): +0.050, +0.039 and +0.148, so Z is farther, not closer. Z was
+    trained on chopped histories, so it saw fewer labels. That fits part A,
+    where the only cost was the lost labels (L − F +0.009/+0.013/+0.021).
+  - The flag, ZF(k) − Z(k): −0.019, +0.004 and −0.012. It does nothing, as in
+    part A.
+  - Teacher forcing removes 79–89% of the free-running distance in every arm
+    (R43: 76–90%).
+- **Predictions:**
+  - 1 holds: every free-running run is outside the band.
+  - 2, 3 and 4 fail, on the calls above.
+  - 5 holds.
+  - 6 fails: Z is farther than F under teacher forcing.
+- **What it means.**
+  - A missing start costs generation something small that grows with depth.
+    It shows only when the model is held to the real history (+0.01 to
+    +0.20). Once the model generates on its own, its distance from the real
+    data (about 3.0) is at least 15× that cost.
+  - The free-running test cannot see an effect under about 0.3–0.7 energy.
+    "No objection" therefore means no objection a simulator this far from the
+    data could detect.
+  - Z's extra cost comes from labels lost by chopping complete histories. In
+    part C the comparison runs the other way: including the censored players
+    adds labels. So prediction 6's failure is no argument against part C's
+    inclusive sample.
+  - R45 is complete: part A, part B, part C and step 2 are all read.
+- **Device note.** The CPU gate and the GPU job's own smoke agree to 3
+  decimals on the F and Z arms, but not on the flagged arms (fr_ZF_k2 7.533
+  against 7.728). Only the flagged arms start the GRU from a non-zero state.
+  All 60 decision runs ran on one GPU, so the paired comparisons are unaffected.
 
 ### R47 — PLAN (approved by Jin 26 Oct 2026; part A done, B1–B2 submitted 27 Oct): do players forget their holdings, within and across campaigns?
 
