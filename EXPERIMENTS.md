@@ -6023,3 +6023,15 @@ d is paired per occasion, with a 2,000-draw customer bootstrap.
    later occasions respond). At R49 arm B's speed this is about 7 h of two-GPU time.
 3. *Read-out, once* (`scripts/r53_readout.sh`): R48's row gate, the GRU pairing gate,
    then H1 and H2. Outputs go to `runs/r53/`.
+
+**Launched (2 Nov 2026, about 20:00).** The weights are on HPCC at the pinned commit
+(18 files, 55.6 GB; `tokenizer.json` sha256 `0997f410…`). Jobs 44763–44766 are shards
+0–3, at code dcd28a4, and run one at a time under the 2-GPU cap. Shard 0's in-job
+gates all pass:
+- T1–T6 and T8 pass with the downloaded tokenizer, including T1 on the real chat
+  template;
+- `Qwen3_5ForCausalLM` loads with 0 missing and 0 mis-shaped weights;
+- self-check: same-length t4c 0.0 and repeat 0.0, so no leak; later occasions respond
+  (2.71); t3 true-letter mean 0.051, under the 0.1 gate, about the same as Qwen3.6-27B's
+  0.050.
+It scores at about 1,840 tokens/s, like R49 arm B, so about 7 h in all.
