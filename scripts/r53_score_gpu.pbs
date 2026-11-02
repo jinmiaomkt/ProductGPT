@@ -1,0 +1,63 @@
+#!/bin/bash
+#PBS -N r53_score
+#PBS -l select=1:ncpus=8:ngpus=2:mem=64GB
+#PBS -q GPU
+#PBS -l walltime=12:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+# ============================================================================
+# R53, GPU: Qwen3.8-27B on one shard of the out-of-sample customers, exactly as
+# R49 arm B ran Qwen3.6-27B: productgpt-llm5 (transformers 5.21.0), native
+# 262,144 context, bf16 weights split over the job's two L40S, no quantisation.
+# Every job gates itself before scoring and stops at the first failure:
+#   1. the unit tests T1-T6 with the downloaded tokenizer (CPU, about a minute)
+#   2. --strict-load: no weight missing or mis-shaped
+#   3. --selfcheck: T3/T4 with the real model on the GPU
+#
+#     cd ~/ProductGPT/work_r48
+#     qsub -v SHARD=0,NSHARDS=4 scripts/r53_score_gpu.pbs     (etc.)
+#
+# Writes $R53/qwen38_27b_out_shard<k>.npz/.json; a finished shard is skipped.
+# ============================================================================
+set -eo pipefail
+module purge
+module load python/3.11.4
+cd "$PBS_O_WORKDIR"
+export PYTHONUNBUFFERED=1 OMP_NUM_THREADS=8 HF_HUB_OFFLINE=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+: "${SHARD:?pass SHARD}" "${NSHARDS:?pass NSHARDS}"
+WHO="${WHO:-out}"
+ROOT=/storage/home/jinmiao/ProductGPT
+M=Qwen3.8-27B
+TAG=qwen38_27b
+source "$ROOT/venvs/productgpt-llm5/bin/activate"
+R46=$ROOT/runs/r46
+R53=$ROOT/runs/r53
+mkdir -p "$R53"
+LOG=$ROOT/logs/r53_score_${TAG}_${WHO}_s${SHARD}_${PBS_JOBID%%.*}.log
+exec > >(tee -a "$LOG") 2>&1
+echo "R53 score ($M) WHO=$WHO SHARD=$SHARD/$NSHARDS on $(hostname) at $(date), commit $(git rev-parse --short HEAD)"
+cat "$ROOT/models/$M/REVISION.txt"
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+
+set +e
+python scripts/test_r48_zeroshot.py --tokenizer "$ROOT/models/$M" --arch qwen3_5
+rc=$?
+if [ $rc -eq 0 ]; then
+    python -m llm_zeroshot.score --table "$R46/occasions_v6_S1024.npz" --model "$ROOT/models/$M" \
+        --out-dir "$R53" --tag ${TAG}_${WHO} --who "$WHO" \
+        --shard "$SHARD" --n-shards "$NSHARDS" --yarn 0 --n-gpus 2 \
+        --strict-load --selfcheck --device cuda
+    rc=$?
+fi
+set -e
+if [ $rc -eq 0 ]; then
+    bash "$PBS_O_WORKDIR/scripts/notify.sh" "OK  R53 ${TAG} ${WHO} shard ${SHARD}/${NSHARDS} (job ${PBS_JOBID%%.*})" || true
+else
+    bash "$PBS_O_WORKDIR/scripts/notify.sh" "FAIL R53 ${TAG} ${WHO} shard ${SHARD}/${NSHARDS} exit=${rc} (job ${PBS_JOBID%%.*})" || true
+fi
+exit $rc

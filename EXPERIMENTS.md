@@ -5916,3 +5916,110 @@ high, so R48 stands. R49's H2 is robust to rounding.**
 - *Not needed:* a float32 run of all 2,502 customers. Under band (a) it is not
   called for; at the measured rate it would take about 11.5 h on two GPUs.
 - *Output:* `runs/r50/r50_fp32_vs_r48.json`.
+
+### R53 — PLAN (2 Nov 2026, at Jin's request; nothing run on real data): the strongest open model that fits our GPUs, zero-shot, same prompt as R48
+
+(R51 and R52 are taken on other branches.)
+
+**Why.** R49's larger models came within 0.06–0.07 nats of the GRU, zero-shot. Jin
+asked to proceed to "even more advanced off-the-shelf models". R53 asks whether
+a much stronger open model, used the same way, closes what is left of the gap.
+
+**What fits.** Our limit is two L40S (89 GB) per user. R49's 56 GB of bf16 weights
+ran within it, leaving about 33 GB for a 37k-token forward pass. The scores below
+are the Artificial Analysis Intelligence Index v4.3.2, as a third-party list
+reports them (Pinggy, Oct 2026). I checked the live site once: it is now on v5.0,
+where Qwen3.8-27B scores 20, GLM-5.3 32 and MiMo-V2.6-Pro 30, and it does not list
+Qwen3.6-27B. So read the scores as a rough ranking, not as measurements.
+
+| model | parameters (total / active) | index | memory | fits? |
+|---|---|---|---|---|
+| MiMo-V2.6-Pro | 1.02T / 42B | 46 | ~574 GB, mostly 4-bit | no |
+| GLM-5.3 | 744B / 40B | 45 | 756 GB, 8-bit | no |
+| Kimi K3 | 2.78T / 104B | 44 | 1.56 TB, 4-bit | no |
+| GLM-5.3-Flash | 320B / 18B | 42 | 162–210 GB, 4-bit | no |
+| Qwen3.8-Flash-Next | 125B / 6B + 51B n-gram table | 40 | 96–114 GB, 4-bit | no |
+| **Qwen3.8-27B** | 27B, dense | **34** | **56 GB, bf16** | **yes** |
+| Qwen3.6-27B (R49 arm B) | 27.8B, dense | 21 | 56 GB, bf16 | ran |
+| Muse Glimmer 30B | 29.6B, dense | 17 | ~60 GB, bf16 | yes, but ranks lower |
+| Gemma 4 31B | 30.7B, dense | 15 | ~61 GB, bf16 | yes, but ranks lower |
+| Mistral Medium 3.5 | 128B, dense | 14 | ~80 GB, 4-bit | barely, and ranks lower |
+
+So Qwen3.8-27B is the strongest model that fits, without quantisation or anything
+else that would make it a different model from the one the index scored. Flash-Next
+is the nearest model above it. Its lowest listed footprints are third-party 4-bit
+builds, one of which asks for 2 × 64 GB of GPU plus about 50 GB of host memory for
+the n-gram table. Those builds are neither what the index scored nor off the shelf.
+
+**Arm.** One arm: **Qwen3.8-27B** (Apache-2.0, August 2026, Hub commit
+`1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0`). The contrast with R49's arm B is
+cleaner than any in R49:
+- the Hub's `config.json` equals Qwen3.6-27B's except for the field
+  `transformers_version`, and the two checkpoints have the same 1,199 weight names.
+  So the architecture is the same and only the trained weights differ;
+- `tokenizer.json` is not byte-identical (1,338 bytes longer), so token totals are
+  compared at the read-out with arm B's 46,451,481;
+- the chat template is longer, but with thinking off it renders the same form. T1
+  checks this on the real template.
+
+**Fixed in advance, all as R49 arm B (nothing is tuned; campaign 27 selects
+nothing).** The prompt (`llm_zeroshot/prompt.py`) is unchanged, with thinking off. It
+gets one forward pass per customer, with the nine letters renormalised. bf16 weights are
+split over the job's two L40S, in venv `productgpt-llm5` (transformers 5.21.0, torch
+2.6.0). Rows are the 2,502 out-of-sample customers in 4 shards, both out-of-sample
+cells, with nobody truncated or dropped.
+
+**Hypotheses and decision rules** (out-of-sample × holdout cell, as in R48 and R49).
+d is paired per occasion, with a 2,000-draw customer bootstrap.
+- **H1, the GRU keeps a real lead.** R48's 0.10 threshold is already spent (R49
+  beat it), so this uses the project's own margin of 0.02. Let d_G = NLL(arm) −
+  NLL(GRU, five-seed mean):
+  - the interval lies above +0.02: the GRU leads, and H1 holds;
+  - the interval lies inside ±0.02: a tie;
+  - the interval lies below −0.02: the LLM leads;
+  - the interval straddles ±0.02: no verdict, and I report d_G as it is.
+- **H2, newer training pays.** d_36 = NLL(arm) − NLL(Qwen3.6-27B) < −0.02, with the
+  interval excluding zero (R49's H2 rule). Both models round alike, being the same
+  architecture in bf16, so no rounding correction applies.
+- **Prediction, written before any run: H1 holds and H2 fails.** I expect d_G of
+  +0.04 to +0.07 and d_36 between −0.02 and +0.01. The index gain is earned on
+  reasoning, coding and science tasks with thinking on, whereas here thinking is
+  off and the task is calibrated next-step behaviour. R49's hit rate did not move,
+  and the 32B and 27B tied despite a generation between them. My R49 prediction
+  was wrong on both counts, so this deserves little weight.
+- **Decision.** These are reporting rules; no adoption rule applies to a benchmark.
+  - H1 holds, H2 fails: the ladder has flattened for models that fit. A large jump
+    on the general index buys nothing here, so "the trained model wins narrowly"
+    stands, and the comparison rests on generation, as R49 ruled.
+  - H1 holds, H2 holds: newer training still pays, which is the case for trying the
+    frontier tier on rented GPUs (below).
+  - A tie or an LLM lead: the prediction advantage of a trained model over
+    off-the-shelf tools is gone, the four-family tie gains a fifth member with no
+    training at all, and the paper's case rests wholly on generation.
+- *Descriptive:* the arm against Qwen3-32B. *Exploratory:* per decision, by position
+  in the window, hit rate and letter mass, as in R49.
+- One run. Inference is deterministic, so uncertainty comes from the customer
+  bootstrap.
+
+**Not in R53; each is Jin's call.**
+- *The frontier tier (index 42–46).* It needs 160 GB to 1.6 TB of GPU memory, so
+  rented GPUs (AWS, through Kelvin). The data classification decides whether the
+  customer transcripts may go there at all. Most listed builds are also quantised.
+- *Thinking on.* Exact NLL needs one forward pass. Reasoning before each of 1.48M
+  decisions is not feasible, and a sampled version would be a different estimator.
+- *Other families* (Muse Glimmer, Gemma 4). They rank lower, so they would test
+  whether the result is specific to Qwen, not whether stronger models do better.
+- *Centaur, a rules prompt, an LLM as the simulator's policy.* These remain as R49
+  left them.
+
+**Steps and gates.**
+0. *Laptop CPU tests, 2 Nov: ALL PASS.* `scripts/test_r48_zeroshot.py --tokenizer
+   Qwen/Qwen3.8-27B --arch qwen3_5` passes T1–T6 and T8. No data and no GPU were used.
+1. *Login node* (`scripts/r53_setup_login.sh`): the weights at the commit above.
+2. *GPU* (`scripts/r53_score_gpu.pbs`, 4 shards, one at a time under the 2-GPU cap).
+   Each job gates itself and stops at the first failure, with R49's gates as amended:
+   the unit tests with the downloaded tokenizer; `--strict-load`; `--selfcheck` (the
+   same-length T4c within the repeat difference + 1e-6, t3 true-letter mean ≤ 0.1,
+   later occasions respond). At R49 arm B's speed this is about 7 h of two-GPU time.
+3. *Read-out, once* (`scripts/r53_readout.sh`): R48's row gate, the GRU pairing gate,
+   then H1 and H2. Outputs go to `runs/r53/`.
