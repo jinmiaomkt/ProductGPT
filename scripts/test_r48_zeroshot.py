@@ -26,10 +26,22 @@ transformers >= 5.
       key/value heads, so the float32 reference's memory-efficient-only attention
       has a kernel to run
   T8  (R50) the customer sample is fixed by its seed
+  T9  (R54) the scorer's path through final_logits() equals model.forward
+  T10 (R54) the default format still gives R48's transcript, byte for byte
+
+R54 adds other families, each with its own tiny model and text format:
+
+    python scripts/test_r48_zeroshot.py --tokenizer google/gemma-4-31B-it \
+        --arch gemma4 --format gemma4
+    python scripts/test_r48_zeroshot.py --tokenizer meta-models/Muse-Glimmer-30B \
+        --arch glimmer --format glimmer
+    python scripts/test_r48_zeroshot.py --tokenizer unsloth/Meta-Llama-3.1-70B-bnb-4bit \
+        --arch llama --format press
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -40,10 +52,9 @@ sys.path.insert(0, str(REPO))
 
 import numpy as np  # noqa: E402
 
-from llm_zeroshot.prompt import (ASSISTANT_PREFIX, IM_END, IM_START, LETTERS,  # noqa: E402
-                                 system_prompt, transcript, user_turn)
-from llm_zeroshot.score import (answer_positions, letter_token_ids,  # noqa: E402
-                                sample_customers, score_ids)
+from llm_zeroshot.prompt import FORMATS, LETTERS, system_prompt, transcript  # noqa: E402
+from llm_zeroshot.score import (answer_positions, final_logits,  # noqa: E402
+                                letter_token_ids, sample_customers, score_ids)
 from llm_zeroshot.synthetic import (perturb_decisions_from, perturb_from,  # noqa: E402
                                     synthetic_customer, synthetic_products)
 
@@ -65,6 +76,43 @@ def tiny_model(vocab, arch="qwen3"):
                           num_hidden_layers=2, num_attention_heads=4, num_key_value_heads=2,
                           head_dim=16, max_position_embeddings=65536, tie_word_embeddings=False)
         m = Qwen3ForCausalLM(cfg).eval()
+    elif arch == "llama":
+        from transformers import LlamaConfig, LlamaForCausalLM
+        cfg = LlamaConfig(vocab_size=vocab, hidden_size=64, intermediate_size=128,
+                          num_hidden_layers=2, num_attention_heads=4,
+                          max_position_embeddings=65536, tie_word_embeddings=False)
+        m = LlamaForCausalLM(cfg).eval()
+    elif arch in ("gemma4", "glimmer"):      # the multimodal class the real checkpoints load into
+        kw = dict(vocab_size=vocab, hidden_size=64, intermediate_size=128, num_hidden_layers=4,
+                  layer_types=["sliding_attention"] * 3 + ["full_attention"], sliding_window=8,
+                  num_attention_heads=2, num_key_value_heads=1, head_dim=32,
+                  max_position_embeddings=65536)
+        if arch == "gemma4":
+            from transformers.models.gemma4 import (Gemma4AudioConfig, Gemma4Config,
+                                                    Gemma4ForConditionalGeneration,
+                                                    Gemma4TextConfig, Gemma4VisionConfig)
+            cfg = Gemma4Config(
+                text_config=Gemma4TextConfig(final_logit_softcapping=30.0, **kw),
+                vision_config=Gemma4VisionConfig(hidden_size=16, intermediate_size=32,
+                                                 num_hidden_layers=1, num_attention_heads=2,
+                                                 num_key_value_heads=2, head_dim=8),
+                audio_config=Gemma4AudioConfig(hidden_size=16, num_hidden_layers=1,
+                                               num_attention_heads=2))
+            m = Gemma4ForConditionalGeneration(cfg).eval()
+        else:
+            from transformers.models.muse_glimmer import (MuseGlimmerConfig,
+                                                           MuseGlimmerForConditionalGeneration,
+                                                           MuseGlimmerTextConfig,
+                                                           MuseGlimmerVisionConfig)
+            cfg = MuseGlimmerConfig(
+                text_config=MuseGlimmerTextConfig(final_logit_softcapping=20.0,
+                                                  output_multiplier=2.0, **kw),
+                vision_config=MuseGlimmerVisionConfig(hidden_size=16, intermediate_size=32,
+                                                      num_hidden_layers=1, num_attention_heads=2))
+            m = MuseGlimmerForConditionalGeneration(cfg).eval()
+        with torch.no_grad():                               # capped heads saturate at 30 x
+            m.get_output_embeddings().weight.mul_(3.0)
+        return m
     else:
         from transformers.models.qwen3_5 import Qwen3_5ForCausalLM, Qwen3_5TextConfig
         cfg = Qwen3_5TextConfig(
@@ -86,10 +134,13 @@ def tiny_model(vocab, arch="qwen3"):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tokenizer", default="Qwen/Qwen3-8B")
-    ap.add_argument("--arch", choices=("qwen3", "qwen3_5"), default="qwen3",
-                    help="architecture of the tiny random model used by T3-T5")
+    ap.add_argument("--arch", choices=("qwen3", "qwen3_5", "gemma4", "glimmer", "llama"),
+                    default="qwen3", help="architecture of the tiny random model used by T3-T5")
+    ap.add_argument("--format", choices=sorted(FORMATS), default="chatml",
+                    help="the text format of the transcript (R54)")
     a = ap.parse_args()
-    print(f"tokenizer {a.tokenizer}, tiny model {a.arch}")
+    print(f"tokenizer {a.tokenizer}, tiny model {a.arch}, format {a.format}")
+    fmt = FORMATS[a.format]
     from transformers import AutoTokenizer
     tok = AutoTokenizer.from_pretrained(a.tokenizer)
     prod = synthetic_products()
@@ -98,21 +149,34 @@ def main():
 
     # T1 chat format
     u = "Occasion 1. Featured now: banner A P13; banner B closed; Weapon banner P41."
-    ref = tok.apply_chat_template([{"role": "system", "content": system},
-                                   {"role": "user", "content": u}],
-                                  tokenize=False, add_generation_prompt=True,
-                                  enable_thinking=False)
-    mine = f"{IM_START}system\n{system}{IM_END}\n" + user_turn(u) + ASSISTANT_PREFIX
-    check("T1 chat format matches apply_chat_template", ref == mine)
+    mine = fmt.system_open + system + fmt.system_close + fmt.user_open + u + fmt.user_close + fmt.answer_open
+    if a.format == "press":
+        # no chat template: Centaur's documented form, one line per trial
+        check("T1 plain format has Centaur's form",
+              mine.endswith(u + " You press <<") and fmt.answer_close == ">>.\n")
+    else:
+        ref = tok.apply_chat_template([{"role": "system", "content": system},
+                                       {"role": "user", "content": u}],
+                                      tokenize=False, add_generation_prompt=True,
+                                      enable_thinking=False)
+        check("T1 chat format matches apply_chat_template", ref + fmt.prefill == mine)
 
     # T2 positions
     S = 300
     lab, prev, lto, obt, inv = synthetic_customer(S, 1)
-    text, answers = transcript(lab, prev, lto, obt, inv, S, system)
+    text, answers = transcript(lab, prev, lto, obt, inv, S, system, fmt)
     ids, tpos = answer_positions(tok, text, answers, letter_ids)
     got = [LETTERS.index(tok.decode([ids[p]])) + 1 for p in tpos]
     check("T2 answer tokens decode to the true decisions", got == list(lab),
           f"{len(ids):,} tokens for {S} occasions ({len(ids) / S:.1f}/occasion)")
+    if a.format != "chatml":
+        bos = tok.bos_token_id
+        check("T2b one start-of-text token, in first place", ids[0] == bos and ids.count(bos) == 1)
+    # T10 (R54) the default format is still R48's, byte for byte
+    r48, _ = transcript(lab, prev, lto, obt, inv, S, system)
+    check("T10 default format still gives R48's transcript",
+          hashlib.sha256(r48.encode()).hexdigest()
+          == "34e3c683f105eea2a4b6a6653393c9e0211968476ff455b0c134a715e0d21284")
 
     # T3 and T4 run in float64 so rounding (~1e-12) cannot pass for a leak.  The
     # Qwen3.5/3.6 Gated DeltaNet reference path casts to float32 whatever the model
@@ -129,15 +193,23 @@ def main():
     # (EXPERIMENTS.md, R49 amendment 3).  The GPU scoring path is not affected.
     import torch
     torch.set_num_threads(1)
-    tol = 1e-10 if a.arch == "qwen3" else 1e-6
+    tol = 1e-6 if a.arch == "qwen3_5" else 1e-10
     model = tiny_model(len(tok), a.arch).double()
 
     # T3 one pass == per-occasion prefixes
     S3 = 40
     lab, prev, lto, obt, inv = synthetic_customer(S3, 2)
-    text, answers = transcript(lab, prev, lto, obt, inv, S3, system)
+    text, answers = transcript(lab, prev, lto, obt, inv, S3, system, fmt)
     ids, tpos = answer_positions(tok, text, answers, letter_ids)
     lp, mass = score_ids(model, ids, tpos, letter_ids, "cpu")
+    # T9 (R54) the scorer skips model.forward, so its head must equal the model's own
+    with torch.no_grad():
+        x = torch.tensor([ids])
+        q = torch.tensor(tpos) - 1
+        own = model(input_ids=x, use_cache=False).logits[0][q]
+        path = final_logits(model, model.model(input_ids=x, use_cache=False).last_hidden_state[0][q])
+    diff9 = float((own - path).abs().max())
+    check("T9 the scorer's path equals model.forward", diff9 < tol, f"max |diff| {diff9:.1e}")
     worst = 0.0
     for k, p in enumerate(tpos):
         lpk, _ = score_ids(model, ids[:p + 1], [p], letter_ids, "cpu")
@@ -150,7 +222,7 @@ def main():
     # T4 no look-ahead
     t = 20
     lab2, obt2 = perturb_from(lab, obt, t)
-    text2, answers2 = transcript(lab2, prev, lto, obt2, inv, S3, system)
+    text2, answers2 = transcript(lab2, prev, lto, obt2, inv, S3, system, fmt)
     ids2, tpos2 = answer_positions(tok, text2, answers2, letter_ids)
     lp2, _ = score_ids(model, ids2, tpos2, letter_ids, "cpu")
     before = float(np.abs(lp2[: t + 1] - lp[: t + 1]).max())
@@ -161,7 +233,7 @@ def main():
           f"max |diff| {after:.2f}")
     # T4c the same with only later decisions changed: same length, same shapes
     lab3 = perturb_decisions_from(lab, t)
-    text3, answers3 = transcript(lab3, prev, lto, obt, inv, S3, system)
+    text3, answers3 = transcript(lab3, prev, lto, obt, inv, S3, system, fmt)
     ids3, tpos3 = answer_positions(tok, text3, answers3, letter_ids)
     lp3, _ = score_ids(model, ids3, tpos3, letter_ids, "cpu")
     before3 = float(np.abs(lp3[: t + 1] - lp[: t + 1]).max())
@@ -194,6 +266,39 @@ def main():
               bool(masks) and all(m for m, _ in masks) and float(np.abs(lp7 - lp).max()) == 0.0,
               f"{len(masks)} attention calls; mask present in all: {all(m for m, _ in masks)}")
         check("T7b SDPA gets the key/value heads repeated", bool(masks) and all(r for _, r in masks))
+    # T11 (R54, llama) the Centaur path: a saved LoRA adapter on the base model
+    if a.arch == "llama":
+        import tempfile
+        from peft import LoraConfig, get_peft_model
+        from llm_zeroshot.score import attach_adapter
+        targets = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+        def saved(path, init):
+            cfg = LoraConfig(r=2, lora_alpha=2, use_rslora=True, target_modules=targets,
+                             init_lora_weights=init, task_type="CAUSAL_LM")
+            get_peft_model(tiny_model(len(tok), "llama"), cfg).save_pretrained(path)
+
+        with tempfile.TemporaryDirectory() as d:
+            saved(d, False)                     # False = random, so lora_B is not zero
+            ad = attach_adapter(tiny_model(len(tok), "llama"), d, strict=True).double().eval()
+            on, _ = score_ids(ad, ids, tpos, letter_ids, "cpu")
+            with ad.peft_wrapper.disable_adapter():
+                off, _ = score_ids(ad, ids, tpos, letter_ids, "cpu")
+            pre, _ = score_ids(ad, ids[:tpos[9] + 1], [tpos[9]], letter_ids, "cpu")
+        check("T11 the adapter changes the predictions", float(np.abs(on - lp).max()) > 1e-3,
+              f"max |diff| {float(np.abs(on - lp).max()):.2f}")
+        check("T11b switching it off restores the base model", float(np.abs(off - lp).max()) < tol,
+              f"max |diff| {float(np.abs(off - lp).max()):.1e}")
+        check("T11c one pass equals a prefix with the adapter on",
+              float(np.abs(pre[0] - on[9]).max()) < 1e-6)
+        with tempfile.TemporaryDirectory() as d:
+            saved(d, True)                      # True = lora_B all zero, as if it never loaded
+            try:
+                attach_adapter(tiny_model(len(tok), "llama"), d, strict=True)
+                refused = False
+            except SystemExit:
+                refused = True
+        check("T11d an adapter whose weights did not load is refused", refused)
     # T8 (R50) the customer sample: fixed by its seed, distinct, in table order
     pool = list(range(5, 2507))
     s1, s2 = sample_customers(pool, 250, 50), sample_customers(pool, 250, 50)
@@ -202,7 +307,7 @@ def main():
 
     # T6 transcript content
     lab, prev, lto, obt, inv = synthetic_customer(30, 3)
-    text, _ = transcript(lab, prev, lto, obt, inv, 30, system)
+    text, _ = transcript(lab, prev, lto, obt, inv, 30, system, fmt)
     check("T6 offers stated once per campaign", text.count("Featured now:") == 2)
     check("T6b duplicates counted", " x2" in text)
     check("T6c pre-window holdings stated once", text.count("Owned before this record") == 1)

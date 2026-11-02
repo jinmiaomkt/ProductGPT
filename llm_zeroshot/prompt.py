@@ -17,9 +17,13 @@ The chat format is Qwen3's ChatML in non-thinking mode, written out by hand so
 every assistant turn is formatted exactly like a fresh generation prompt (the
 tokenizer's template treats the last turn differently from earlier ones); the
 test compares it with tokenizer.apply_chat_template.
+
+R54 adds the formats of other model families (FORMATS).  Only the text around the
+turns changes; the system prompt and the content of every occasion are R48's.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
@@ -46,6 +50,38 @@ WTYPE_NAMES = ("sword", "claymore", "bow", "catalyst", "polearm")
 
 IM_START, IM_END = "<|im_start|>", "<|im_end|>"
 ASSISTANT_PREFIX = f"{IM_START}assistant\n<think>\n\n</think>\n\n"
+
+
+@dataclass(frozen=True)
+class Format:
+    """R54: the text around each part of a transcript, for one model family.
+
+    Every answer is written like a fresh generation prompt with reasoning off, as
+    in R48.  prefill is the end of answer_open that the family's own template
+    leaves for the model to choose (Muse Glimmer's channel to the user).
+    """
+    system_open: str
+    system_close: str
+    user_open: str
+    user_close: str
+    answer_open: str
+    answer_close: str
+    prefill: str = ""
+
+
+FORMATS = {
+    "chatml": Format(f"{IM_START}system\n", f"{IM_END}\n", f"{IM_START}user\n", f"{IM_END}\n",
+                     ASSISTANT_PREFIX, f"{IM_END}\n"),
+    "gemma4": Format("<bos><|turn>system\n", "<turn|>\n", "<|turn>user\n", "<turn|>\n",
+                     "<|turn>model\n<|channel>thought\n<channel|>", "<turn|>\n"),
+    "glimmer": Format("<|begin_of_text|><|start|>system<|message|>",
+                      '\n\nReasoning strength: high.\n\n# Valid recipients: "self", "user".<|eot|>',
+                      "<|start|>user<|message|>", "<|eot|>",
+                      "<|start|>assistant to=user<|message|>", "<|eot|>",
+                      prefill=" to=user<|message|>"),
+    # Centaur's documented plain text: "... You press <<H>>.\n" (its run_minimal.py)
+    "press": Format("<|begin_of_text|>", "\n\n", "", " You press <<", "", ">>.\n"),
+}
 
 
 def describe_product(pid: int, prod: Dict[str, np.ndarray]) -> str:
@@ -116,14 +152,14 @@ def user_turn(content: str) -> str:
 
 
 def transcript(label: np.ndarray, prev: np.ndarray, lto: np.ndarray, obtained: np.ndarray,
-               inv_init: np.ndarray, length: int, system: str
+               inv_init: np.ndarray, length: int, system: str, fmt: Format = FORMATS["chatml"]
                ) -> Tuple[str, List[int]]:
     """Return (text, answer_char_index per occasion) for one customer's window.
 
     label/prev (S,), lto (S,4), obtained (S,10), inv_init (44,) as in the R46
     occasion table.  Every row t < length must carry a decision 1..9.
     """
-    text = f"{IM_START}system\n{system}{IM_END}\n"
+    text = fmt.system_open + system + fmt.system_close
     answers: List[int] = []
     for t in range(int(length)):
         d = int(label[t])
@@ -141,7 +177,7 @@ def transcript(label: np.ndarray, prev: np.ndarray, lto: np.ndarray, obtained: n
         got = _items(obtained[t])
         if got:
             parts.append(f"Obtained since the previous occasion: {got}.")
-        text += user_turn(" ".join(parts)) + ASSISTANT_PREFIX
+        text += fmt.user_open + " ".join(parts) + fmt.user_close + fmt.answer_open
         answers.append(len(text))
-        text += LETTERS[d - 1] + IM_END + "\n"
+        text += LETTERS[d - 1] + fmt.answer_close
     return text, answers

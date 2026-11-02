@@ -6035,3 +6035,99 @@ gates all pass:
   (2.71); t3 true-letter mean 0.051, under the 0.1 gate, about the same as Qwen3.6-27B's
   0.050.
 It scores at about 1,840 tokens/s, like R49 arm B, so about 7 h in all.
+
+### R54 — PLAN (2 Nov 2026, at Jin's request; nothing run on real data): the other off-the-shelf models that fit, two other families and Centaur
+
+**Why.** NSCC access is about 10 days away. Jin asked what else can run on OMEGA now and
+chose all three candidates. None ranks above Qwen3.8-27B on the general index, so R54 does
+not ask whether stronger models do better (R53 does). It asks two other questions: is
+R49's result specific to Qwen, and does the one off-the-shelf model built to predict
+human choices do better at predicting these choices?
+
+This plan is committed before R53 is read, so R53's result cannot shape it.
+
+**Arms.** All are ungated and in transformers 5.21; commits are pinned.
+
+| arm | model | Hub commit | weights | index |
+|---|---|---|---|---|
+| A | Muse Glimmer 30B (Meta, Apache-2.0) | `cec94fc` | 59.6 GB, bf16 | 17 |
+| B | Gemma 4 31B, instruction-tuned (Google, Apache-2.0) | `842da37` | 62.6 GB, bf16 | 15 |
+| C | Centaur (Binz et al., *Nature* 2025): LoRA `159600d` on C0's base | `159600d` | 0.4 GB + 39.5 GB | none |
+| C0 | Llama 3.1 70B, 4-bit (`unsloth/Meta-Llama-3.1-70B-bnb-4bit`, Llama 3.1 licence) | `a009b8d` | 39.5 GB | none |
+
+A and B run on all 2,502 out-of-sample customers in 4 shards, like C. C0 runs on R50's sample
+of 250 customers (`--sample 250 --sample-seed 50`), because it only serves to isolate
+what the fine-tuning adds, and a paired contrast on that sample is enough.
+
+**What is held fixed, and what cannot be.** The system prompt and the content of every
+occasion are R48's, character for character. Nothing is tuned and campaign 27 selects
+nothing. The text around them follows each family:
+- *A:* its own chat template. The template leaves the channel to the model, so the answer
+  channel (` to=user<|message|>`) is prefilled, which is this family's way of answering
+  with no reasoning. The template's default line "Reasoning strength: high" stays in the
+  system turn.
+- *B:* its own chat template with thinking off.
+- *C and C0:* no chat template. The system prompt comes first, then one line per occasion
+  ending "You press <<X>>.", the form Centaur's authors document and recommend. It is run
+  as they run it: their 4-bit base with their adapter active. So A, B and C are not
+  one-factor contrasts with the Qwen models. **C − C0 is one factor: the fine-tuning on
+  psychology experiments.**
+- *The models' own heads:* Muse Glimmer multiplies its logits and then caps them (T tanh);
+  Gemma caps them. The scorer skips `model.forward` to save memory, so it repeats those
+  steps, and new test T9 checks that its path equals `model.forward` for each family. R48's
+  default transcript is unchanged, byte for byte (new test T10), so R48–R53 are unaffected.
+- *Quantisation:* C and C0 are 4-bit. R50's bf16 result does not carry over to them.
+
+**Hypotheses and decision rules** (out-of-sample × holdout cell). d is paired per occasion,
+with a 2,000-draw customer bootstrap.
+- **H1, the GRU keeps a real lead (A, B and C each),** with R53's zones. Let d_G = NLL(arm) −
+  NLL(GRU, five-seed mean): the interval above +0.02, the GRU leads; inside ±0.02, a tie;
+  below −0.02, the LLM leads; straddling ±0.02, no verdict.
+- **H3, R49's result is not specific to Qwen (A and B).** R49 found that large open models
+  come within 0.10 of the GRU. H3 holds if both arms' headline NLL is at most 0.9856, R48's
+  threshold. Each arm's d against Qwen3-32B is reported and decides nothing.
+- **H4, the fine-tuning pays.** On R50's 250 customers, d = NLL(C) − NLL(C0) < −0.02, with the
+  interval excluding zero.
+- **Prediction, written before any run:** H1 holds for all three. H3 fails for at least one
+  arm, with A and B between 0.95 and 1.10, since both rank below the 27B models. H4 holds,
+  with a gain of 0.02–0.15, but Centaur stays worse than Qwen3-32B (0.948), because its base
+  is older and 4-bit and its training was on short laboratory tasks. My R49 prediction was
+  wrong on both counts, so this deserves little weight.
+- **Decision.** These are reporting rules; no adoption rule applies to a benchmark.
+  - H3 holds: "large open models nearly tie zero-shot" can be stated generally. H3 fails: R49's
+    narrowing applies to the named models only.
+  - H4 holds and Centaur beats Qwen3-32B: Centaur becomes the off-the-shelf bar. H4 holds and it
+    does not: behavioural fine-tuning helps but matters less than the base model. H4 fails:
+    training on psychology experiments does not transfer to this setting, which supports
+    building from the customers' own data.
+  - Any tie or LLM lead on H1 is read as in R53.
+- *Exploratory:* per decision, by position in the window, hit rate and letter mass, as in R49.
+- One run per arm. Inference is deterministic, so uncertainty comes from the customer bootstrap.
+
+**Steps and gates.**
+0. *Laptop CPU tests, 2 Nov: ALL PASS,* with each family's real tokenizer and a tiny random model
+   of its real class. No data and no GPU were used.
+   - T1–T6, T8, T9 and T10 pass for all three formats, and R49's configuration still passes.
+   - T9's largest difference from `model.forward` is 1.1e-15 (Muse Glimmer), 2.8e-16 (Gemma) and
+     0.0 (Llama), in float64.
+   - T11 (Llama): a saved LoRA adapter changes predictions, switching it off restores the base
+     exactly, one pass equals a prefix with it on, and an adapter whose weights did not load
+     is refused.
+   - `scripts/test_r54_pair.py`: the sample pairing recovers a planted gap exactly and fails
+     its gate when a row is missing.
+1. *Login node* (`scripts/r54_setup_login.sh`): venv `productgpt-llm70` (as `productgpt-llm5`, plus
+   peft and bitsandbytes) and the weights at the commits above. Worktree `work_r54`, because
+   `work_r48`'s queued R53 jobs must not see new code.
+2. *Centaur load test first* (`CHECKS=1`): the unit tests, `--strict-load`, every adapter weight
+   loaded (`lora_B` matrices non-zero; 80 layers × 7 modules = 560 expected), `--selfcheck`
+   including that switching the adapter off changes the predictions, and `--memcheck`. It scores
+   no customer. C and C0 depend on it with `afterok`.
+3. *GPU* (`scripts/r54_score_gpu.pbs`), one job at a time under the 2-GPU cap, after R53 ends, in
+   this order: the load test, A, B, C0, C. Every job gates itself as R53 did, and adds
+   `--memcheck 38000`, one pass on a synthetic customer longer than any real one, so running out of
+   memory fails at once rather than hours in. A failed gate stops that arm and is reported;
+   any change to a gate is a written amendment first.
+   *Rough time, speeds unmeasured:* A and B about 13 h each, C0 2–3 h, C 25–35 h, about 2.5 days
+   of two-GPU time. C's jobs get a 16 h walltime.
+4. *Read-out, once* (`scripts/r54_readout.sh`): R48's row gate, the GRU pairing gate, then H1, H3 and
+   H4. Outputs go to `runs/r54/`.

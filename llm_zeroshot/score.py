@@ -36,6 +36,15 @@ R50 (a float32 reference for R48's bf16 Qwen3-8B; scripts/r50_fp32_gpu.pbs) adds
     --sample N --sample-seed S
                           a simple random sample of N customers of the --who group,
                           drawn before sharding (sample_customers())
+R54 (other families and Centaur; scripts/r54_score_gpu.pbs) adds:
+    --format NAME         the family's text format (llm_zeroshot.prompt.FORMATS)
+    --auto-class image    load through AutoModelForImageTextToText, for a family
+                          with no text-only class (Muse Glimmer)
+    --adapter DIR         a LoRA adapter on the base model (Centaur); with
+                          --strict-load every adapter weight must have loaded
+    --memcheck N          before scoring, one pass on a synthetic customer of at
+                          least N tokens, so running out of memory fails at once
+final_logits() applies the family's own head, which R48's Qwen models do not have.
 The defaults reproduce R48 exactly.
 """
 from __future__ import annotations
@@ -54,7 +63,7 @@ REPO = Path(__file__).resolve().parent.parent
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from llm_zeroshot.prompt import LETTERS, system_prompt, transcript  # noqa: E402
+from llm_zeroshot.prompt import FORMATS, LETTERS, system_prompt, transcript  # noqa: E402
 
 CELL_NAMES = ("train", "val", "insample_users_holdout_period",
               "outsample_users_calib_period", "outsample_users_holdout_period")
@@ -91,6 +100,28 @@ def answer_positions(tok, text: str, answers: Sequence[int], letter_ids: Sequenc
     return ids, tpos
 
 
+def final_logits(model, h):
+    """The model's own final logits from hidden states h, as a float tensor.
+
+    The scorer skips model.forward so it never holds a full-vocabulary row for
+    every token.  Gemma 4 caps its logits (T tanh(l / T)) and Muse Glimmer also
+    multiplies them first, so those steps are repeated here.  T9 in
+    scripts/test_r48_zeroshot.py checks this equals model.forward for each family.
+    """
+    import torch
+    text = model.config.get_text_config()
+    logits = model.get_output_embeddings()(h)
+    if logits.dtype in (torch.bfloat16, torch.float16):
+        logits = logits.float()
+    mult = getattr(text, "output_multiplier", None)
+    if mult is not None:
+        logits = logits * mult
+    cap = getattr(text, "final_logit_softcapping", None)
+    if cap is not None:
+        logits = torch.tanh(logits / cap) * cap
+    return logits
+
+
 def score_ids(model, ids: Sequence[int], tpos: Sequence[int], letter_ids: Sequence[int],
               device: str):
     """(logp9 (K,9), mass (K,)) as float64 numpy, from one causal forward pass."""
@@ -100,9 +131,7 @@ def score_ids(model, ids: Sequence[int], tpos: Sequence[int], letter_ids: Sequen
     with torch.inference_mode():
         h = model.model(input_ids=x, use_cache=False).last_hidden_state[0]
         q = torch.tensor(list(tpos), device=h.device) - 1      # state just before each answer
-        logits = model.get_output_embeddings()(h[q])          # (K, V)
-        if logits.dtype in (torch.bfloat16, torch.float16):
-            logits = logits.float()
+        logits = final_logits(model, h[q])                    # (K, V)
         l9 = logits[:, list(letter_ids)] - torch.logsumexp(logits, -1, keepdim=True)
         mass = torch.logsumexp(l9, -1)
         logp9 = l9 - mass[:, None]
@@ -157,12 +186,13 @@ def float32_reference() -> Dict[str, object]:
 
 
 def load_model(name: str, device: str, yarn: float, n_gpus: int = 1, strict: bool = False,
-               dtype: str = "auto"):
+               dtype: str = "auto", auto_class: str = "causal", adapter: str = ""):
     """strict (R49): stop unless every weight the text model needs is in the checkpoint.
-    dtype (R50): "auto" is bf16 on CUDA and float32 on CPU, as in R48."""
+    dtype (R50): "auto" is bf16 on CUDA and float32 on CPU, as in R48.
+    auto_class, adapter (R54): see the module docstring."""
     import torch
     import transformers
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer
     if device.startswith("cuda") and platform.system() == "Windows":
         raise SystemExit("refusing to use the laptop GPU (19 Oct 2026 crashes); run on HPCC")
     tok = AutoTokenizer.from_pretrained(name)
@@ -181,7 +211,8 @@ def load_model(name: str, device: str, yarn: float, n_gpus: int = 1, strict: boo
         if not device.startswith("cuda") or torch.cuda.device_count() < n_gpus:
             raise SystemExit(f"--n-gpus {n_gpus} needs that many visible GPUs")
         kw["device_map"] = "balanced"               # whole layers, about half on each GPU
-    model = AutoModelForCausalLM.from_pretrained(name, output_loading_info=strict, **kw)
+    auto = AutoModelForImageTextToText if auto_class == "image" else AutoModelForCausalLM
+    model = auto.from_pretrained(name, output_loading_info=strict, **kw)
     if strict:
         model, info = model
         missing = list(info.get("missing_keys", []))
@@ -191,8 +222,29 @@ def load_model(name: str, device: str, yarn: float, n_gpus: int = 1, strict: boo
               f"{len(mismatched)} mis-shaped, unexpected prefixes {prefixes}", flush=True)
         if missing or mismatched:
             raise SystemExit(f"strict load FAILED: missing {missing[:5]}, mis-shaped {mismatched[:5]}")
+    if adapter:
+        model = attach_adapter(model, adapter, strict)
     model = model.eval() if n_gpus > 1 else model.to(device).eval()
     return tok, model
+
+
+def attach_adapter(model, adapter: str, strict: bool):
+    """R54: the base model with the LoRA adapter active.  The scorer calls model.model
+    and the head, which the LoRA layers sit inside, so the base model is returned;
+    its peft wrapper stays reachable so selfcheck can switch the adapter off.
+    A lora_B weight that failed to load stays at its zero initial value."""
+    from peft import PeftModel
+    wrapped = PeftModel.from_pretrained(model, adapter, is_trainable=False)
+    b = [p for k, p in wrapped.named_parameters() if "lora_B" in k]
+    zero = sum(int(not p.any()) for p in b)
+    print(f"[r48] adapter: {len(b)} lora_B matrices, {zero} all zero", flush=True)
+    if strict and (not b or zero):
+        raise SystemExit(f"adapter load FAILED: {len(b)} lora_B matrices, {zero} all zero")
+    base = wrapped.base_model.model
+    # not registered as a submodule: the wrapper contains base, so a registered
+    # attribute would make .eval() and .to() recurse without end
+    object.__setattr__(base, "peft_wrapper", wrapped)
+    return base
 
 
 def compare_logp(a: np.ndarray, b: np.ndarray, lab: np.ndarray) -> Dict[str, float]:
@@ -207,8 +259,31 @@ def compare_logp(a: np.ndarray, b: np.ndarray, lab: np.ndarray) -> Dict[str, flo
             "tv_max": float(tv.max())}
 
 
-def selfcheck(model, tok, system: str, letter_ids: Sequence[int], S: int = 40, t: int = 20
-              ) -> Dict[str, float]:
+def memcheck(model, tok, system: str, letter_ids: Sequence[int], tokens: int, fmt) -> Dict[str, float]:
+    """R54: one pass on a synthetic customer of at least `tokens` tokens, so a model
+    that cannot hold the longest real transcript fails here, not hours into a shard."""
+    import torch
+    from llm_zeroshot.synthetic import synthetic_customer
+
+    def ids_of(S):
+        lab, prev, lto, obt, inv = synthetic_customer(S, 2)
+        text, answers = transcript(lab, prev, lto, obt, inv, S, system, fmt)
+        return answer_positions(tok, text, answers, letter_ids)
+
+    per = len(ids_of(100)[0]) / 100
+    S = int(tokens / per) + 2
+    ids, tpos = ids_of(S)
+    t0 = time.time()
+    score_ids(model, ids, tpos, letter_ids, "")
+    out = {"occasions": S, "tokens": len(ids), "seconds": round(time.time() - t0, 1)}
+    if torch.cuda.is_available():
+        out["gpu_peak_gb"] = [round(torch.cuda.max_memory_allocated(i) / 1e9, 1)
+                              for i in range(torch.cuda.device_count())]
+    return out
+
+
+def selfcheck(model, tok, system: str, letter_ids: Sequence[int], S: int = 40, t: int = 20,
+              fmt=FORMATS["chatml"]) -> Dict[str, float]:
     """T3, T4 and T4c of scripts/test_r48_zeroshot.py with the real model on its device.
 
     In bf16, a comparison that changes the transcript's length changes the shape
@@ -227,7 +302,7 @@ def selfcheck(model, tok, system: str, letter_ids: Sequence[int], S: int = 40, t
     lab, prev, lto, obt, inv = synthetic_customer(S, 2)
 
     def ids_of(lab_, obt_):
-        text, answers = transcript(lab_, prev, lto, obt_, inv, S, system)
+        text, answers = transcript(lab_, prev, lto, obt_, inv, S, system, fmt)
         return answer_positions(tok, text, answers, letter_ids)
 
     def lp_of(ids, tpos):
@@ -245,7 +320,11 @@ def selfcheck(model, tok, system: str, letter_ids: Sequence[int], S: int = 40, t
     lp3 = lp_of(ids3, tpos3)
     b, f = slice(0, t + 1), slice(t + 1, None)
     k = np.arange(S)
-    return {"t3_max": t3["max"], "t3_true_mean": t3["true_mean"],
+    extra = {}
+    if hasattr(model, "peft_wrapper"):                  # R54: the adapter really changes predictions
+        with model.peft_wrapper.disable_adapter():
+            extra["adapter_effect_max"] = compare_logp(lp, lp_of(ids, tpos), lab)["max"]
+    return {**extra, "t3_max": t3["max"], "t3_true_mean": t3["true_mean"],
             "t4_before_max": compare_logp(lp[b], lp2[b], lab[b])["max"],
             "t4_after_max": compare_logp(lp[f], lp2[f], lab[f])["max"],
             "t4c_before_max": compare_logp(lp[b], lp3[b], lab[b])["max"],
@@ -264,6 +343,8 @@ def selfcheck_failures(check: Dict[str, float], tol: float) -> List[str]:
         bad.append("one pass differs from per-occasion queries")
     if min(check["t4_after_max"], check["t4c_after_max"]) < 1e-3:
         bad.append("later predictions do not respond to the changes")
+    if check.get("adapter_effect_max", 1.0) < 1e-3:
+        bad.append("switching the adapter off does not change the predictions")
     return bad
 
 
@@ -294,6 +375,18 @@ def main() -> None:
     ap.add_argument("--sample", type=int, default=0,
                     help="score a random sample of this many customers (R50; 0 = all)")
     ap.add_argument("--sample-seed", type=int, default=0)
+    ap.add_argument("--format", choices=sorted(FORMATS), default="chatml",
+                    help="the model family's text format (R54)")
+    ap.add_argument("--auto-class", choices=("causal", "image"), default="causal",
+                    help="image = AutoModelForImageTextToText, for a family with no "
+                         "text-only class (R54)")
+    ap.add_argument("--adapter", default="", help="LoRA adapter directory (R54)")
+    ap.add_argument("--memcheck", type=int, default=0,
+                    help="one pass on a synthetic customer of at least this many tokens "
+                         "before scoring (R54)")
+    ap.add_argument("--checks-only", action="store_true",
+                    help="stop after the load, --selfcheck and --memcheck; no customer "
+                         "is scored and the table is only read for its products (R54)")
     ap.add_argument("--max-customers", type=int, default=0, help="smoke only")
     ap.add_argument("--dry-run", action="store_true",
                     help="tokenise only; report the token-length distribution")
@@ -327,12 +420,14 @@ def main() -> None:
         from transformers import AutoTokenizer
         tok, model = AutoTokenizer.from_pretrained(a.model), None
     else:
-        tok, model = load_model(a.model, a.device, a.yarn, a.n_gpus, a.strict_load, a.dtype)
+        tok, model = load_model(a.model, a.device, a.yarn, a.n_gpus, a.strict_load, a.dtype,
+                                a.auto_class, a.adapter)
     numerics = None
     if model is not None and a.dtype == "float32" and a.device.startswith("cuda"):
         numerics = float32_reference()
         print(f"[r48] float32 reference: {json.dumps(numerics)}", flush=True)
     letter_ids = letter_token_ids(tok)
+    fmt = FORMATS[a.format]
     # Qwen3's config says 40,960 but its card gives 32,768 as the native context;
     # Qwen3.5/3.6 are native to their config's 262,144
     native = None if model is None else (
@@ -340,18 +435,25 @@ def main() -> None:
         else model.config.get_text_config().max_position_embeddings)
     check = None
     if a.selfcheck and model is not None:
-        check = selfcheck(model, tok, system, letter_ids)
+        check = selfcheck(model, tok, system, letter_ids, fmt=fmt)
         print(f"[r48] selfcheck {json.dumps(check)}", flush=True)
         bad = selfcheck_failures(check, a.selfcheck_tol)
         if bad:
             raise SystemExit("selfcheck FAILED: " + "; ".join(bad))
+    mem = None
+    if a.memcheck and model is not None:
+        mem = memcheck(model, tok, system, letter_ids, a.memcheck, fmt)
+        print(f"[r48] memcheck {json.dumps(mem)}", flush=True)
+    if a.checks_only:
+        print("[r48] checks passed; --checks-only, so no customer is scored", flush=True)
+        return
 
     rows = {k: [] for k in ("uid_hash", "pos", "label", "cell", "nll", "logp9", "mass")}
     lengths, t0 = [], time.time()
     for j, i in enumerate(sel):
         L = int(tab["length"][i])
         text, answers = transcript(tab["label"][i], tab["prev"][i], tab["lto"][i],
-                                   tab["obtained"][i], tab["inv_init"][i], L, system)
+                                   tab["obtained"][i], tab["inv_init"][i], L, system, fmt)
         ids, tpos = answer_positions(tok, text, answers, letter_ids)
         lengths.append(len(ids))
         if a.dry_run:
@@ -387,7 +489,8 @@ def main() -> None:
         import transformers
         summary.update({"dtype": str(model.dtype).replace("torch.", ""),
                         "sample": a.sample, "sample_seed": a.sample_seed,
-                        "numerics": numerics,
+                        "numerics": numerics, "format": a.format, "adapter": a.adapter,
+                        "memcheck": mem,
                         "n_gpus": a.n_gpus, "model_type": model.config.model_type,
                         "model_class": type(model).__name__,
                         "transformers": transformers.__version__,

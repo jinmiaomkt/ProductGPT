@@ -60,10 +60,16 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument("--draws", type=int, default=2000)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--restrict-to-ref", action="store_true",
+                    help="R54: the reference scored a sample of customers, so keep only "
+                         "their rows in each arm before the gate")
     a = ap.parse_args()
 
     ref_tag, R = read_tag(a.ref)
     arms = [read_tag(s) for s in a.arm]
+    if a.restrict_to_ref:
+        arms = [(t, {k: v[np.isin(A["uid_hash"], R["uid_hash"])] for k, v in A.items()})
+                for t, A in arms]
     gate = {}
     for tag, A in arms:
         g = {"rows": int(len(A["nll"])), "rows_ref": int(len(R["nll"]))}
