@@ -6345,3 +6345,82 @@ real one}) / 21. The minimum is 0.048, as in part C.
 - **Rerun's first wave:** 28 elements started on a-4, a-5 and a-6, and C-G5
   passed on all 28 (0 FAIL). The other 92 queue behind them.
 - **Not read yet, by the rule:** I5, I6 and I7. The verdicts wait for 44674.
+
+### R46 — part D, RESULT (2 Nov 2026): I5, I6 and I7 all hold; banner loyalty is not continuous taste of the null (b) kind, on its time profile first and its level second
+
+**Run.** NULL2K rerun 44673 (120 elements, all on a-4, a-5, a-6) and read-out
+44674 (10:20 on 2 Nov) exited 0, from `work_r46` at `72659bb`, so code, plan and
+gates are unchanged. Every gate passes: 20 tables, 160 part D fits, C-G5 on all,
+D-G2 on all, D-G3 on the real data. The verdicts were recomputed independently
+from the raw fit files and agree. The holdout was not read. Part A's R6 reproduces
+on campaign 27 (0.96898, n = 189,121).
+
+**The C-G5 refusals: a harmless rounding difference, not a data problem.**
+Diagnostic 44677 compared table r00's features rebuilt on a-5 and on a-7.
+- 18 of 20 feature arrays are identical. `phase` differs in 62,527 of 7,421,952
+  values and `runs` in 1 of 7,421,952, by at most 2 ULP (max relative 1.9e-07).
+- So the size is float32-level rounding between the two node groups, which answers
+  the open question in the 1 Nov entry. Only r00 was compared, and the CPU type as
+  the cause is inferred, not tested.
+- The gate did its job: it asks for an exact checksum, and all null tables' fits
+  were then run on the node group that wrote them (a-4, a-5, a-6). The real K > 6
+  fits ran on a-7 and a-8 but read the saved feature file, so no fit mixes the two
+  rebuilds.
+- A fit that rebuilds features has to run on the node group that wrote the table.
+  Nothing else needs changing, and no code was changed.
+
+**Verdicts** (20 fresh null (b) tables; p = (1 + count) / 21, minimum 0.048).
+
+| test | real | null mean ± sd [range] | as extreme | p | |
+|---|---|---|---|---|---|
+| I5, R6B banner half-life (primary) | 2.343 (SE 0.115) | 91.99 ± 4.17 [86.72, 99.80] | 0/20 | 0.048 | HOLDS |
+| I6, R6 shared half-life | 1.762 | 91.20 ± 4.19 [85.70, 98.82] | 0/20 | 0.048 | HOLDS |
+| I7, banner loyalty at K = 12 | 2.038 | 1.802 ± 0.077 [1.687, 1.950] | 0/20 | 0.048 | HOLDS |
+
+Part C's rule at K = 12, reported and not part of I7: buy loyalty 0.447 against
+−0.495 ± 0.031, ten-pull loyalty 1.942 against 0.603 ± 0.078, repeat premium 1.530
+against 0.001 ± 0.008; all p = 0.048.
+
+Banner loyalty by number of classes:
+
+| K | real | null mean | gap |
+|---|---|---|---|
+| 6 | 2.064 | 2.250 | −0.186 |
+| 9 (not tested) | 2.041 | 2.012 | +0.029 |
+| 12 | 2.038 | 1.802 | +0.236 |
+
+**Reading, by the plan's table (I5 holds, I7 holds).** Banner loyalty is not
+continuous taste of the null (b) kind: its decay is too fast, and its level
+survives once twelve classes are allowed. Part C's I3 failure is put down to the
+six-class approximation.
+
+**How strong each leg is.**
+- **The time profile is the strong leg.** The null's half-life is about 39 times the
+  real one, and start B, placed at 90 occasions, came back to 2.34: the two
+  real starts end 3e-06 apart in objective and 0.0009 apart in half-life.
+- **The level is the weaker leg.** It depends on the number of classes. Six
+  classes put the null above the real on 20/20 tables, nine make them about equal,
+  and only twelve separate them, with the real value 3 null sd above the mean. The
+  null is still falling at K = 12, while the real estimate is flat (−1.3% from
+  K = 6), and that contrast is the evidence. With 20 tables, p cannot go below 0.048.
+
+**Not expected.** R6B separates the two memories on the real data: banner stock
+2.34 occasions, buy and ten-pull stocks 0.285 (SE 0.014). The shared 1.762 was a
+blend of them, so I6 alone could not have carried the claim. On the null, the
+buy and ten-pull half-life is 72.8 ± 5.7.
+
+**Campaign 27, descriptive.** R6 K = 6 0.96898; R6B 0.96436 (−0.0046); K = 9
+0.96811 (−0.0009); K = 12 0.96766 (−0.0013). K = 12 does not beat K = 6 by 0.02, so
+nothing is recorded for a later registration. T1's R6 (K = 6) stands.
+
+**Predictions.** 7 of 8 hold.
+- 1 holds: null loyalty above the real on 20/20, shared half-life above 50 on 20/20.
+- 2, 3, 4, 6, 7 and 8 hold.
+- 5 FAILS: the null's K = 12 mean is 19.9% below its K = 6 mean, not a third. More
+  classes remove spurious loyalty more slowly than expected, which is why the level
+  leg is the weaker one.
+
+**What this cannot show.** As the plan says, I5 rejects one null: normal taste in
+the constants, matched to H6's moments. It cannot reject taste that drifts across
+campaigns, because drifting taste also fades. That is the remaining alternative,
+and the paper names it.
