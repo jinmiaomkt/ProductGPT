@@ -6131,3 +6131,9 @@ with a 2,000-draw customer bootstrap.
    of two-GPU time. C's jobs get a 16 h walltime.
 4. *Read-out, once* (`scripts/r54_readout.sh`): R48's row gate, the GRU pairing gate, then H1, H3 and
    H4. Outputs go to `runs/r54/`.
+
+*Added 2 Nov, before any run on real data.* `scripts/test_r54_load.py` runs the scorer's real load
+path (auto class, strict load, adapter, self-check, memory check) on tiny saved checkpoints of each
+family. It found that Gemma 4's audio tower has no SDPA, which would have stopped arm B at load. That
+tower now loads with eager attention; it is never called, so no prediction changes. All four
+configurations then pass, with 0 missing weights, no leak and an adapter effect of 9.7 on the tiny model.

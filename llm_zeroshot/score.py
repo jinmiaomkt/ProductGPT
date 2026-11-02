@@ -192,7 +192,8 @@ def load_model(name: str, device: str, yarn: float, n_gpus: int = 1, strict: boo
     auto_class, adapter (R54): see the module docstring."""
     import torch
     import transformers
-    from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer
+    from transformers import (AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText,
+                              AutoTokenizer)
     if device.startswith("cuda") and platform.system() == "Windows":
         raise SystemExit("refusing to use the laptop GPU (19 Oct 2026 crashes); run on HPCC")
     tok = AutoTokenizer.from_pretrained(name)
@@ -212,6 +213,10 @@ def load_model(name: str, device: str, yarn: float, n_gpus: int = 1, strict: boo
             raise SystemExit(f"--n-gpus {n_gpus} needs that many visible GPUs")
         kw["device_map"] = "balanced"               # whole layers, about half on each GPU
     auto = AutoModelForImageTextToText if auto_class == "image" else AutoModelForCausalLM
+    if hasattr(AutoConfig.from_pretrained(name), "audio_config"):
+        # Gemma 4 loads with its audio tower, which has no SDPA and is never called here
+        kw["attn_implementation"] = {"": "sdpa", "text_config": "sdpa", "vision_config": "sdpa",
+                                     "audio_config": "eager"}
     model = auto.from_pretrained(name, output_loading_info=strict, **kw)
     if strict:
         model, info = model
