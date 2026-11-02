@@ -6137,3 +6137,8 @@ path (auto class, strict load, adapter, self-check, memory check) on tiny saved 
 family. It found that Gemma 4's audio tower has no SDPA, which would have stopped arm B at load. That
 tower now loads with eager attention; it is never called, so no prediction changes. All four
 configurations then pass, with 0 missing weights, no leak and an adapter effect of 9.7 on the tiny model.
+
+**Queued (2 Nov 2026, about 23:00), all from `work_r54` at code 3fede2e and behind R53's last shard
+(44766).** Load test 44788 (Centaur, `CHECKS=1`), arm A 44789–44792, arm B 44793–44796, C0 44797, arm C
+44798–44801. Each job waits for the one before it. C0 and C also need 44788 to exit 0, so PBS deletes
+them if it fails. No job has started, so no gate has yet run on the real weights.
