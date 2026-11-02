@@ -6142,3 +6142,62 @@ configurations then pass, with 0 missing weights, no leak and an adapter effect 
 (44766).** Load test 44788 (Centaur, `CHECKS=1`), arm A 44789–44792, arm B 44793–44796, C0 44797, arm C
 44798–44801. Each job waits for the one before it. C0 and C also need 44788 to exit 0, so PBS deletes
 them if it fails. No job has started, so no gate has yet run on the real weights.
+
+### R53 — RESULT (3 Nov 2026): H1 holds and H2 fails, so the ladder has flattened for models that fit
+
+**The strongest open model that fits our GPUs is no better than the one before it. The GRU keeps its lead
+of about 0.07 nats.** Out-of-sample × holdout cell, 217,303 rows:
+
+| model | NLL [95%] | d vs GRU [95%] | hit rate |
+|---|---|---|---|
+| plain GRU b17, five seeds | 0.8856 [0.875, 0.897] | | |
+| Qwen3-32B | 0.9483 [0.936, 0.960] | +0.063 | 0.670 |
+| Qwen3.6-27B | 0.9521 [0.940, 0.964] | +0.067 | 0.669 |
+| **Qwen3.8-27B** | **0.9587 [0.946, 0.971]** | **+0.0731 [+0.0696, +0.0769]** | 0.673 |
+| train-share constant | 1.6638 | | |
+
+- **H1 holds.** The interval of d_G lies wholly above +0.02, so the GRU leads. It leads against every seed
+  (+0.063 to +0.080). R50's rounding bias, +0.004 on the 8B, would not change this.
+- **H2 fails.** d_36 = +0.0066 [+0.0051, +0.0080]. The sign goes against the newer model. It lies inside the
+  0.02 margin, so I read it as no gain, not as a loss.
+- *Descriptive.* Against Qwen3-32B, d = +0.0104 [+0.0084, +0.0123].
+- *My prediction* was right on both hypotheses. d_36 fell in the predicted range. d_G came in just above
+  it (+0.073 against +0.04 to +0.07).
+
+**Decision, by the plan's first rule.** A large jump on the general index buys nothing here, so "the trained
+model wins narrowly" stands and the comparison rests on generation, as R49 ruled. The plan makes a case for
+the frontier tier on rented GPUs only if H2 holds, so R53 gives none. This is one jump within one
+architecture with thinking off; it does not show that the frontier tier would fail. Whether to try that
+tier remains Jin's call. R54 was committed before this read and is unchanged.
+
+**Gates all pass.**
+- Jobs 44763–44766 at code dcd28a4 all exited 0, in 6.9 h of two-GPU time at about 1,880 tokens/s. Peak
+  memory was 40.7 GB per card.
+- Each job: unit tests pass, `Qwen3_5ForCausalLM` loads with 0 missing and 0 mis-shaped weights, and the
+  self-check is identical across shards (t4c 0.0, repeat 0.0, t3 true-letter mean 0.051, later occasions
+  respond at 2.71).
+- Read once (`logs/r53_readout.log`, outputs in `runs/r53/`). Row gate: 2,502 customers, 1,259,900 + 217,303
+  rows, no duplicates, labels and cells match the table. The GRU pairing gate passes for all five seeds,
+  and the pairings with Qwen3.6-27B and Qwen3-32B have the same occasions, labels and cells.
+- Tokens: 46,451,481 in total and 37,092 at most, equal to arm B's exactly, so the longer `tokenizer.json`
+  changes nothing in our transcripts. Letter mass is 0.9996.
+
+**Exploratory; no verdict rests on these.**
+- *The newer weights move the answers without lowering the total.* Against Qwen3.6-27B, per decision:
+
+  | decision | n | d_36 | | decision | n | d_36 |
+  |---|---|---|---|---|---|---|
+  | no draw | 88,367 | −0.044 | | 10 draws, Regular | 645 | −0.504 |
+  | 1 draw, Featured A | 47,990 | −0.057 | | 10 draws, Featured A | 15,732 | +0.162 |
+  | 1 draw, Regular | 34,924 | +0.113 | | 10 draws, Featured B | 3,475 | +0.198 |
+  | 1 draw, Featured B | 13,739 | +0.073 | | 10 draws, Weapon | 3,200 | +0.045 |
+  | 1 draw, Weapon | 9,231 | +0.007 (interval includes 0) | | | | |
+
+  It gains on the two most common decisions and loses on most others, while the hit rate rises from 0.669 to
+  0.673.
+- *By position, against Qwen3.6-27B (holdout).* −0.095 at occasions 0–63 (841 rows), +0.023 at 64–255, +0.010 at
+  256–511, +0.008 at 512–767 and −0.002 at 768+ (interval includes 0). The early gain also shows in the
+  calibration period, at −0.090 on 159,287 rows.
+- *Against the GRU.* The gap falls from +0.395 at occasions 0–63 to +0.049 at 768+, where the model recovers 94%
+  of the GRU's gain over the constant, the same as R49. It beats the GRU on 10 draws Featured B (−0.287) and
+  1 draw Featured A (−0.063). It loses most on 10 draws Regular (+1.585, n = 645) and 10 draws Weapon (+0.695).
