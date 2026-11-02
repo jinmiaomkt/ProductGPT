@@ -1,0 +1,55 @@
+#!/bin/bash
+# ============================================================================
+# R52: per-occasion scoring of frozen checkpoints for the period-gap diagnostic
+# (scripts/r52_period_profile.py), then the read-out.
+#
+#   cd ~/ProductGPT/work_gen6
+#   qsub -v TAGS=b39_g6w384:g5_c06,SEEDS=1:2:3:4:5 scripts/r52_period_profile.pbs
+# Lists are colon-separated (qsub -v splits on commas). READ_ONLY=1 skips scoring.
+# Log: ~/ProductGPT/logs/r52_profile_<jobid>.log
+# ============================================================================
+#PBS -N r52_profile
+#PBS -l select=1:ncpus=8:ngpus=1:mem=64GB
+#PBS -q GPU
+#PBS -l walltime=04:00:00
+#PBS -j oe
+#PBS -m ae
+#PBS -M jinmiao@smu.edu.sg
+
+set -o pipefail
+module purge
+module load python/3.11.4 cuda/12.5
+cd "$PBS_O_WORKDIR"
+source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
+export PYTHONUNBUFFERED=1
+export OMP_NUM_THREADS=8
+export PRODUCTGPT_DATA=/storage/home/jinmiao/ProductGPT/data
+source "$PBS_O_WORKDIR/env.sh"
+
+DEVICE="${DEVICE:-cuda}"
+OUT="${OUT:-results/r52}"
+[[ "$DEVICE" == "cpu" ]] && export CUDA_VISIBLE_DEVICES=""
+log=/storage/home/jinmiao/ProductGPT/logs/r52_profile_${PBS_JOBID%%.*}.log
+mkdir -p "$(dirname "$log")"
+exec >"$log" 2>&1
+echo "PBS job: $PBS_JOBID on $(hostname)  device=$DEVICE"
+echo "Git:     $(git log --oneline -1)"
+echo "Script:  $(sha256sum scripts/r52_period_profile.py)"
+
+args=(--device "$DEVICE" --threads 8 --out-dir "$OUT")
+[[ -n "${TAGS:-}" ]] && args+=(--tags ${TAGS//:/ })
+[[ -n "${SEEDS:-}" ]] && args+=(--seeds ${SEEDS//:/ })
+rc=0
+if [[ -z "${READ_ONLY:-}" ]]; then
+  echo "Command: python scripts/r52_period_profile.py ${args[*]}"
+  python scripts/r52_period_profile.py "${args[@]}"
+  rc=$?
+  echo "score exit=$rc"
+fi
+if [[ $rc -eq 0 ]]; then
+  echo "Command: python scripts/r52_period_profile.py --read ${args[*]}"
+  python scripts/r52_period_profile.py --read "${args[@]}"
+  rc=$?
+  echo "read exit=$rc"
+fi
+exit $rc

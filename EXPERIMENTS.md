@@ -45,6 +45,7 @@ session. Never write a job id from memory — a wrong id is worse than none.
 | 44657 | `r45_generate` (GPU, 8 h, `afterok` on 44656) | 2026-10-31 | R45 step 2: generation on chopped histories, 60 rollouts | deleted by PBS when 44656 failed; never ran |
 | 44658 | `r45_generate` CPU gate (short queue, `SMOKE_ONLY=1`, `work_r45g` at `52ead12`) | 2026-10-31 | R45 step 2: the gate again, after the fix | exit 0 in 15 min, every gate passed (see R45 step 2) |
 | 44659 | `r45_generate` (GPU, 8 h, `afterok` on 44658) | 2026-10-31 | R45 step 2: generation on chopped histories, 60 rollouts | finished exit 0 in 3 h 04 min, integrity clean on all 60 (qstat 2026-11-01); reader run once: no generation cost detectable at any depth (R45 step 2 RESULT) |
+| 44730 | `r51_profile`, renamed R52 after the run (GPU, 4 h, from `~/ProductGPT/work_gen6` at `ef7efba` plus the two untracked R52 files) | 2026-11-02 | R52: per-occasion scoring of gen-6 w384 s1–5 and gen-5 c06 s1–5, self-checked against each final.json, then the read-out | finished exit 0 in 5 min 40 s (qstat -x 2026-11-02); self-check passed for all 10 runs; read-out run once: campaign difficulty, not cold start or the split (R52 RESULT) |
 | 44443–44446 | `b42_g5_c06_s2`–`s5` (4 runs, from `~/ProductGPT/work_gen6` at `9b3eccd`) | 2026-10-27 | R44 stage 4: gen-5 c06 seeds 2–5 (gen 6 reuses b39_g6w384) | all 4 finished, exit 0; holdout read once: tie (R44 stage 4) |
 | 44465 | `r43_strata` on gen-5 c06 seeds 1–5 (CPU, short queue) | 2026-10-27 | R44 stage 4: length strata for gen 5 | finished exit 0, self-check ok; result in R44 stage 4 |
 | 44522, 44523 | `r43_generate` gates, g5 / g6 (CPU, short queue, from `~/ProductGPT/work_gen6` at `ef7efba`) | 2026-10-28 | R43 step 2: test suites and 12-customer smokes | both exit 0; every gate passed |
@@ -6321,3 +6322,168 @@ ties tuned gen 5.
   - Teacher forcing closes 76–90% of that distance. The deficit is therefore
     in the closed loop, not in the per-step law. That is where R36i and R42
     put it.
+
+### R52 — PLAN (2 Nov 2026, approved by Jin, "Yes, diagnose it"; a diagnostic read of frozen checkpoints with no decision attached): where the out-of-sample × calibration cell's extra 0.097 nats come from
+
+**Question.** For players never trained on, the calibration period (campaigns
+1–27, the period the model trained on) scores 0.9747 on gen 6 against 0.8782
+on the same players' holdout (campaigns 28–30): +0.0965 nats. Gen 5 c06 shows
++0.0912 and untuned A +0.0979, so it is a property of the data, not of one
+family. Why is the trained-on period harder than the unseen one? Deck
+`47 Prediction Benchmarks` (slide 9) reports the gap as not diagnosed.
+
+**What the run files already say (read from final.json before this plan;
+no new holdout read).** The calibration cell's class mix is more spread than
+the holdout's: constant-predictor entropy 1.7084 against 1.6376 (+0.071
+nats); NotBuy 35.9% against 40.7%; Buy1_Reg 20.6% against 16.1%; Buy10_Reg
+1.27% against 0.30%. So part of the gap is composition. The one-step
+prior-matched NLL (0.9388 against 0.8500, a gap of 0.089) says that rescaling
+the model's average probabilities does not close it: composition acts through
+which decisions occur, not through a mis-calibrated frequency.
+
+**Three candidate sources, and the cuts that separate them.**
+- (a) *Class mix.* Kitagawa decomposition of the gap by decision class:
+  composition term Σ_k (w_cal,k − w_hol,k)·NLL_hol,k against the within-class
+  term Σ_k w_cal,k·(NLL_cal,k − NLL_hol,k).
+- (b) *Cold start (tenure).* NLL by occasions since the player's first record
+  (1–10, 11–50, 51–200, 201–500, 501–1,000, >1,000), and the counterfactual
+  that drops each player's first k occasions from the calibration cell.
+- (c) *Calendar time.* NLL by campaign for all out-of-sample players and for
+  mature ones (tenure >200 occasions), so calendar and tenure are not
+  confounded; and by tenure in campaigns (campaign minus the player's first).
+In-sample players get the same cuts. Their calibration-period rows are a
+training FIT, labelled as such, never a forecast.
+
+**Method.** `scripts/r52_period_profile.py` loads each `best.pt`, rebuilds
+the split with `train5_multistream.build_loaders`, scores every occasion of
+every player in one pass on the base dataset with no role mask (same forward
+call, autocast and chunk as `evaluate`), and recovers the three test cells as
+filters on (player group, holdout flag). Self-check per run: each cell's event
+count must equal final.json's n exactly and its mean NLL must be within 0.003
+of final.json's, else the job exits 1. Rows kept per run: hashed uid, group,
+holdout flag, campaign, tenure, label, NLL; nothing about an individual player
+is printed. The read-out is `--read`. Checkpoints: `b39_g6w384` seeds 1–5
+(gen 6) and `g5_c06` (b40 s1, b42 s2–5). One GPU job,
+`scripts/r52_period_profile.pbs`, from `~/ProductGPT/work_gen6` at `ef7efba`,
+the code these checkpoints were trained and scored with; the two R52 files are
+delivered by scp as untracked files, their sha256 recorded in the SUBMITTED
+line.
+
+**Predictions (written before the run).**
+1. Composition (a) is more than half of the gap: the Kitagawa composition
+   term is at least 0.048 of gen 6's 0.0965.
+2. Cold start is a minority: dropping each player's first 50 occasions
+   closes less than a third of the gap.
+3. The gap is not a step at the calibration/holdout boundary: out-of-sample
+   campaign 27 is within 0.02 of the out-of-sample holdout mean, and
+   campaigns 1–10 are above 1.00.
+4. Mature players (tenure >200 occasions) still show a calibration-period
+   excess of at least 0.03, so tenure alone is not the gap.
+5. Gen 5 c06 has the same profile: its per-campaign NLL correlates with
+   gen 6's above 0.9 over campaigns with at least 10,000 events.
+
+**Decision rule.** None. Nothing is selected and no checkpoint changes. The
+holdout numbers are the ones final.json already carries, cut finer. Reported
+with no decision attached.
+
+**Not in scope.** Why the class mix moved over time (game design, cohort
+ageing); the in-sample × calibration fit as a reportable number.
+
+**SUBMITTED (2 Nov 2026): job 44730** (GPU queue, 4 h walltime) from `~/ProductGPT/work_gen6` at `ef7efba`, with the two files copied in untracked. The read-out path was smoke-tested on synthetic rows on the laptop before submission; the scoring path is checked by the job itself against every run's final.json.
+
+**Renumbered after the run.** This diagnostic was planned and submitted as "R51" (`scripts/r51_period_profile.py` sha256 `dd90ac4f…71a6c`, `scripts/r51_period_profile.pbs` sha256 `079a653a…6eb2`, job name `r51_profile`, results `results/r51`). The same day another session had taken R51 for the known-truth world-model plan (`docs/r51_world_model_plan`, not yet in this ledger), so before anything was read this entry, the two files, the results folder and the log were renamed to R52: `scripts/r52_period_profile.py` sha256 `ff774e31…28a8`, `scripts/r52_period_profile.pbs` sha256 `1018170d…b8ca`, differing from the files the job ran only in the number, the file prefix and the default results path; results `~/ProductGPT/work_gen6/results/r52/`; log `~/ProductGPT/logs/r52_profile_44730.log`.
+
+### R52 — RESULT (2 Nov 2026): the period gap is campaign difficulty, not cold start, not the split, not overfitting
+
+**Read.** Job 44730 ran 16:13–16:19 on 2 Nov (5 min 40 s, 4.3 GB), exit 0.
+Every one of the ten runs passed the self-check: the three test cells
+reproduce final.json's event counts exactly (222,889 / 1,291,489 / 217,303
+for gen 6; 222,889 / 1,259,900 / 217,303 for gen 5 c06) and its NLL within
+0.003. The read-out was run once, inside the job; its tables are in the log
+and in `results/r52/profile_b39_g6w384.json` and `profile_g5_c06.json`.
+Secondary statistics (correlations, unweighted campaign means) were computed
+on the laptop from those aggregate files only.
+
+**The four cells, gen 6, five seeds (gen 5 c06 in brackets).**
+| cell | events | NLL | class entropy |
+|---|---|---|---|
+| in-sample × calibration, training FIT (not a forecast) | 1,285,499 | 0.9635 (0.9597) | 1.721 |
+| in-sample × holdout | 222,889 | 0.8720 (0.8757) | 1.641 |
+| out-of-sample × calibration | 1,291,489 | 0.9747 (0.9730) | 1.708 |
+| out-of-sample × holdout | 217,303 | 0.8782 (0.8818) | 1.638 |
+The gap out-of-sample × calibration − out-of-sample × holdout is +0.0964
+(seeds 0.088–0.103; c06 +0.0913, seeds 0.081–0.103).
+
+**Against the predictions.**
+1. *Composition is more than half of the gap (≥ 0.048).* **Held.** The
+   Kitagawa composition term is +0.0520 (seeds 0.049–0.057; share 0.51–0.57);
+   c06 +0.0557 (share 0.58–0.62). The within-class term is +0.0445 (c06
+   +0.0355).
+2. *Dropping each player's first 50 occasions closes less than a third.*
+   **Held, decisively:** it closes 1.3% (c06 1.9%). Dropping the first 10
+   makes the cell 0.007 worse, because a player's first ten occasions are the
+   easiest in the data (0.61 nats, class entropy 0.87). Dropping 500 closes
+   33%, but that removes 78% of the events and shifts the mix toward late
+   campaigns, so it is calendar, not tenure (see 4).
+3. *No step at the boundary: campaign 27 within 0.02 of the holdout; campaigns
+   1–10 above 1.00.* **First clause held, second failed.** Out-of-sample
+   campaign 27 scores 0.8848 against the holdout's 0.8782 (+0.0066; c06
+   +0.0048). Campaigns 1–10 score 0.968 on 5,760 events from 44 players: they
+   are too thin to matter and not especially hard.
+4. *Mature players (tenure >200) still show an excess of at least 0.03.*
+   **Held.** Calibration − holdout within tenure: 201–500 occasions +0.089,
+   501–1,000 +0.082, >1,000 +0.036 (c06 +0.083, +0.074, +0.030). Tenure in
+   campaigns says the same: at 8+ campaigns of tenure, calibration 0.925
+   against holdout 0.843.
+5. *Gen 5 c06 has the same profile (r > 0.9).* **Held.** Over the 17
+   campaigns with at least 10,000 events (14–30) the per-campaign NLLs of the
+   two families correlate 0.998 and never differ by more than 0.011.
+
+**What the profile shows.** Difficulty is a property of the campaign.
+Across campaigns 14–27 the out-of-sample NLL ranges from 0.885 (campaign 27)
+to 1.050 (campaign 20), sd 0.050, unweighted mean 0.976. The holdout is three
+campaigns: 28 at 0.967 (the new-product campaign R39 found 0.16 nats harder
+than 29–30), 29 at 0.813 and 30 at 0.780. Campaigns 29 and 30 are the two
+easiest campaigns in the data, below every calibration campaign; their
+112,000 events are 52% of the holdout cell and pull its mean to 0.878. So the
+0.097 is "the holdout happens to hold the two easiest campaigns", not "the
+calibration period is harder for strangers". Ranked from easiest: 30 (0.780),
+29 (0.812), 27 (0.885), 21 (0.907), 24 (0.921), 18 (0.933), 15 (0.964), 28
+(0.967), 17 and 19 (0.977), 25 (0.981), 14 (0.996), 16 (1.001), 22 (1.016),
+23 (1.028), 26 (1.033), 20 (1.050).
+
+- *Which decisions occur is half of it.* Per class, the calibration period
+  has NotBuy 35.9% against 40.7%, Buy1_Reg 20.6% against 16.1%, Buy10_Reg
+  1.27% against 0.30%. Weighting the holdout's per-class NLLs by the
+  calibration mix gives the +0.052.
+- *Within class, "not buying" is what is harder.* NotBuy scores 0.918 in the
+  calibration period against 0.693 in the holdout (+0.225, contribution
+  +0.081), partly offset by the regular-banner pulls, which are common and
+  predictable in the calibration period and rare and surprising in the
+  holdout (Buy1_Reg 1.256 against 1.436; Buy10_Reg 1.717 against 2.840).
+- *Campaign entropy explains part of campaign difficulty, not all.* Across
+  the 17 campaigns the correlation between NLL and the campaign's class
+  entropy is 0.55; campaign 30 is the easiest with a middling entropy of
+  1.63, so something about the late campaigns (inventories, revived
+  banners) makes decisions predictable beyond their frequencies. Not
+  pursued here.
+- *Not overfitting.* The in-sample players' own training-period fit is
+  0.9635, only 0.011 better than the strangers' 0.9747, and per campaign the
+  two track within 0.023 (mean +0.009). The model does not fit the players
+  it trained on better than players it never saw, which is R15 and batch 30
+  again.
+- *Not cold start.* Predictions 2 and 4.
+
+**What this settles.** The level of a cell is set by which campaigns fall in
+it, not by whether its players or its period were seen in training. Cells
+are therefore not comparable to one another in level; models are comparable
+within a cell, which is how every R-number here has used them. The "0.88
+ceiling" is itself a campaign-mix number: on the holdout it is the average
+of 0.97, 0.81 and 0.78. Two consequences for the paper: report the holdout
+by campaign alongside the cell mean, and do not describe the calibration
+cell as a cold-start penalty. Deck `47 Prediction Benchmarks` gets one slide
+(10) with the campaign profile and this decomposition; slides 2, 9 and 17
+are reworded.
+
+**Reported with no decision attached.** Nothing was selected; the checkpoints
+are unchanged.
