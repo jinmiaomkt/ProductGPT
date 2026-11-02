@@ -42,7 +42,8 @@ for repo, arch, fname, auto, use_adapter in (
         ids = letter_token_ids(tok2)
         fmt = FORMATS[fname]
         chk = selfcheck(model, tok2, system, ids, fmt=fmt)
-        mem = memcheck(model, tok2, system, ids, 1500, fmt)
+        mem = memcheck(model, tok2, system, ids, 6000, fmt)
+        assert mem["tokens"] >= 6000, mem
         text = model.config.get_text_config()
         print(repo.split("/")[-1], "adapter" if adapter else "", "|", type(model).__name__, "| native", text.max_position_embeddings,
               "| failures", selfcheck_failures(chk, 0.1), "| mem", mem,

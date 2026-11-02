@@ -275,9 +275,11 @@ def memcheck(model, tok, system: str, letter_ids: Sequence[int], tokens: int, fm
         text, answers = transcript(lab, prev, lto, obt, inv, S, system, fmt)
         return answer_positions(tok, text, answers, letter_ids)
 
-    per = len(ids_of(100)[0]) / 100
-    S = int(tokens / per) + 2
+    S = 100
     ids, tpos = ids_of(S)
+    while len(ids) < tokens:        # the system prompt inflates the first guess at tokens per occasion
+        S = int(S * tokens / len(ids)) + 2
+        ids, tpos = ids_of(S)
     t0 = time.time()
     score_ids(model, ids, tpos, letter_ids, "")
     out = {"occasions": S, "tokens": len(ids), "seconds": round(time.time() - t0, 1)}

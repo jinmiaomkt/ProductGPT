@@ -6201,3 +6201,36 @@ tier remains Jin's call. R54 was committed before this read and is unchanged.
 - *Against the GRU.* The gap falls from +0.395 at occasions 0–63 to +0.049 at 768+, where the model recovers 94%
   of the GRU's gain over the constant, the same as R49. It beats the GRU on 10 draws Featured B (−0.287) and
   1 draw Featured A (−0.063). It loses most on 10 draws Regular (+1.585, n = 645) and 10 draws Weapon (+0.695).
+
+### R54 — NOTE (3 Nov 2026): Centaur's load test passes; the memory test ran shorter than it should have
+
+**Load test 44788 passed (exit 0, 4 min 23 s), so C0 and C stay queued. No customer was scored.** On the real
+weights at code 3fede2e:
+- T1–T11 pass, and `LlamaForCausalLM` loads with 0 missing and 0 mis-shaped weights;
+- all 560 expected `lora_B` matrices load and none is all zero, and the adapter moves the predictions by up
+  to 2.32 (the gate is 1e-3);
+- self-check: t4c 0.0, repeat 0.0, t3 true-letter mean 0.066 (the gate is 0.1).
+
+The log also has one line, `Failed to load CPU gemm_4bit_forward ... No module named 'kernels'`, printed
+during the CPU unit test. It names bitsandbytes' optional CPU kernel. The GPU checks above ran after it and
+pass.
+
+**A fault in my memory test.** `--memcheck 38000` was meant to run a synthetic customer of at least 38,000
+tokens. It guessed tokens per occasion from a count that includes the fixed system prompt, so it stopped
+short:
+
+| job | tokens reached | peak per card |
+|---|---|---|
+| 44788, Centaur | 30,228 | 31.6 / 34.7 GB |
+| 44789, Muse Glimmer | 31,085 | 36.5 / 36.4 GB |
+
+The longest transcript so far is 37,092 tokens, in Qwen's format, so these tests did not show what I said they
+would ("longer than any real one"). Each card holds 48.3 GB (46,068 MiB). As a rough check, scale the memory
+above the weights by the square of the length, up to 38,000 tokens: Centaur reaches about 43 GB and Muse
+Glimmer about 40 GB. The queued jobs therefore stay as they are. The test guards against a crash and touches no
+score, and a real customer that ran out of memory would stop its shard with a non-zero exit. Muse Glimmer's
+self-check passes as well (t4c 0.0, repeat 0.0, t3 true-letter mean 0.024).
+
+The loop is fixed on this branch for later runs, and `test_r54_load.py` now asserts the length, passing on all
+four tiny configurations. `work_r54` stays at 3fede2e, so R54's jobs keep the old test; Gemma's will stop short
+in the same way.
