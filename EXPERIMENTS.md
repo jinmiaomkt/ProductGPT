@@ -6234,3 +6234,50 @@ self-check passes as well (t4c 0.0, repeat 0.0, t3 true-letter mean 0.024).
 The loop is fixed on this branch for later runs, and `test_r54_load.py` now asserts the length, passing on all
 four tiny configurations. `work_r54` stays at 3fede2e, so R54's jobs keep the old test; Gemma's will stop short
 in the same way.
+
+### R54 — AMENDMENT 1 (3 Nov 2026, no arm read): Gemma 4's self-check stopped it, 0.1007 against the 0.1 bound
+
+**What happened.** Arm B's four jobs (44793–44796) each exited 1 at the self-check, before scoring a customer.
+Arm A's four shards finished with exit 0, and their scores have not been looked at. C0 started under its
+`afterany`, and C follows it. On Gemma's real weights, at bf16 on the GPUs, all four jobs report the same numbers:
+- 0 missing and 0 mis-shaped weights, and all unit tests pass;
+- no leak: t4c 0.0 and repeat 0.0, and later occasions respond (t4_after 6.45, t4c_after 5.39);
+- t3 true-letter mean **0.1007**, against the gate of 0.1;
+- on this synthetic customer, NLL 4.524 from one pass and 4.493 from prefixes, letter mass 0.9986.
+
+**Reading, a hypothesis until the test below.** This is bf16 rounding, not a fault. R49's Amendment 2 found the
+statistic moves only when a transcript's length changes, and that it grows with how confidently a model is wrong
+on these random decisions:
+
+| model | NLL on synthetic customers | t3 true-letter mean, in-job customer |
+|---|---|---|
+| Muse Glimmer 30B | 2.39 | 0.024 |
+| Qwen3.8-27B | 2.79 | 0.051 |
+| Centaur | 2.38 | 0.066 |
+| Qwen3-8B (R48, not gated) | 5.4–5.8 | 0.095 (worst over customers 0.18) |
+| Gemma 4 31B | 4.52 | 0.101 |
+
+That table is not evidence enough to move a bound the arm has just failed, so the test comes first.
+
+**Test (synthetic customer only; no customer is scored).** `scripts/r54_gemma_fp32_cpu.pbs` runs the same
+self-check on the same synthetic customer with Gemma's real weights upcast to float32. That needs about 125 GB,
+more than the 89 GB of two L40S, so it runs on a CPU node. The gate is R50's reference gate: t4c ≤ repeat + 1e-6,
+later occasions respond, and t3 true-letter mean ≤ 1e-3.
+
+**Decision rule, fixed before the test runs.**
+1. *The reference fails.* The difference is not only rounding. Arm B stays stopped and goes to Jin, and H3 is
+   reported as untested for this arm.
+2. *The reference passes.* The excess over 0.1 is rounding, so arm B is requeued behind C, as planned except for
+   two things:
+   - Its t3 bound becomes 0.18, passed as `SELFCHECK_TOL` for this arm only, with its other self-check gates
+     unchanged. 0.18 is the worst level R49 measured for Qwen3-8B, the model on which R50 measured a bias of only
+     +0.0037. The bound was chosen after seeing 0.1007, so it cannot count as a pre-registered pass; the float32
+     test carries the weight.
+   - It runs from a new worktree, `work_r54b`, at this commit, because `work_r54` must not move while C's jobs are
+     queued. The only code difference from 3fede2e is the memory-test fix, so its memory test reaches 38,000 tokens.
+3. *Reporting.* Arm B's result states the amended gate and its rounding level. R50's bias was measured on another
+   model, so a verdict on arm B is reported as unsettled if a point that decides it lies within 0.01 of a
+   threshold: its headline against 0.9856 (H3), or an end of its interval against ±0.02 (H1).
+
+A and C keep the 0.1 bound. A has passed it and C's load test did. If C0 or C fails it, the same test and rule apply.
+Requeueing behind C does not change when the read-out can run, since it needs every arm.
