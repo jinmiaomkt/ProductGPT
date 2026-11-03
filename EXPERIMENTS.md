@@ -6281,3 +6281,34 @@ later occasions respond, and t3 true-letter mean ≤ 1e-3.
 
 A and C keep the 0.1 bound. A has passed it and C's load test did. If C0 or C fails it, the same test and rule apply.
 Requeueing behind C does not change when the read-out can run, since it needs every arm.
+
+### R54 — AMENDMENT 1, RESULT (3 Nov 2026, no arm read): the float32 reference passes, so Gemma 4 is requeued
+
+**Job 44821 exited 0 and passes R50's reference gate, so rule 2 applies.** It ran for 2 h 54 min on 40 CPU cores
+(node a-4) and peaked at 174 GiB. It loaded 0 missing and 0 mis-shaped weights, and scored no customer. Same
+weights, same synthetic customer:
+
+| | bf16, GPU (44793) | float32, CPU (44821) | gate on the reference |
+|---|---|---|---|
+| t3 true-letter mean | 0.1007 | **0.000116** | ≤ 1e-3 |
+| t3, largest over nine letters | 2.69 | 0.0023 | |
+| t4c before t | 0.0 | **0.0** | ≤ repeat + 1e-6 |
+| repeat | 0.0 | 0.0 | |
+| t4 before t, largest | 1.40 | 0.0014 | |
+| t4c after t, largest | 5.39 | **5.44** | > 1e-3 |
+| t4 after t, largest | 6.45 | 6.53 | > 1e-3 |
+| NLL, one pass | 4.5244 | 4.5159 | |
+| NLL, per-occasion prefixes | 4.4935 | 4.5159 | |
+| letter mass | 0.9986 | 0.9986 | |
+
+In exact arithmetic the two evaluations agree to about 1e-4, about 870 times below bf16's level. So Gemma's excess
+over 0.1 is bf16 rounding, not a fault in the model or the scorer. On this one customer, bf16's one-pass NLL lies
+0.0085 above float32's and its prefix NLL 0.022 below. One synthetic customer says nothing about direction, and
+this decides nothing.
+
+**Requeued as rule 2 says:** 44852–44855, shards 0–3, behind C's last shard 44801 (`afterany`), from `work_r54b` at
+1c01063, with `SELFCHECK_TOL=0.18`. No Gemma shard existed beforehand. Reporting follows rule 3.
+
+**Other arms so far.** C0 (44797) exited 0 in 49 min, with t3 0.036 against the 0.1 bound. C's first two shards
+(44798, 44799) exited 0, the first in 2 h 40 min. The plan's rough times were too long: A took 5.2 h against 13 h,
+and C is heading for about 11 h against 25–35 h. No arm's scores have been looked at.
