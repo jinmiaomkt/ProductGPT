@@ -6395,7 +6395,7 @@ is far behind, and the fine-tuning on psychology experiments adds nothing.** Out
 | arm | tokens | longest | speed, tok/s | total time | peak per card, GB |
 |---|---|---|---|---|---|
 | A Muse Glimmer | 36,578,849 | 29,388 | 2,000 | 5.2 h | 36.5 / 36.4 |
-| B Gemma 4 | 45,642,096 | 36,327 | 990 | 12.8 h | 44.4 / 40.1 |
+| B Gemma 4 | 45,642,096 | 36,327 | 990 | 12.9 h | 44.4 / 40.1 |
 | C Centaur | 29,145,296 | 24,249 | 815 | 10.1 h | 31.6 / 34.7 |
 | C0 plain Llama | 2,935,322 | 21,970 | 1,070 | 0.8 h | 25.2 / 28.2 |
 
