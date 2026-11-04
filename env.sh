@@ -16,7 +16,7 @@
 #     source ./env.sh
 #
 # Then run scripts normally, e.g.
-#     python gen4_full_productgpt/train4_decoderonly_flash_feature_aws.py
+#     python gen6_streaming/train6_streaming.py --profile hpcc --seed 1
 #
 # In a PBS job script, source it after activating the venv:
 #     source "$PBS_O_WORKDIR/env.sh"
@@ -24,18 +24,18 @@
 _productgpt_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 _productgpt_dirs=(
-    "gen0_encoder_decoder"
-    "gen12_encdec_lto"
-    "gen2_lp_duplet"
-    "gen4_full_productgpt"
+    "archive/gen0_encoder_decoder"
+    "archive/gen12_encdec_lto"
+    "archive/gen2_lp_duplet"
+    "archive/gen4_full_productgpt"
     "gen5_multistream"
     "gen6_streaming"
-    "baselines"
-    "evaluation"
-    "tuning"
-    "crossval"
-    "analysis"
-    "vendor/transformer_xl"
+    "archive/baselines"
+    "archive/evaluation"
+    "archive/tuning"
+    "archive/crossval"
+    "archive/analysis"
+    "archive/vendor/transformer_xl"
 )
 
 for _d in "${_productgpt_dirs[@]}"; do

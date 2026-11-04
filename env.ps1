@@ -16,23 +16,23 @@
 #
 # The leading dot matters: it runs the script in your current shell so the
 # variable sticks around. Then run scripts normally, e.g.
-#     python gen4_full_productgpt\train4_decoderonly_flash_feature_aws.py
+#     python gen6_streaming\train6_streaming.py --profile hpcc --seed 1
 
 $repo = $PSScriptRoot
 
 $codeDirs = @(
-    "gen0_encoder_decoder",
-    "gen12_encdec_lto",
-    "gen2_lp_duplet",
-    "gen4_full_productgpt",
+    "archive\gen0_encoder_decoder",
+    "archive\gen12_encdec_lto",
+    "archive\gen2_lp_duplet",
+    "archive\gen4_full_productgpt",
     "gen5_multistream",
     "gen6_streaming",
-    "baselines",
-    "evaluation",
-    "tuning",
-    "crossval",
-    "analysis",
-    "vendor\transformer_xl"
+    "archive\baselines",
+    "archive\evaluation",
+    "archive\tuning",
+    "archive\crossval",
+    "archive\analysis",
+    "archive\vendor\transformer_xl"
 )
 
 $paths = $codeDirs | ForEach-Object { Join-Path $repo $_ }

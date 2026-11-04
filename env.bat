@@ -38,18 +38,18 @@ if "%REPO:~-1%"=="\" set "REPO=%REPO:~0,-1%"
 REM The repo root itself comes first, so "import paths" and
 REM "import shared.layers" resolve.
 set "PYTHONPATH=%REPO%"
-set "PYTHONPATH=%PYTHONPATH%;%REPO%\gen0_encoder_decoder"
-set "PYTHONPATH=%PYTHONPATH%;%REPO%\gen12_encdec_lto"
-set "PYTHONPATH=%PYTHONPATH%;%REPO%\gen2_lp_duplet"
-set "PYTHONPATH=%PYTHONPATH%;%REPO%\gen4_full_productgpt"
+set "PYTHONPATH=%PYTHONPATH%;%REPO%\archive\gen0_encoder_decoder"
+set "PYTHONPATH=%PYTHONPATH%;%REPO%\archive\gen12_encdec_lto"
+set "PYTHONPATH=%PYTHONPATH%;%REPO%\archive\gen2_lp_duplet"
+set "PYTHONPATH=%PYTHONPATH%;%REPO%\archive\gen4_full_productgpt"
 set "PYTHONPATH=%PYTHONPATH%;%REPO%\gen5_multistream"
 set "PYTHONPATH=%PYTHONPATH%;%REPO%\gen6_streaming"
-set "PYTHONPATH=%PYTHONPATH%;%REPO%\baselines"
-set "PYTHONPATH=%PYTHONPATH%;%REPO%\evaluation"
-set "PYTHONPATH=%PYTHONPATH%;%REPO%\tuning"
-set "PYTHONPATH=%PYTHONPATH%;%REPO%\crossval"
-set "PYTHONPATH=%PYTHONPATH%;%REPO%\analysis"
-set "PYTHONPATH=%PYTHONPATH%;%REPO%\vendor\transformer_xl"
+set "PYTHONPATH=%PYTHONPATH%;%REPO%\archive\baselines"
+set "PYTHONPATH=%PYTHONPATH%;%REPO%\archive\evaluation"
+set "PYTHONPATH=%PYTHONPATH%;%REPO%\archive\tuning"
+set "PYTHONPATH=%PYTHONPATH%;%REPO%\archive\crossval"
+set "PYTHONPATH=%PYTHONPATH%;%REPO%\archive\analysis"
+set "PYTHONPATH=%PYTHONPATH%;%REPO%\archive\vendor\transformer_xl"
 
 echo PYTHONPATH set for ProductGPT (12 folders + repo root).
 echo Repo root: %REPO%

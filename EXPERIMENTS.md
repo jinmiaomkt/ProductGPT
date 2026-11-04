@@ -5,6 +5,10 @@ streams (see "Session streams" in CLAUDE.md): the architecture stream decides
 what to test and writes the hypothesis; the HPCC stream runs it and writes the
 result.
 
+**Paths.** On 4 Nov 2026 the generation 0–4 folders moved under `archive/` and
+the batch submit scripts under `scripts/batches/`. Entries written before then
+use the old paths; `archive/README.md` lists every move. No result changed.
+
 **Rules**
 
 - A result enters as a *conclusion*, never as a pasted log. "Job 12345 OOMed at

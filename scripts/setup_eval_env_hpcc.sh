@@ -10,7 +10,7 @@ source /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval/bin/activate
 
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
-python -m pip install -r requirements_eval_hpcc.txt
+python -m pip install -r requirements.txt
 
 python -c "import torch; print('torch:', torch.__version__); print('built for CUDA:', torch.version.cuda)"
 echo "Environment ready: /storage/home/jinmiao/ProductGPT/venvs/productgpt-eval"
