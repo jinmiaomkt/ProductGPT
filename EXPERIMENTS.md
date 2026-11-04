@@ -6312,3 +6312,98 @@ this decides nothing.
 **Other arms so far.** C0 (44797) exited 0 in 49 min, with t3 0.036 against the 0.1 bound. C's first two shards
 (44798, 44799) exited 0, the first in 2 h 40 min. The plan's rough times were too long: A took 5.2 h against 13 h,
 and C is heading for about 11 h against 25–35 h. No arm's scores have been looked at.
+
+### R54 — RESULT (4 Nov 2026): H1 holds for all three arms, H3 fails on Gemma 4, H4 fails
+
+**Muse Glimmer and Centaur are the closest off-the-shelf models so far, at about 0.04 behind the GRU. Gemma 4
+is far behind, and the fine-tuning on psychology experiments adds nothing.** Out-of-sample × holdout cell,
+217,303 rows:
+
+| model | NLL [95%] | d vs GRU [95%] | d vs Qwen3-32B [95%] | hit rate | index |
+|---|---|---|---|---|---|
+| plain GRU b17, five seeds | 0.8856 [0.875, 0.897] | | | | |
+| **Muse Glimmer 30B** | **0.9275 [0.915, 0.939]** | **+0.0419 [+0.0386, +0.0453]** | −0.0208 [−0.0228, −0.0190] | 0.678 | 17 |
+| **Centaur** (Llama 3.1 70B, 4-bit, with LoRA) | **0.9309 [0.919, 0.942]** | **+0.0454 [+0.0422, +0.0486]** | −0.0174 [−0.0194, −0.0155] | 0.678 | none |
+| Qwen3-32B | 0.9483 [0.936, 0.960] | +0.063 | | 0.670 | |
+| Qwen3.6-27B | 0.9521 [0.940, 0.964] | +0.067 | | 0.669 | 21 |
+| Qwen3.8-27B | 0.9587 [0.946, 0.971] | +0.073 | | 0.673 | 34 |
+| **Gemma 4 31B** | **1.1531 [1.137, 1.168]** | **+0.2676 [+0.2599, +0.2756]** | +0.2048 [+0.1990, +0.2108] | 0.668 | 15 |
+| train-share constant | 1.6638 | | | | |
+
+- **H1 holds for all three arms.** Each interval lies wholly above +0.02, so the GRU leads, and it leads against
+  every seed: +0.032 to +0.049 (Muse Glimmer), +0.035 to +0.052 (Centaur), +0.257 to +0.275 (Gemma 4).
+- **H3 fails.** Muse Glimmer is under R48's threshold of 0.9856; Gemma 4 is over it by 0.167.
+- **H4 fails.** On R50's 250 customers (22,975 rows), Centaur 0.9642 and its base 0.9669:
+  d = −0.0027 [−0.0064, +0.0010]. The whole interval lies above −0.02, so this is not merely a failure to detect
+  a gain of that size. The adapter did load and act: all 560 `lora_B` matrices are non-zero, and per decision it moves
+  NLL by −0.091 (1 draw Featured B) to +0.376 (10 draws Regular). The moves cancel.
+- *Amendment 1, rule 3.* Gemma 4 ran under the amended bound (0.18), at a rounding level of 0.1007. Neither verdict
+  on it lies within 0.01 of a threshold, so neither is unsettled. Rounding is unlikely to explain a gap this size: on
+  the synthetic customer bf16 and float32 differ by 0.0085, though that is one customer, not a measured bias on
+  real ones.
+- *My prediction* was right that H1 holds for all and that H3 fails for at least one arm. It was wrong on the rest:
+  both A and B fell outside 0.95–1.10 (one each side), H4 failed, and Centaur beat Qwen3-32B. That is a second wrong
+  forecast about which models do well here.
+
+**Decision, by the plan's rules.**
+- *H3 fails:* R49's narrowing applies to the named models. "Large open models nearly tie zero-shot" cannot be stated
+  generally, since a 31B model recovers only 66% of the GRU's gain over the constant while a 30B model recovers 95%.
+- *H4 fails:* training on psychology experiments does not transfer to this setting, which supports building from
+  the customers' own data. Centaur is not the off-the-shelf bar; on the point estimate Muse Glimmer is, by 0.0035
+  [0.0020, 0.0050] over Centaur.
+- *H1:* "the trained model wins narrowly" stands, with a smaller lead: +0.042 at best, down from +0.063. The
+  comparison still rests on generation, as R49 ruled.
+
+**Exploratory; none of this decides anything.**
+- *The general index does not order these models.* 34 → 0.959, 21 → 0.952, 17 → 0.928, 15 → 1.153.
+- *Centaur's strength comes from its base or its format, not its fine-tuning.* On the 250 customers
+  (`runs/r54/r54_base_vs_others_sample.json`, added after the read-out): plain Llama 0.9669, Qwen3-32B 0.9853,
+  Muse Glimmer 0.9620. Plain Llama beats Qwen3-32B by 0.0184 [0.0124, 0.0248] and is within 0.005 of Muse Glimmer
+  (−0.0048 [−0.0101, +0.0004]). It is older and 4-bit, and it runs without a chat template, as "You press <<X>>."
+  The plan says these are not one-factor contrasts, so base and format cannot be separated here. No one has tested
+  the plain format on another model.
+- *Gemma 4's weakness looks like overconfidence, not poor ordering.* Its hit rate of 0.668 is close to the Qwen
+  models', but its NLL is 0.2 worse. In the first 64 occasions it is worse than the constant (holdout 2.59 against
+  1.83; calibration 2.11 against 1.72). Its letter mass is also lower, at 0.995. No recalibration was tried, since the plan
+  allows no tuning.
+- *By decision, against the GRU.* Muse Glimmer wins on 1 draw Regular (−0.074), 1 draw Featured B (−0.134) and 10
+  draws Featured B (−0.432). Centaur wins on 10 draws Featured B (−0.629) and no draw (−0.019), and ties on 1 draw
+  Featured B. Both lose most on 10 draws Regular (+1.376, +1.056) and on the two Weapon decisions (+0.43 to +0.57
+  for Muse Glimmer, +0.24 to +0.43 for Centaur). Gemma 4 ties on 1 draw Featured A and loses on all others.
+- *By position, holdout, d vs GRU:*
+
+| occasions | n | Muse Glimmer | Centaur | Gemma 4 |
+|---|---|---|---|---|
+| 0–63 | 841 | +0.297 | +0.202 | +1.445 |
+| 64–255 | 20,508 | +0.080 | +0.067 | +0.418 |
+| 256–511 | 69,100 | +0.040 | +0.041 | +0.286 |
+| 512–767 | 61,593 | +0.041 | +0.047 | +0.246 |
+| 768+ | 65,261 | +0.029 | +0.039 | +0.206 |
+
+- *Calibration cell* (1,259,900 rows; GRU seed mean 0.959): Centaur 1.069, Muse Glimmer 1.079, Qwen3-32B 1.116,
+  Gemma 4 1.448. The order of the top two reverses here, and the GRU's lead is about 0.11.
+
+**Gates and run data.**
+- All 13 scoring jobs exited 0: 44789–44792, 44797–44801 and 44852–44855. Gemma's first four attempts stopped at the
+  self-check (Amendment 1). The scoring commit is 3fede2e for A, C0 and C, and 1c01063 for B, the only code difference
+  being the memory test. The shard JSONs do not store a commit; these come from each job's log header.
+- Row gate passes for all three arms: 2,502 customers, 1,259,900 + 217,303 rows, no duplicates. Pairing passes against
+  all five GRU seeds and Qwen3-32B. The sample pairing passes: 250 customers, 148,288 rows.
+- Self-checks are identical across each arm's shards, with t4c 0.0 and repeat 0.0 throughout. t3: A 0.024, B 0.1007,
+  C 0.066, C0 0.036.
+
+| arm | tokens | longest | speed, tok/s | total time | peak per card, GB |
+|---|---|---|---|---|---|
+| A Muse Glimmer | 36,578,849 | 29,388 | 2,000 | 5.2 h | 36.5 / 36.4 |
+| B Gemma 4 | 45,642,096 | 36,327 | 990 | 12.8 h | 44.4 / 40.1 |
+| C Centaur | 29,145,296 | 24,249 | 815 | 10.1 h | 31.6 / 34.7 |
+| C0 plain Llama | 2,935,322 | 21,970 | 1,070 | 0.8 h | 25.2 / 28.2 |
+
+- *The memory-test fault did no harm.* Each family's longest real transcript was shorter than its test reached
+  (A 31,085, C 30,228). Gemma's rerun used the fixed test and reached 38,254 tokens. Peak per card is the test's,
+  against 48.3 GB.
+- *One traceback in the logs.* Job 44799 (Centaur shard 1) has a `FileNotFoundError` from torch's
+  `_inductor/compile_worker`, printed right after the unit tests and before the model loaded. It is a helper process
+  losing its temporary directory. The job exited 0, and its customers, tokens and speed match the other shards'.
+- *Outputs:* `runs/r54/<tag>_summary.json`, `<tag>_vs_gru.json`, `r54_vs_qwen3_32b.json`, `r54_centaur_vs_base.json`;
+  log `logs/r54_readout.log`.
